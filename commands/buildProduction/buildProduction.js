@@ -246,7 +246,7 @@ async function minifyJavaScript(srcPath, distPath) {
         'default', 'export', 'import', 'from', 'await', 'async',
         // Nombres de componentes
         'Button', 'Grid', 'Layout', 'HomePage', 'NotFound', 'Loading', 'TreeView', 'Link',
-        'FetchManager', 'Translator'
+        'FetchManager'
       ],
       properties: {
         regex: /^(slice|_|\$|on[A-Z]|get|set|has|is)/
