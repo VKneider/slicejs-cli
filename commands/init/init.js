@@ -18,9 +18,11 @@ export default async function initializeProject(projectType) {
         const destinationSrc = getSrcPath(import.meta.url);
 
         const fwSpinner = ora('Ensuring latest Slice framework...').start();
+        let latestVersion = null;
         let sliceBaseDir;
         try {
             const latest = execSync('npm view slicejs-web-framework version', { cwd: projectRoot }).toString().trim();
+            latestVersion = latest;
             const installedPkgPath = path.join(projectRoot, 'node_modules', 'slicejs-web-framework', 'package.json');
             let installed = null;
             if (await fs.pathExists(installedPkgPath)) {
@@ -179,6 +181,7 @@ export default async function initializeProject(projectType) {
             }
 
             pkg.scripts = pkg.scripts || {};
+            pkg.dependencies = pkg.dependencies || {};
 
             // Comandos principales
             pkg.scripts['dev'] = 'slice dev';
@@ -213,6 +216,11 @@ export default async function initializeProject(projectType) {
             // Configuración de módulo
             pkg.type = pkg.type || 'module';
             pkg.engines = pkg.engines || { node: '>=20.0.0' };
+
+            // Ensure framework dependency is present
+            if (!pkg.dependencies['slicejs-web-framework']) {
+                pkg.dependencies['slicejs-web-framework'] = latestVersion ? latestVersion : 'latest';
+            }
 
             await fs.writeFile(pkgPath, JSON.stringify(pkg, null, 2), 'utf8');
             pkgSpinner.succeed('npm scripts configured successfully');
