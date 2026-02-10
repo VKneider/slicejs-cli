@@ -214,7 +214,7 @@ export default async function initializeProject(projectType) {
             pkg.scripts['run'] = 'slice dev';
 
             // Configuración de módulo
-            pkg.type = pkg.type || 'module';
+            pkg.type = 'module';
             pkg.engines = pkg.engines || { node: '>=20.0.0' };
 
             // Ensure framework dependency is present
