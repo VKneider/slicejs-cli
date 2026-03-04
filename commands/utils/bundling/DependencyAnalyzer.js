@@ -3,7 +3,7 @@ import fs from 'fs-extra';
 import path from 'path';
 import { parse } from '@babel/parser';
 import traverse from '@babel/traverse';
-import { getSrcPath, getComponentsJsPath, getProjectRoot } from '../PathHelper.js';
+import { getSrcPath, getComponentsJsPath, getProjectRoot, getConfigPath } from '../PathHelper.js';
 
 export default class DependencyAnalyzer {
   constructor(moduleUrl) {
@@ -64,9 +64,19 @@ export default class DependencyAnalyzer {
    */
   async loadComponentsConfig() {
     const componentsConfigPath = path.join(this.componentsPath, 'components.js');
+    const configPath = getConfigPath(this.moduleUrl);
+    let sliceConfig = {};
 
     if (!await fs.pathExists(componentsConfigPath)) {
       throw new Error('components.js not found');
+    }
+
+    if (await fs.pathExists(configPath)) {
+      try {
+        sliceConfig = await fs.readJson(configPath);
+      } catch (error) {
+        console.warn('Warning: Could not read sliceConfig.json for component paths:', error.message);
+      }
     }
 
     // Read and parse components.js
@@ -87,13 +97,18 @@ export default class DependencyAnalyzer {
 
     // Process each category
     for (const [categoryName, componentList] of categoryMap) {
-      // Determine category type based on category name
-      let categoryType = 'Visual'; // default
+      const configCategory = sliceConfig?.paths?.components?.[categoryName];
+
+      // Determine category type based on config or category name
+      let categoryType = configCategory?.type || 'Visual';
       if (categoryName === 'Service') categoryType = 'Service';
       if (categoryName === 'AppComponents') categoryType = 'Visual'; // AppComponents are visual
 
-      // Find category path
-      const categoryPath = path.join(this.componentsPath, categoryName);
+      // Resolve category path from config if available
+      let categoryPath = path.join(this.componentsPath, categoryName);
+      if (configCategory?.path) {
+        categoryPath = getSrcPath(this.moduleUrl, configCategory.path);
+      }
 
       if (await fs.pathExists(categoryPath)) {
         const files = await fs.readdir(categoryPath);
@@ -330,6 +345,17 @@ export default class DependencyAnalyzer {
         return node;
       }
 
+      if (node.type === 'CallExpression') {
+        const calleeName = node.callee?.name || null;
+        if (calleeName && node.arguments?.length) {
+          const firstArg = node.arguments[0];
+          const resolvedObject = resolveObjectExpression(firstArg, scope);
+          if (resolvedObject) {
+            return resolvedObject;
+          }
+        }
+      }
+
       if (node.type === 'ObjectExpression') {
         const routesProp = node.properties.find(p => p.key?.name === 'routes');
         if (routesProp?.value) {
@@ -346,6 +372,10 @@ export default class DependencyAnalyzer {
           const init = bindingNode.init;
           if (init?.type === 'ArrayExpression') {
             return init;
+          }
+
+          if (init?.type === 'CallExpression') {
+            return resolveRoutesArray(init, binding.path.scope);
           }
 
           if (init?.type === 'Identifier') {
@@ -562,8 +592,46 @@ export default class DependencyAnalyzer {
       return null;
     };
 
+    const addRouteConfigDependencies = (routesConfigNode, scope) => {
+      if (!routesConfigNode || routesConfigNode.type !== 'ObjectExpression') return;
+
+      const processObject = (node) => {
+        if (!node || node.type !== 'ObjectExpression') return;
+
+        const componentProp = node.properties.find(p => p.key?.name === 'component');
+        if (componentProp?.value) {
+          const componentName = resolveStringValue(componentProp.value, scope);
+          if (componentName) {
+            dependencies.add(componentName);
+          }
+        }
+
+        const itemsProp = node.properties.find(p => p.key?.name === 'items');
+        if (itemsProp?.value) {
+          const itemsNode = resolveRoutesArray(itemsProp.value, scope);
+          addMultiRouteDependencies(itemsNode, scope);
+        }
+
+        node.properties.forEach((prop) => {
+          const valueNode = prop.value;
+          if (valueNode?.type === 'ObjectExpression') {
+            processObject(valueNode);
+          }
+        });
+      };
+
+      processObject(routesConfigNode);
+    };
+
     const addMultiRouteDependencies = (routesArrayNode, scope) => {
-      if (!routesArrayNode || routesArrayNode.type !== 'ArrayExpression') return;
+      if (!routesArrayNode) return;
+
+      if (routesArrayNode.type === 'ObjectExpression') {
+        addRouteConfigDependencies(routesArrayNode, scope);
+        return;
+      }
+
+      if (routesArrayNode.type !== 'ArrayExpression') return;
 
       routesArrayNode.elements.forEach(routeElement => {
         if (!routeElement) return;
@@ -582,6 +650,12 @@ export default class DependencyAnalyzer {
             if (componentName) {
               dependencies.add(componentName);
             }
+          }
+
+          const itemsProp = routeObject.properties.find(p => p.key?.name === 'items');
+          if (itemsProp?.value) {
+            const itemsNode = resolveRoutesArray(itemsProp.value, scope);
+            addMultiRouteDependencies(itemsNode, scope);
           }
         }
       });
