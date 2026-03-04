@@ -94,12 +94,18 @@ function startNodeServer(port, mode) {
       args.push('--development');
     }
 
+    // Ensure the spawned server process receives NODE_ENV consistent with the
+    // requested mode. This guarantees code that only checks process.env.NODE_ENV
+    // (instead of CLI flags) will behave as expected.
+    const serverEnv = {
+      ...process.env,
+      PORT: port,
+      NODE_ENV: mode === 'production' ? 'production' : (process.env.NODE_ENV || 'development')
+    };
+
     const serverProcess = spawn('node', args, {
       stdio: ['inherit', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        PORT: port
-      }
+      env: serverEnv
     });
 
     let serverStarted = false;

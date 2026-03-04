@@ -137,9 +137,15 @@ sliceClient
 const buildCommand = sliceClient.command("build")
   .description("Build Slice.js project for production")
   .action(async (options) => {
-    await runWithVersionCheck(async () => {
-      await build(options);
-    });
+    const prevEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      await runWithVersionCheck(async () => {
+        await build(options);
+      });
+    } finally {
+      process.env.NODE_ENV = prevEnv;
+    }
   });
 
 buildCommand
@@ -172,14 +178,22 @@ sliceClient
   .option("-p, --port <port>", "Port for development server", 3000)
   .option("-w, --watch", "Enable watch mode for file changes")
   .action(async (options) => {
-    await runWithVersionCheck(async () => {
-      await startServer({
-        mode: 'development',
-        port: parseInt(options.port),
-        watch: options.watch,
-        bundled: false
+    // Ensure the process.env.NODE_ENV reflects the requested mode for any
+    // code (builds, spawned processes, libraries) that reads it.
+    const prevEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
+    try {
+      await runWithVersionCheck(async () => {
+        await startServer({
+          mode: 'development',
+          port: parseInt(options.port),
+          watch: options.watch,
+          bundled: false
+        });
       });
-    });
+    } finally {
+      process.env.NODE_ENV = prevEnv;
+    }
   });
 
 // START COMMAND - PRODUCTION MODE
@@ -189,14 +203,20 @@ sliceClient
   .option("-p, --port <port>", "Port for server", 3000)
   .option("-w, --watch", "Enable watch mode for file changes")
   .action(async (options) => {
-    await runWithVersionCheck(async () => {
-      await startServer({
-        mode: 'production',
-        port: parseInt(options.port),
-        watch: options.watch,
-        bundled: false
+    const prevEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    try {
+      await runWithVersionCheck(async () => {
+        await startServer({
+          mode: 'production',
+          port: parseInt(options.port),
+          watch: options.watch,
+          bundled: false
+        });
       });
-    });
+    } finally {
+      process.env.NODE_ENV = prevEnv;
+    }
   });
 
 // COMPONENT COMMAND GROUP - For local component management
