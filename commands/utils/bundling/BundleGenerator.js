@@ -467,7 +467,7 @@ export default class BundleGenerator {
         'critical',
         criticalFile.file
       );
-      this.bundles.critical.integrity = criticalIntegrity;
+      this.bundles.critical.integrity = `sha256:${criticalFile.hash}`;
       this.bundles.critical.hash = criticalFile.hash;
       files.push(criticalFile);
     }
@@ -483,13 +483,7 @@ export default class BundleGenerator {
         'route',
         routeIdentifier
       );
-      const routeIntegrity = this.computeBundleIntegrity(
-        bundle.components,
-        'route',
-        routeIdentifier,
-        this.routeToFileName(routeIdentifier),
-        routeFile.file
-      );
+      const routeIntegrity = `sha256:${routeFile.hash}`;
       const matchingBundle = Object.values(this.bundles.routes)
         .find((entry) => entry.file === routeFile.file);
       if (matchingBundle) {
@@ -540,7 +534,11 @@ export default class BundleGenerator {
       return bundleContent;
     }
 
-    const result = await terserMinify(bundleContent, {
+    const options = {
+      parse: {
+        ecma: 2022
+      },
+      ecma: 2022,
       compress: this.options.minify ? {
         drop_console: false,
         drop_debugger: true,
@@ -552,12 +550,39 @@ export default class BundleGenerator {
       keep_fnames: true,
       keep_classnames: true,
       format: {
-        comments: false
+        comments: false,
+        ecma: 2022
       }
-    });
+    };
+
+    let result;
+    try {
+      result = await terserMinify(bundleContent, options);
+    } catch (error) {
+      const tmpDir = path.resolve(process.cwd(), '.tmp');
+      const safeName = fileName.replace(/[^a-zA-Z0-9_.-]/g, '_');
+      const tmpPath = path.join(tmpDir, `terser-fail-${safeName}`);
+      try {
+        await fs.ensureDir(tmpDir);
+        await fs.writeFile(tmpPath, bundleContent, 'utf-8');
+      } catch (writeError) {
+        console.warn(`Warning: Failed to write ${tmpPath}:`, writeError.message);
+      }
+      const message = error?.message ? `${error.message}.` : 'Unknown Terser error.';
+      throw new Error(`Terser failed for ${fileName}: ${message} Saved bundle to ${tmpPath}`);
+    }
 
     if (result.error) {
-      throw new Error(`Terser failed for ${fileName}: ${result.error.message}`);
+      const tmpDir = path.resolve(process.cwd(), '.tmp');
+      const safeName = fileName.replace(/[^a-zA-Z0-9_.-]/g, '_');
+      const tmpPath = path.join(tmpDir, `terser-fail-${safeName}`);
+      try {
+        await fs.ensureDir(tmpDir);
+        await fs.writeFile(tmpPath, bundleContent, 'utf-8');
+      } catch (writeError) {
+        console.warn(`Warning: Failed to write ${tmpPath}:`, writeError.message);
+      }
+      throw new Error(`Terser failed for ${fileName}: ${result.error.message}. Saved bundle to ${tmpPath}`);
     }
 
     return result.code || bundleContent;
@@ -737,11 +762,30 @@ export default class BundleGenerator {
     // Remove imports (components will already be available)
     code = code.replace(/import\s+.*?from\s+['"].*?['"];?\s*/g, '');
 
+    // Guard customElements.define to avoid duplicate registrations
+    code = code.replace(
+      /customElements\.define\(([^)]+)\);?/g,
+      (match, args) => {
+        const firstArg = args.split(',')[0]?.trim() || '';
+        if (!/^['"][^'"]+['"]$/.test(firstArg)) {
+          return match;
+        }
+        return `if (!customElements.get(${firstArg})) { customElements.define(${args}); }`;
+      }
+    );
+
     // Make sure the class is available globally for bundle evaluation
     // Preserve original customElements.define if it exists
     if (code.includes('customElements.define')) {
-      // Add global assignment before customElements.define
-      code = code.replace(/customElements\.define\([^;]+\);?\s*$/, `window.${componentName} = ${componentName};\n$&`);
+      // Add global assignment before guarded or direct customElements.define
+      const globalAssignment = `window.${componentName} = ${componentName};\n`;
+      const guardedDefineRegex = /if\s*\(\s*!\s*customElements\.get\([^)]*\)\s*\)\s*\{\s*customElements\.define\([^;]+\);?\s*\}\s*$/;
+      const directDefineRegex = /customElements\.define\([^;]+\);?\s*$/;
+      if (guardedDefineRegex.test(code)) {
+        code = code.replace(guardedDefineRegex, `${globalAssignment}$&`);
+      } else {
+        code = code.replace(directDefineRegex, `${globalAssignment}$&`);
+      }
     } else {
       // If no customElements.define found, just assign to global
       code += `\nwindow.${componentName} = ${componentName};`;
@@ -1072,7 +1116,7 @@ if (window.slice && window.slice.controller) {
     await fs.writeFile(filePath, finalContent, 'utf-8');
 
     const hash = crypto.createHash('sha256').update(finalContent).digest('hex');
-    const integrity = this.computeBundleIntegrity(components, 'framework', null, 'framework', fileName);
+    const integrity = `sha256:${hash}`;
 
     return {
       name: 'framework',
