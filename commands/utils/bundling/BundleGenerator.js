@@ -4,15 +4,24 @@ import path from 'path';
 import crypto from 'crypto';
 import { parse } from '@babel/parser';
 import traverse from '@babel/traverse';
-import { getSrcPath, getComponentsJsPath } from '../PathHelper.js';
+import { minify as terserMinify } from 'terser';
+import { getSrcPath, getComponentsJsPath, getDistPath } from '../PathHelper.js';
 
 export default class BundleGenerator {
-  constructor(moduleUrl, analysisData) {
+  constructor(moduleUrl, analysisData, options = {}) {
     this.moduleUrl = moduleUrl;
     this.analysisData = analysisData;
     this.srcPath = getSrcPath(moduleUrl);
-    this.bundlesPath = path.join(this.srcPath, 'bundles');
+    this.distPath = getDistPath(moduleUrl);
+    this.output = options.output || 'src';
+    this.bundlesPath = this.output === 'dist'
+      ? path.join(this.distPath, 'bundles')
+      : path.join(this.srcPath, 'bundles');
     this.componentsPath = path.dirname(getComponentsJsPath(moduleUrl));
+    this.options = {
+      minify: !!options.minify,
+      obfuscate: !!options.obfuscate
+    };
 
     // Configuration
     this.config = {
@@ -33,6 +42,46 @@ export default class BundleGenerator {
   }
 
   /**
+   * Computes deterministic integrity hash for bundle metadata.
+   * @param {Array} components
+   * @param {string} type
+   * @param {string|null} routePath
+   * @param {string} bundleKey
+   * @param {string} fileName
+   * @returns {string}
+   */
+  computeBundleIntegrity(components, type, routePath, bundleKey, fileName) {
+    const metadata = {
+      version: '2.0.0',
+      type,
+      route: routePath,
+      bundleKey,
+      file: fileName,
+      generated: 'static',
+      totalSize: components.reduce((sum, c) => sum + c.size, 0),
+      componentCount: components.length,
+      strategy: this.config.strategy
+    };
+
+    const payload = {
+      metadata,
+      components: components.reduce((acc, comp) => {
+        acc[comp.name] = {
+          name: comp.name,
+          category: comp.category,
+          categoryType: comp.categoryType,
+          componentDependencies: Array.from(comp.dependencies)
+        };
+        return acc;
+      }, {})
+    };
+
+    return `sha256:${crypto.createHash('sha256')
+      .update(JSON.stringify(payload))
+      .digest('hex')}`;
+  }
+
+  /**
    * Generates all bundles
    */
   async generate() {
@@ -40,6 +89,9 @@ export default class BundleGenerator {
 
     // 0. Create bundles directory
     await fs.ensureDir(this.bundlesPath);
+    if (this.output === 'dist') {
+      await fs.ensureDir(this.distPath);
+    }
 
     // 1. Determine optimal strategy
     this.determineStrategy();
@@ -53,8 +105,16 @@ export default class BundleGenerator {
     // 4. Generate bundle files
     const files = await this.generateBundleFiles();
 
-    // 5. Generate configuration
-    const config = this.generateBundleConfig();
+    // 5. Generate framework bundle (structural)
+    const frameworkComponents = this.collectFrameworkComponents();
+    let frameworkBundle = null;
+    if (frameworkComponents.length > 0) {
+      frameworkBundle = await this.createFrameworkBundle(frameworkComponents);
+      files.push(frameworkBundle);
+    }
+
+    // 6. Generate configuration
+    const config = this.generateBundleConfig(frameworkBundle);
 
     console.log('✅ Bundles generated successfully');
 
@@ -113,6 +173,11 @@ export default class BundleGenerator {
         return priorityB - priorityA;
       });
 
+    const loadingComponent = components.find((comp) => comp.name === 'Loading');
+    if (loadingComponent && !candidates.includes(loadingComponent)) {
+      candidates.unshift(loadingComponent);
+    }
+
     // Fill critical bundle up to limit
     for (const comp of candidates) {
       const dependencies = this.getComponentDependencies(comp);
@@ -122,7 +187,7 @@ export default class BundleGenerator {
       const wouldExceedSize = this.bundles.critical.size + totalSize > this.config.maxCriticalSize;
       const wouldExceedCount = this.bundles.critical.components.length + totalCount > this.config.maxCriticalComponents;
 
-      if (wouldExceedSize || wouldExceedCount) continue;
+      if ((wouldExceedSize || wouldExceedCount) && comp.name !== 'Loading') continue;
 
       // Add component and its dependencies
       if (!this.bundles.critical.components.find(c => c.name === comp.name)) {
@@ -395,6 +460,15 @@ export default class BundleGenerator {
         'critical',
         null
       );
+      const criticalIntegrity = this.computeBundleIntegrity(
+        this.bundles.critical.components,
+        'critical',
+        null,
+        'critical',
+        criticalFile.file
+      );
+      this.bundles.critical.integrity = criticalIntegrity;
+      this.bundles.critical.hash = criticalFile.hash;
       files.push(criticalFile);
     }
 
@@ -409,6 +483,19 @@ export default class BundleGenerator {
         'route',
         routeIdentifier
       );
+      const routeIntegrity = this.computeBundleIntegrity(
+        bundle.components,
+        'route',
+        routeIdentifier,
+        this.routeToFileName(routeIdentifier),
+        routeFile.file
+      );
+      const matchingBundle = Object.values(this.bundles.routes)
+        .find((entry) => entry.file === routeFile.file);
+      if (matchingBundle) {
+        matchingBundle.hash = routeFile.hash;
+        matchingBundle.integrity = routeIntegrity;
+      }
       files.push(routeFile);
     }
 
@@ -426,12 +513,17 @@ export default class BundleGenerator {
     const bundleContent = await this.generateBundleContent(
       components,
       type,
-      routePath
+      routePath,
+      routeKey,
+      fileName
     );
 
-    await fs.writeFile(filePath, bundleContent, 'utf-8');
+    const finalContent = await this.applyBundleTransforms(bundleContent, fileName);
 
-    const hash = crypto.createHash('md5').update(bundleContent).digest('hex').substring(0, 12);
+    await fs.ensureDir(path.dirname(filePath));
+    await fs.writeFile(filePath, finalContent, 'utf-8');
+
+    const hash = crypto.createHash('sha256').update(finalContent).digest('hex');
 
     return {
       name: routeKey,
@@ -442,6 +534,35 @@ export default class BundleGenerator {
       componentCount: components.length
     };
   }
+
+  async applyBundleTransforms(bundleContent, fileName) {
+    if (!this.options.minify && !this.options.obfuscate) {
+      return bundleContent;
+    }
+
+    const result = await terserMinify(bundleContent, {
+      compress: this.options.minify ? {
+        drop_console: false,
+        drop_debugger: true,
+        passes: 1
+      } : false,
+      mangle: this.options.obfuscate ? {
+        properties: false
+      } : false,
+      keep_fnames: true,
+      keep_classnames: true,
+      format: {
+        comments: false
+      }
+    });
+
+    if (result.error) {
+      throw new Error(`Terser failed for ${fileName}: ${result.error.message}`);
+    }
+
+    return result.code || bundleContent;
+  }
+
 
   /**
    * Analyzes dependencies of a JavaScript file using simple regex
@@ -527,39 +648,21 @@ export default class BundleGenerator {
   /**
    * Generates the content of a bundle
    */
-  async generateBundleContent(components, type, routePath) {
+  async generateBundleContent(components, type, routePath, bundleKey, fileName) {
     const componentsData = {};
 
     for (const comp of components) {
-      const jsPath = path.join(comp.path, `${comp.name}.js`);
+      const fileBaseName = comp.fileName || comp.name;
+      const jsPath = path.join(comp.path, `${fileBaseName}.js`);
       const jsContent = await fs.readFile(jsPath, 'utf-8');
 
-      // Analyze dependencies
-      const dependencies = this.analyzeDependencies(jsContent, comp.path);
-      const dependencyContents = {};
-
-      // Read all dependency files
-      for (const dep of dependencies) {
-        const depPath = dep.path;
-        try {
-          const depContent = await fs.readFile(depPath, 'utf-8');
-          const depName = path
-            .relative(this.srcPath, depPath)
-            .replace(/\\/g, '/');
-          dependencyContents[depName] = {
-            content: depContent,
-            bindings: dep.bindings || []
-          };
-        } catch (error) {
-          console.warn(`Warning: Could not read dependency ${depPath}:`, error.message);
-        }
-      }
+      const dependencyContents = await this.buildDependencyContents(jsContent, comp.path);
 
       let htmlContent = null;
       let cssContent = null;
 
-      const htmlPath = path.join(comp.path, `${comp.name}.html`);
-      const cssPath = path.join(comp.path, `${comp.name}.css`);
+      const htmlPath = path.join(comp.path, `${fileBaseName}.html`);
+      const cssPath = path.join(comp.path, `${fileBaseName}.css`);
 
       if (await fs.pathExists(htmlPath)) {
         htmlContent = await fs.readFile(htmlPath, 'utf-8');
@@ -569,10 +672,12 @@ export default class BundleGenerator {
         cssContent = await fs.readFile(cssPath, 'utf-8');
       }
 
-      componentsData[comp.name] = {
+      const componentKey = comp.isFramework ? `Framework/Structural/${comp.name}` : comp.name;
+      componentsData[componentKey] = {
         name: comp.name,
         category: comp.category,
         categoryType: comp.categoryType,
+        isFramework: !!comp.isFramework,
         js: this.cleanJavaScript(jsContent, comp.name),
         externalDependencies: dependencyContents, // Files imported with import statements
         componentDependencies: Array.from(comp.dependencies), // Other components this one depends on
@@ -586,13 +691,40 @@ export default class BundleGenerator {
       version: '2.0.0',
       type,
       route: routePath,
+      bundleKey,
+      file: fileName,
       generated: new Date().toISOString(),
       totalSize: components.reduce((sum, c) => sum + c.size, 0),
       componentCount: components.length,
-      strategy: this.config.strategy
+      strategy: this.config.strategy,
+      minified: this.options.minify,
+      obfuscated: this.options.obfuscate
     };
 
     return this.formatBundleFile(componentsData, metadata);
+  }
+
+  async buildDependencyContents(jsContent, componentPath) {
+    const dependencies = this.analyzeDependencies(jsContent, componentPath);
+    const dependencyContents = {};
+
+    for (const dep of dependencies) {
+      const depPath = dep.path;
+      try {
+        const depContent = await fs.readFile(depPath, 'utf-8');
+        const depName = path
+          .relative(this.srcPath, depPath)
+          .replace(/\\/g, '/');
+        dependencyContents[depName] = {
+          content: depContent,
+          bindings: dep.bindings || []
+        };
+      } catch (error) {
+        console.warn(`Warning: Could not read dependency ${depPath}:`, error.message);
+      }
+    }
+
+    return dependencyContents;
   }
 
   /**
@@ -625,6 +757,31 @@ export default class BundleGenerator {
    * Formats the bundle file
    */
   formatBundleFile(componentsData, metadata) {
+    const integrityPayload = {
+      metadata: {
+        ...metadata,
+        generated: 'static'
+      },
+      components: Object.fromEntries(
+        Object.entries(componentsData).map(([name, data]) => [
+          name,
+          {
+            name: data.name,
+            category: data.category,
+            categoryType: data.categoryType,
+            componentDependencies: data.componentDependencies
+          }
+        ])
+      )
+    };
+    const integrity = `sha256:${crypto
+      .createHash('sha256')
+      .update(JSON.stringify(integrityPayload))
+      .digest('hex')}`;
+
+    const dependencyBlock = this.buildDependencyModuleBlock(componentsData);
+    const componentBlock = this.buildComponentBundleBlock(componentsData);
+
     return `/**
  * Slice.js Bundle
  * Type: ${metadata.type}
@@ -634,10 +791,12 @@ export default class BundleGenerator {
  * Total Size: ${(metadata.totalSize / 1024).toFixed(1)} KB
  */
 
-export const SLICE_BUNDLE = {
-  metadata: ${JSON.stringify(metadata, null, 2)},
+${dependencyBlock}
+${componentBlock}
 
-  components: ${JSON.stringify(componentsData, null, 2)}
+export const SLICE_BUNDLE = {
+  metadata: ${JSON.stringify({ ...metadata, integrity }, null, 2)},
+  components: SLICE_BUNDLE_COMPONENTS
 };
 
 // Auto-registration of components
@@ -647,13 +806,141 @@ if (window.slice && window.slice.controller) {
 `;
   }
 
+  buildDependencyModuleBlock(componentsData) {
+    const dependencyModules = this.collectDependencyModules(componentsData);
+    if (dependencyModules.length === 0) {
+      return 'const SLICE_BUNDLE_DEPENDENCIES = {};';
+    }
+
+    const lines = ['const SLICE_BUNDLE_DEPENDENCIES = {};'];
+    dependencyModules.forEach((module, index) => {
+      const exportVar = `__sliceDepExports${index}`;
+      const content = this.transformDependencyContent(module.content, exportVar, module.name);
+      lines.push(`// Dependency: ${module.name}`);
+      lines.push(`const ${exportVar} = {};`);
+      lines.push(content.trim());
+      lines.push(`SLICE_BUNDLE_DEPENDENCIES[${JSON.stringify(module.name)}] = ${exportVar};`);
+    });
+
+    return `${lines.join('\n')}`;
+  }
+
+  collectDependencyModules(componentsData) {
+    const modules = new Map();
+    Object.values(componentsData).forEach((component) => {
+      Object.entries(component.externalDependencies || {}).forEach(([name, entry]) => {
+        if (modules.has(name)) return;
+        const content = typeof entry === 'string' ? entry : entry.content;
+        modules.set(name, { name, content });
+      });
+    });
+    return Array.from(modules.values());
+  }
+
+  transformDependencyContent(content, exportVar, moduleName) {
+    const baseName = moduleName.split('/').pop().replace(/\.[^.]+$/, '');
+    const dataName = baseName ? `${baseName}Data` : null;
+    const exportPrefix = dataName ? `${exportVar}.${dataName} = ` : `${exportVar}.default = `;
+
+    return content
+      .replace(/export\s+const\s+(\w+)\s*=\s*/g, `${exportVar}.$1 = `)
+      .replace(/export\s+let\s+(\w+)\s*=\s*/g, `${exportVar}.$1 = `)
+      .replace(/export\s+var\s+(\w+)\s*=\s*/g, `${exportVar}.$1 = `)
+      .replace(/export\s+function\s+(\w+)/g, `${exportVar}.$1 = function`)
+      .replace(/export\s+default\s+/g, exportPrefix)
+      .replace(/export\s*{\s*([^}]+)\s*}/g, (match, exportsStr) => {
+        return exportsStr
+          .split(',')
+          .map((exp) => {
+            const cleanExp = exp.trim();
+            const varName = cleanExp.split(' as ')[0].trim();
+            return `${exportVar}.${varName} = ${varName};`;
+          })
+          .join('\n');
+      })
+      .replace(/^\s*export\s+/gm, '');
+  }
+
+  buildComponentBundleBlock(componentsData) {
+    const componentEntries = [];
+    const componentDefs = [];
+    const frameworkEntries = [];
+
+    Object.entries(componentsData).forEach(([name, data]) => {
+      const classVar = this.toSafeIdentifier(name);
+      const bindings = this.buildDependencyBindings(data.externalDependencies || {});
+
+      componentDefs.push(`const ${classVar} = (() => {\n${bindings}\n${data.js}\nreturn ${name};\n})();`);
+
+      if (data.isFramework) {
+        frameworkEntries.push(`${JSON.stringify(data.name)}: ${classVar}`);
+      }
+
+      componentEntries.push(
+        `${JSON.stringify(name)}: {\n` +
+          `  name: ${JSON.stringify(data.name)},\n` +
+          `  category: ${JSON.stringify(data.category)},\n` +
+          `  categoryType: ${JSON.stringify(data.categoryType)},\n` +
+          `  componentDependencies: ${JSON.stringify(data.componentDependencies)},\n` +
+          `  html: ${JSON.stringify(data.html)},\n` +
+          `  css: ${JSON.stringify(data.css)},\n` +
+          `  size: ${JSON.stringify(data.size)},\n` +
+          `  class: ${classVar}\n` +
+        `}`
+      );
+    });
+
+    const frameworkBlock = frameworkEntries.length > 0
+      ? `const SLICE_FRAMEWORK_CLASSES = {\n${frameworkEntries.join(',\n')}\n};\nwindow.SLICE_FRAMEWORK_CLASSES = SLICE_FRAMEWORK_CLASSES;`
+      : '';
+
+    return `${componentDefs.join('\n\n')}\n\nconst SLICE_BUNDLE_COMPONENTS = {\n${componentEntries.join(',\n')}\n};\n${frameworkBlock}`;
+  }
+
+  buildDependencyBindings(externalDependencies) {
+    const lines = [];
+    Object.entries(externalDependencies).forEach(([name, entry]) => {
+      const bindings = typeof entry === 'string' ? [] : entry.bindings || [];
+      const depVar = `SLICE_BUNDLE_DEPENDENCIES[${JSON.stringify(name)}]`;
+      const baseName = name.split('/').pop().replace(/\.[^.]+$/, '');
+      const dataName = baseName ? `${baseName}Data` : null;
+
+      bindings.forEach((binding) => {
+        if (!binding?.localName) return;
+        if (binding.type === 'default') {
+          const fallback = dataName ? `${depVar}.${dataName}` : `${depVar}.default`;
+          lines.push(`const ${binding.localName} = ${depVar}.default !== undefined ? ${depVar}.default : ${fallback};`);
+        }
+        if (binding.type === 'named') {
+          lines.push(`const ${binding.localName} = ${depVar}.${binding.importedName};`);
+        }
+        if (binding.type === 'namespace') {
+          lines.push(`const ${binding.localName} = ${depVar};`);
+        }
+      });
+    });
+
+    return lines.join('\n');
+  }
+
+  toSafeIdentifier(name) {
+    const cleaned = name.replace(/[^a-zA-Z0-9_]/g, '_');
+    if (/^\d/.test(cleaned)) {
+      return `SliceComponent_${cleaned}`;
+    }
+    return `SliceComponent_${cleaned}`;
+  }
+
   /**
    * Generates the bundle configuration
    */
-  generateBundleConfig() {
+  generateBundleConfig(frameworkBundle = null) {
     const config = {
       version: '2.0.0',
       strategy: this.config.strategy,
+      minified: this.options.minify,
+      obfuscated: this.options.obfuscate,
+      production: true,
       generated: new Date().toISOString(),
 
       stats: {
@@ -666,13 +953,23 @@ if (window.slice && window.slice.controller) {
       },
 
       bundles: {
+        framework: {
+          file: 'slice-bundle.framework.js',
+          size: 0,
+          hash: null,
+          integrity: null,
+          components: []
+        },
         critical: {
           file: this.bundles.critical.file,
           size: this.bundles.critical.size,
+          hash: this.bundles.critical.hash || null,
+          integrity: this.bundles.critical.integrity || null,
           components: this.bundles.critical.components.map(c => c.name)
         },
         routes: {}
-      }
+      },
+      routeBundles: {}
     };
 
     for (const [key, bundle] of Object.entries(this.bundles.routes)) {
@@ -684,12 +981,206 @@ if (window.slice && window.slice.controller) {
         path: bundle.path || bundle.paths || key, // Support both single path and array of paths, fallback to key
         file: `slice-bundle.${this.routeToFileName(routeIdentifier)}.js`,
         size: bundle.size,
+        hash: bundle.hash || null,
+        integrity: bundle.integrity || null,
         components: bundle.components.map(c => c.name),
         dependencies: ['critical']
+      };
+
+      const paths = Array.isArray(config.bundles.routes[key].path)
+        ? config.bundles.routes[key].path
+        : [config.bundles.routes[key].path];
+
+      for (const routePath of paths) {
+        if (!config.routeBundles[routePath]) {
+          config.routeBundles[routePath] = ['critical'];
+        }
+        if (!config.routeBundles[routePath].includes(key)) {
+          config.routeBundles[routePath].push(key);
+        }
+      }
+    }
+
+    if (frameworkBundle) {
+      config.bundles.framework = {
+        file: frameworkBundle.file,
+        size: frameworkBundle.size,
+        hash: frameworkBundle.hash,
+        integrity: frameworkBundle.integrity,
+        components: frameworkBundle.components || []
       };
     }
 
     return config;
+  }
+
+  collectFrameworkComponents() {
+    return this.analysisData.components.filter((comp) => comp.isFramework);
+  }
+
+  async createFrameworkBundle(components) {
+    const fileName = 'slice-bundle.framework.js';
+    const filePath = path.join(this.bundlesPath, fileName);
+    return this.generateFrameworkBundleFile(components, fileName, filePath);
+  }
+
+  async generateFrameworkBundleFile(components, fileName, filePath) {
+    const componentsData = {};
+    const componentsMap = await this.loadComponentsMap();
+    const metadata = {
+      version: '2.0.0',
+      type: 'framework',
+      route: null,
+      bundleKey: 'framework',
+      file: fileName,
+      generated: new Date().toISOString(),
+      totalSize: components.reduce((sum, c) => sum + c.size, 0),
+      componentCount: components.length,
+      strategy: this.config.strategy,
+      minified: this.options.minify,
+      obfuscated: this.options.obfuscate
+    };
+
+    components.forEach((comp) => {
+      const componentKey = `Framework/Structural/${comp.name}`;
+      const fileBaseName = comp.fileName || comp.name;
+      const jsPath = path.join(comp.path, `${fileBaseName}.js`);
+      const jsContent = fs.readFileSync(jsPath, 'utf-8');
+      const dependencyContents = this.buildDependencyContentsSync(jsContent, comp.path);
+      componentsData[componentKey] = {
+        name: comp.name,
+        category: comp.category,
+        categoryType: comp.categoryType,
+        isFramework: true,
+        js: this.cleanJavaScript(jsContent, comp.name),
+        externalDependencies: dependencyContents,
+        componentDependencies: Array.from(comp.dependencies),
+        html: fs.existsSync(path.join(comp.path, `${fileBaseName}.html`))
+          ? fs.readFileSync(path.join(comp.path, `${fileBaseName}.html`), 'utf-8')
+          : null,
+        css: fs.existsSync(path.join(comp.path, `${fileBaseName}.css`))
+          ? fs.readFileSync(path.join(comp.path, `${fileBaseName}.css`), 'utf-8')
+          : null,
+        size: comp.size
+      };
+    });
+
+    const prelude = `const components = ${JSON.stringify(componentsMap)};`;
+    const bundleContent = `${prelude}\n${this.formatBundleFile(componentsData, metadata)}`;
+    const finalContent = await this.applyBundleTransforms(bundleContent, fileName);
+    await fs.ensureDir(path.dirname(filePath));
+    await fs.writeFile(filePath, finalContent, 'utf-8');
+
+    const hash = crypto.createHash('sha256').update(finalContent).digest('hex');
+    const integrity = this.computeBundleIntegrity(components, 'framework', null, 'framework', fileName);
+
+    return {
+      name: 'framework',
+      file: fileName,
+      size: Buffer.byteLength(bundleContent, 'utf-8'),
+      hash,
+      integrity,
+      componentCount: components.length,
+      components: components.map((comp) => `Framework/Structural/${comp.name}`)
+    };
+  }
+
+  buildDependencyContentsSync(jsContent, componentPath) {
+    const dependencies = this.analyzeDependencies(jsContent, componentPath);
+    const dependencyContents = {};
+
+    for (const dep of dependencies) {
+      const depPath = dep.path;
+      try {
+        const depContent = fs.readFileSync(depPath, 'utf-8');
+        const depName = path
+          .relative(this.srcPath, depPath)
+          .replace(/\\/g, '/');
+        dependencyContents[depName] = {
+          content: depContent,
+          bindings: dep.bindings || []
+        };
+      } catch (error) {
+        console.warn(`Warning: Could not read dependency ${depPath}:`, error.message);
+      }
+    }
+
+    return dependencyContents;
+  }
+
+  stripImports(code) {
+    return code.replace(/import\s+.*?from\s+['"].*?['"];?\s*/g, '');
+  }
+
+  async loadComponentsMap() {
+    const componentsConfigPath = path.join(this.componentsPath, 'components.js');
+    if (!await fs.pathExists(componentsConfigPath)) {
+      return {};
+    }
+
+    const content = await fs.readFile(componentsConfigPath, 'utf-8');
+    return this.parseComponentsConfig(content);
+  }
+
+  parseComponentsConfig(content) {
+    try {
+      const ast = parse(content, {
+        sourceType: 'module',
+        plugins: ['jsx']
+      });
+
+      let componentsNode = null;
+
+      traverse.default(ast, {
+        VariableDeclarator(path) {
+          if (path.node.id?.type === 'Identifier' && path.node.id.name === 'components') {
+            componentsNode = path.node.init;
+            path.stop();
+          }
+        }
+      });
+
+      if (!componentsNode || componentsNode.type !== 'ObjectExpression') {
+        throw new Error('components object not found');
+      }
+
+      const config = {};
+      for (const prop of componentsNode.properties) {
+        if (prop.type !== 'ObjectProperty') continue;
+
+        const key = this.extractStringValue(prop.key);
+        const value = this.extractStringValue(prop.value);
+
+        if (!key || !value) {
+          throw new Error('Invalid components entry');
+        }
+
+        config[key] = value;
+      }
+
+      return config;
+    } catch (error) {
+      console.warn(`Could not parse components.js: ${error.message}`);
+      return {};
+    }
+  }
+
+  extractStringValue(node) {
+    if (!node) return null;
+
+    if (node.type === 'StringLiteral') {
+      return node.value;
+    }
+
+    if (node.type === 'Identifier') {
+      return node.name;
+    }
+
+    if (node.type === 'TemplateLiteral' && node.expressions.length === 0) {
+      return node.quasis.map((q) => q.value.cooked).join('');
+    }
+
+    return null;
   }
 
   /**
@@ -740,7 +1231,7 @@ if (window.slice && window.slice.controller) {
     const defaultConfig = `/**
  * Slice.js Bundle Configuration
  * Default empty configuration - no bundles available
- * Run 'slice bundle' to generate optimized bundles
+ * Run 'slice build' to generate optimized bundles
  */
 
 // No bundles available - using individual component loading
@@ -772,10 +1263,23 @@ if (typeof window !== 'undefined' && window.slice && window.slice.controller) {
 
   // Load critical bundle automatically
   if (SLICE_BUNDLE_CONFIG.bundles.critical && !window.slice.controller.criticalBundleLoaded) {
-    import('./slice-bundle.critical.js').catch(err =>
-      console.warn('Failed to load critical bundle:', err)
-    );
-    window.slice.controller.criticalBundleLoaded = true;
+    (async () => {
+      const bundlePath = "/bundles/" + SLICE_BUNDLE_CONFIG.bundles.critical.file;
+      const integrity = SLICE_BUNDLE_CONFIG.bundles.critical.integrity;
+
+      if (typeof window.slice.controller.verifyBundleIntegrity === 'function') {
+        const ok = await window.slice.controller.verifyBundleIntegrity(bundlePath, integrity);
+        if (!ok) {
+          console.warn('Failed to load critical bundle: integrity check failed');
+          return;
+        }
+      }
+
+      import('./slice-bundle.critical.js').catch(err =>
+        console.warn('Failed to load critical bundle:', err)
+      );
+      window.slice.controller.criticalBundleLoaded = true;
+    })();
   }
 }
 `;

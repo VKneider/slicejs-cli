@@ -9,6 +9,7 @@ import versionChecker from "./VersionChecker.js";
 import { getProjectRoot } from "../utils/PathHelper.js";
 import path from "path";
 import { fileURLToPath } from "url";
+import fs from "fs-extra";
 
 const execAsync = promisify(exec);
 
@@ -368,12 +369,64 @@ class UpdateManager {
                 Print.info('💡 It is recommended to restart the development server if it is running.');
             }
 
+            const frameworkUpdated = results.find(r => r.packageName === 'slicejs-web-framework' && r.success);
+            if (frameworkUpdated) {
+                await this.updateApiIndexIfNeeded(options);
+            }
+
             return failCount === 0;
 
         } catch (error) {
             spinner.stop();
             Print.error(`Error during update: ${error.message}`);
             return false;
+        }
+    }
+
+    async updateApiIndexIfNeeded(options = {}) {
+        try {
+            const projectRoot = getProjectRoot(import.meta.url);
+            const projectApiPath = path.join(projectRoot, 'api', 'index.js');
+            const frameworkApiPath = path.join(projectRoot, 'node_modules', 'slicejs-web-framework', 'api', 'index.js');
+
+            if (!await fs.pathExists(projectApiPath) || !await fs.pathExists(frameworkApiPath)) {
+                return;
+            }
+
+            const projectContent = await fs.readFile(projectApiPath, 'utf-8');
+            const frameworkContent = await fs.readFile(frameworkApiPath, 'utf-8');
+
+            if (projectContent === frameworkContent) {
+                return;
+            }
+
+            Print.warning('⚠️ Detected changes in framework api/index.js.');
+
+            let confirmUpdate = options.yes === true;
+            if (!confirmUpdate) {
+                const answers = await inquirer.prompt([
+                    {
+                        type: 'confirm',
+                        name: 'confirm',
+                        message: 'Update your project api/index.js to the latest framework version?',
+                        default: false
+                    }
+                ]);
+                confirmUpdate = answers.confirm;
+            }
+
+            if (!confirmUpdate) {
+                Print.info('Skipping api/index.js update.');
+                return;
+            }
+
+            const backupPath = `${projectApiPath}.bak`;
+            await fs.copy(projectApiPath, backupPath);
+            await fs.writeFile(projectApiPath, frameworkContent, 'utf-8');
+            Print.success('✅ api/index.js updated from framework template.');
+            Print.info(`Backup created at ${backupPath}`);
+        } catch (error) {
+            Print.error(`Failed to update api/index.js: ${error.message}`);
         }
     }
 }

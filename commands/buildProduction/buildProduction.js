@@ -116,7 +116,7 @@ async function copySliceConfig() {
 /**
  * Procesa un directorio completo
  */
-async function processDirectory(srcPath, distPath, baseSrcPath) {
+async function processDirectory(srcPath, distPath, baseSrcPath, options) {
   const items = await fs.readdir(srcPath);
   
   for (const item of items) {
@@ -126,9 +126,9 @@ async function processDirectory(srcPath, distPath, baseSrcPath) {
     
     if (stat.isDirectory()) {
       await fs.ensureDir(distItemPath);
-      await processDirectory(srcItemPath, distItemPath, baseSrcPath);
+      await processDirectory(srcItemPath, distItemPath, baseSrcPath, options);
     } else {
-      await processFile(srcItemPath, distItemPath);
+      await processFile(srcItemPath, distItemPath, options);
     }
   }
 }
@@ -136,19 +136,54 @@ async function processDirectory(srcPath, distPath, baseSrcPath) {
 /**
  * Procesa un archivo individual
  */
-async function processFile(srcFilePath, distFilePath) {
+async function processFile(srcFilePath, distFilePath, options) {
   const ext = path.extname(srcFilePath).toLowerCase();
   const fileName = path.basename(srcFilePath);
-  
+  const isBundleConfig = fileName === 'bundle.config.json' || fileName === 'bundle.config.js';
+  const isBundleFolder = srcFilePath.includes(`${path.sep}bundles${path.sep}`);
+
+  if (isBundleConfig && isBundleFolder) {
+    const renamed = fileName.replace('bundle.config', 'bundle.build.config');
+    distFilePath = path.join(path.dirname(distFilePath), renamed);
+  }
+
   try {
     if (fileName === 'components.js') {
-      await processComponentsFile(srcFilePath, distFilePath);
+      if (options?.minify === false) {
+        await fs.copy(srcFilePath, distFilePath);
+        const stat = await fs.stat(srcFilePath);
+        const sizeKB = (stat.size / 1024).toFixed(1);
+        Print.info(`📄 Copied: ${fileName} (${sizeKB} KB)`);
+      } else {
+        await processComponentsFile(srcFilePath, distFilePath);
+      }
     } else if (ext === '.js') {
-      await minifyJavaScript(srcFilePath, distFilePath);
+      if (options?.minify === false) {
+        await fs.copy(srcFilePath, distFilePath);
+        const stat = await fs.stat(srcFilePath);
+        const sizeKB = (stat.size / 1024).toFixed(1);
+        Print.info(`📄 Copied: ${fileName} (${sizeKB} KB)`);
+      } else {
+        await minifyJavaScript(srcFilePath, distFilePath);
+      }
     } else if (ext === '.css') {
-      await minifyCSS(srcFilePath, distFilePath);
+      if (options?.minify === false) {
+        await fs.copy(srcFilePath, distFilePath);
+        const stat = await fs.stat(srcFilePath);
+        const sizeKB = (stat.size / 1024).toFixed(1);
+        Print.info(`📄 Copied: ${fileName} (${sizeKB} KB)`);
+      } else {
+        await minifyCSS(srcFilePath, distFilePath);
+      }
     } else if (ext === '.html') {
-      await minifyHTML(srcFilePath, distFilePath);
+      if (options?.minify === false) {
+        await fs.copy(srcFilePath, distFilePath);
+        const stat = await fs.stat(srcFilePath);
+        const sizeKB = (stat.size / 1024).toFixed(1);
+        Print.info(`📄 Copied: ${fileName} (${sizeKB} KB)`);
+      } else {
+        await minifyHTML(srcFilePath, distFilePath);
+      }
     } else if (fileName === 'sliceConfig.json') {
       await fs.copy(srcFilePath, distFilePath);
       Print.info(`📄 Preserved: ${fileName} (configuration file)`);
@@ -437,7 +472,7 @@ export default async function buildProduction(options = {}) {
 
     // Procesar archivos
     Print.info('Processing and optimizing source files for Slice.js...');
-    await processDirectory(srcDir, distDir, srcDir);
+    await processDirectory(srcDir, distDir, srcDir, options);
     Print.success('All source files processed and optimized');
 
     await verifyBuildIntegrity(distDir);

@@ -43,7 +43,11 @@ export default async function bundle(options = {}) {
 
     // Phase 2: Bundle generation
     Print.buildProgress('Generating bundles...');
-    const generator = new BundleGenerator(import.meta.url, analysisData);
+    const generator = new BundleGenerator(import.meta.url, analysisData, {
+      minify: !!options.minify,
+      obfuscate: !!options.obfuscate,
+      output: options.output || 'src'
+    });
     const result = await generator.generate();
 
     // Phase 3: Save configuration

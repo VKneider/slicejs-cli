@@ -10,6 +10,14 @@ export default class DependencyAnalyzer {
     this.moduleUrl = moduleUrl;
     this.projectRoot = getProjectRoot(moduleUrl);
     this.componentsPath = path.dirname(getComponentsJsPath(moduleUrl));
+    this.frameworkComponentsPath = path.join(
+      this.projectRoot,
+      'node_modules',
+      'slicejs-web-framework',
+      'Slice',
+      'Components',
+      'Structural'
+    );
     this.routesPath = getSrcPath(moduleUrl, 'routes.js');
 
     // Analysis storage
@@ -29,6 +37,7 @@ export default class DependencyAnalyzer {
 
     // 2. Analyze component files
     await this.analyzeComponents();
+    await this.analyzeFrameworkComponents();
 
     // 3. Load and analyze routes
     await this.analyzeRoutes();
@@ -63,14 +72,7 @@ export default class DependencyAnalyzer {
     // Read and parse components.js
     const content = await fs.readFile(componentsConfigPath, 'utf-8');
 
-    // Extract configuration using simple regex - look for the components object
-    const configMatch = content.match(/const components\s*=\s*({[\s\S]*?});/);
-    if (!configMatch) {
-      throw new Error('Could not parse components.js');
-    }
-
-    // Evaluate safely (in production use a more robust parser)
-    const config = eval(`(${configMatch[1]})`);
+    const config = this.parseComponentsConfig(content);
 
     // Group components by category
     const categoryMap = new Map();
@@ -118,6 +120,77 @@ export default class DependencyAnalyzer {
   }
 
   /**
+   * Parses components.js safely using AST (no eval).
+   * @param {string} content
+   * @returns {Record<string, string>}
+   */
+  parseComponentsConfig(content) {
+    try {
+      const ast = parse(content, {
+        sourceType: 'module',
+        plugins: ['jsx']
+      });
+
+      let componentsNode = null;
+
+      traverse.default(ast, {
+        VariableDeclarator(path) {
+          if (path.node.id?.type === 'Identifier' && path.node.id.name === 'components') {
+            componentsNode = path.node.init;
+            path.stop();
+          }
+        }
+      });
+
+      if (!componentsNode || componentsNode.type !== 'ObjectExpression') {
+        throw new Error('components object not found');
+      }
+
+      const config = {};
+      for (const prop of componentsNode.properties) {
+        if (prop.type !== 'ObjectProperty') continue;
+
+        const key = this.extractStringValue(prop.key);
+        const value = this.extractStringValue(prop.value);
+
+        if (!key || !value) {
+          throw new Error('Invalid components entry');
+        }
+
+        config[key] = value;
+      }
+
+      return config;
+    } catch (error) {
+      throw new Error(`Could not parse components.js: ${error.message}`);
+    }
+  }
+
+
+  /**
+   * Extracts string values from AST nodes.
+   * @param {object} node
+   * @returns {string|null}
+   */
+  extractStringValue(node) {
+    if (!node) return null;
+
+    if (node.type === 'StringLiteral') {
+      return node.value;
+    }
+
+    if (node.type === 'Identifier') {
+      return node.name;
+    }
+
+    if (node.type === 'TemplateLiteral' && node.expressions.length === 0) {
+      return node.quasis.map((q) => q.value.cooked).join('');
+    }
+
+    return null;
+  }
+
+  /**
    * Analyzes each component's files
    */
   async analyzeComponents() {
@@ -135,6 +208,113 @@ export default class DependencyAnalyzer {
       // Parse and extract dependencies
       component.dependencies = await this.extractDependencies(content, jsFile);
     }
+  }
+
+  async analyzeFrameworkComponents() {
+    if (!await fs.pathExists(this.frameworkComponentsPath)) {
+      return;
+    }
+    const frameworkConfigPath = path.join(this.projectRoot, 'src', 'sliceConfig.json');
+    let frameworkConfig = {};
+    try {
+      frameworkConfig = await fs.readJson(frameworkConfigPath);
+    } catch (error) {
+      console.warn('Warning: Could not read sliceConfig.json for framework bundling:', error.message);
+    }
+
+    const enabledStructural = this.getEnabledStructuralComponents(frameworkConfig);
+    const componentEntries = await fs.readdir(this.frameworkComponentsPath);
+
+    for (const componentName of componentEntries) {
+      if (!enabledStructural.has(componentName)) {
+        continue;
+      }
+
+      const componentPath = path.join(this.frameworkComponentsPath, componentName);
+      const componentStat = await fs.stat(componentPath);
+      if (!componentStat.isDirectory()) continue;
+
+      const key = `Framework/Structural/${componentName}`;
+      if (this.components.has(key)) continue;
+
+      this.components.set(key, {
+        name: componentName,
+        category: 'Framework/Structural',
+        categoryType: 'Visual',
+        path: componentPath,
+        dependencies: new Set(),
+        usedBy: new Set(),
+        routes: new Set(),
+        size: 0,
+        isFramework: true
+      });
+    }
+
+    if (enabledStructural.has('EventManagerDebugger')) {
+      this.addFrameworkFileComponent('EventManagerDebugger', 'EventManager');
+    }
+
+    if (enabledStructural.has('ContextManagerDebugger')) {
+      this.addFrameworkFileComponent('ContextManagerDebugger', 'ContextManager');
+    }
+
+    if (enabledStructural.has('ThemeManager')) {
+      this.addFrameworkFileComponent('ThemeManager', path.join('StylesManager', 'ThemeManager'));
+    }
+  }
+
+  addFrameworkFileComponent(componentName, folderName) {
+    const componentPath = path.join(this.frameworkComponentsPath, folderName);
+    const key = `Framework/Structural/${componentName}`;
+
+    if (this.components.has(key)) return;
+
+    this.components.set(key, {
+      name: componentName,
+      fileName: componentName,
+      category: 'Framework/Structural',
+      categoryType: 'Visual',
+      path: componentPath,
+      dependencies: new Set(),
+      usedBy: new Set(),
+      routes: new Set(),
+      size: 0,
+      isFramework: true
+    });
+  }
+
+  getEnabledStructuralComponents(config) {
+    const enabled = new Set(['Controller', 'Router', 'StylesManager']);
+
+    if (config?.logger?.enabled) {
+      enabled.add('Logger');
+    }
+
+    if (config?.debugger?.enabled) {
+      enabled.add('Debugger');
+    }
+
+    if (config?.events?.enabled) {
+      enabled.add('EventManager');
+    }
+
+    if (config?.events?.ui?.enabled) {
+      enabled.add('EventManagerDebugger');
+    }
+
+    if (config?.context?.enabled) {
+      enabled.add('ContextManager');
+    }
+
+    if (config?.context?.ui?.enabled) {
+      enabled.add('ContextManagerDebugger');
+    }
+
+    if (config?.themeManager?.enabled) {
+      enabled.add('ThemeManager');
+    }
+
+    return enabled;
   }
 
   /**

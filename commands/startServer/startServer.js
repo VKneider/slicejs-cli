@@ -1,6 +1,5 @@
 // commands/startServer/startServer.js - MEJORADO CON VALIDACIÓN Y FEEDBACK
 
-import bundle from '../bundle/bundle.js';
 import fs from 'fs-extra';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -9,6 +8,7 @@ import { createServer } from 'net';
 import setupWatcher, { stopWatcher } from './watchServer.js';
 import Print from '../Print.js';
 import { getConfigPath, getApiPath, getSrcPath, getDistPath } from '../utils/PathHelper.js';
+import build from '../build/build.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -55,7 +55,8 @@ async function isPortAvailable(port) {
  */
 async function checkProductionBuild() {
   const distDir = getDistPath(import.meta.url);
-  return await fs.pathExists(distDir);
+  const bundleConfigPath = path.join(distDir, 'bundles', 'bundle.config.json');
+  return (await fs.pathExists(distDir)) && (await fs.pathExists(bundleConfigPath));
 }
 
 /**
@@ -174,7 +175,7 @@ export default async function startServer(options = {}) {
   const config = loadConfig();
   const defaultPort = config?.server?.port || 3000;
 
-  const { mode = 'development', port = defaultPort, watch = false, bundled = false } = options;
+  const { mode = 'development', port = defaultPort, watch = false } = options;
 
   try {
     Print.title(`🚀 Starting Slice.js ${mode} server...`);
@@ -201,11 +202,13 @@ export default async function startServer(options = {}) {
     if (mode === 'production') {
       // Verificar que existe build de producción
       if (!await checkProductionBuild()) {
-        throw new Error('No production build found. Run "slice build" first.');
+        Print.info('No production build found. Running "slice build"...');
+        const success = await build({});
+        if (!success) {
+          throw new Error('Build failed. Cannot start production server.');
+        }
       }
       Print.info('Production mode: serving optimized files from /dist');
-    } else if (mode === 'bundled') {
-      Print.info('Bundled mode: serving with generated bundles for optimized loading');
     } else {
       Print.info('Development mode: serving files from /src with hot reload');
     }
@@ -227,20 +230,7 @@ export default async function startServer(options = {}) {
         await new Promise(r => setTimeout(r, 500));
         
         try {
-          // If we are in bundled mode, regenerate bundles before restarting
-          if (mode === 'bundled') {
-               Print.info('🔄 File changed. Regenerating bundles...');
-               try {
-                  await bundle({ verbose: false });
-               } catch (err) {
-                  Print.error('Bundle generation failed during watch restart');
-                  console.error(err);
-                  // We continue restarting anyway to show error in browser if possible, 
-                  // or maybe just to keep process alive.
-               }
-          } else {
-             Print.info('🔄 File changed. Restarting server...');
-          }
+        Print.info('🔄 File changed. Restarting server...');
 
           serverProcess = await startNodeServer(actualPort, mode);
         } catch (e) {

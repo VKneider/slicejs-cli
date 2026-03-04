@@ -85,8 +85,19 @@ slice dev
 
 # Custom port
 slice dev -p 8080
+```
 
-# Alias
+### Production build + server
+
+```bash
+# Build production output (minified + obfuscated by default)
+slice build
+
+# Disable minification or obfuscation
+slice build --no-minify
+slice build --no-obfuscate
+
+# Start production server (serves /dist)
 slice start
 slice start -p 8080
 ```
@@ -211,6 +222,13 @@ slice init
 slice dev
 ```
 
+### Production Build + Start
+
+```bash
+slice build
+slice start
+```
+
 ### Adding Components
 
 ```bash
@@ -236,13 +254,23 @@ slice sync
 
 ## Development Mode
 
-The development server (`slice dev` / `slice start`) provides:
+The development server (`slice dev`) provides:
 
 - ✅ Hot reload
 - ✅ Serves directly from `/src`
 - ✅ No build step
 - ✅ Port validation
 - ✅ Clear error messages
+
+## Production Mode
+
+The production workflow uses `slice build` + `slice start`:
+
+- ✅ Builds to `/dist`
+- ✅ Generates bundles into `/dist/bundles`
+- ✅ Generates a dedicated framework bundle for Structural components (`slice-bundle.framework.js`)
+- ✅ Minifies + obfuscates by default
+- ✅ Serves production assets only
 
 ## Requirements
 
@@ -252,6 +280,10 @@ The development server (`slice dev` / `slice start`) provides:
 ## Configuration
 
 Project configuration is stored in `src/sliceConfig.json` and is created automatically by `slice init`.
+
+In production, `publicFolders` defines **public asset folders** served by the server (defaults to
+`/Themes`, `/Styles`, `/assets`). This keeps source-only folders private while exposing the assets
+your app needs.
 
 ## Features
 

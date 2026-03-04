@@ -18,7 +18,8 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import validations from "./commands/Validations.js";
 import Print from "./commands/Print.js";
-import bundle, { cleanBundles, bundleInfo } from './commands/bundle/bundle.js';
+import build from './commands/build/build.js';
+import { cleanBundles, bundleInfo } from './commands/bundle/bundle.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -132,79 +133,68 @@ sliceClient
     await versionChecker.showVersionInfo();
   });
 
-// BUNDLE COMMAND
-const bundleCommand = sliceClient.command("bundle")
-  .description("Build component bundles for production")
+// BUILD COMMAND
+const buildCommand = sliceClient.command("build")
+  .description("Build Slice.js project for production")
   .action(async (options) => {
     await runWithVersionCheck(async () => {
-      await bundle(options);
+      await build(options);
     });
   });
 
-bundleCommand
+buildCommand
   .command("clean")
   .description("Remove all generated bundles")
   .action(async () => {
     await cleanBundles();
   });
 
-bundleCommand
+buildCommand
   .command("info")
   .description("Show information about generated bundles")
   .action(async () => {
     await bundleInfo();
   });
 
-bundleCommand
+buildCommand
   .option("-a, --analyze", "Analyze project dependencies without bundling")
-  .option("-v, --verbose", "Show detailed output");
+  .option("-v, --verbose", "Show detailed output")
+  .option("--no-minify", "Disable minification (enabled by default)")
+  .option("--no-obfuscate", "Disable obfuscation (enabled by default, no prop mangling)")
+  .option("--preview", "Start preview server after build")
+  .option("--serve", "Start preview server without building")
+  .option("--skip-clean", "Skip cleaning dist before build");
 
-// DEV COMMAND (DEVELOPMENT) - COMANDO PRINCIPAL
+// DEV COMMAND (DEVELOPMENT)
 sliceClient
   .command("dev")
   .description("Start development server")
   .option("-p, --port <port>", "Port for development server", 3000)
   .option("-w, --watch", "Enable watch mode for file changes")
-  .option("-b, --bundled", "Generate bundles before starting server")
   .action(async (options) => {
     await runWithVersionCheck(async () => {
-      // Si se solicita bundles, generarlos primero
-      if (options.bundled) {
-        Print.info("Generating bundles before starting server...");
-        await bundle({ verbose: false });
-        Print.newLine();
-      }
-
       await startServer({
-        mode: options.bundled ? 'bundled' : 'development',
+        mode: 'development',
         port: parseInt(options.port),
         watch: options.watch,
-        bundled: options.bundled
+        bundled: false
       });
     });
   });
 
-// START COMMAND - ALIAS PARA DEV
+// START COMMAND - PRODUCTION MODE
 sliceClient
   .command("start")
-  .description("Start development server (alias for dev)")
+  .description("Start production server")
   .option("-p, --port <port>", "Port for server", 3000)
   .option("-w, --watch", "Enable watch mode for file changes")
-  .option("-b, --bundled", "Generate bundles before starting server")
   .action(async (options) => {
     await runWithVersionCheck(async () => {
-      // Si se solicita bundles, generarlos primero
-      if (options.bundled) {
-        Print.info("Generating bundles before starting server...");
-        await bundle({ verbose: false });
-        Print.newLine();
-      }
-
       await startServer({
-        mode: options.bundled ? 'bundled' : 'development',
+        mode: 'production',
         port: parseInt(options.port),
         watch: options.watch,
-        bundled: options.bundled
+        bundled: false
       });
     });
   });
@@ -486,9 +476,8 @@ sliceClient.addHelpText('after', `
 Common Usage Examples:
   slice init                     - Initialize new Slice.js project
   slice dev                      - Start development server
-  slice start                    - Start development server (same as dev)
-  slice dev --bundled            - Generate bundles then start server
-  slice start --bundled          - Same as above (bundle -> start)
+  slice build                    - Build production output (bundles + dist)
+  slice start                    - Start production server
   slice get Button Card Input    - Install Visual components from registry
   slice get FetchManager -s      - Install Service component from registry
   slice browse                   - Browse all available components
@@ -507,10 +496,8 @@ Command Categories:
 Development Workflow:
   • slice init          - Initialize project
   • slice dev           - Start development server (serves from /src)
-  • slice start         - Alternative to dev command
-  • slice dev --bundled - Start with bundles (bundle -> start)
-
-Note: Production builds are disabled. Use development mode for all workflows.
+  • slice build         - Build production output to /dist (includes bundles)
+  • slice start         - Serve production build from /dist
 
 More info: https://slice-js-docs.vercel.app/
 `);
