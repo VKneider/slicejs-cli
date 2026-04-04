@@ -88,8 +88,6 @@ function startNodeServer(port, mode) {
     const args = [apiIndexPath];
     if (mode === 'production') {
       args.push('--production');
-    } else if (mode === 'bundled') {
-      args.push('--bundled');
     } else {
       args.push('--development');
     }
@@ -216,7 +214,7 @@ export default async function startServer(options = {}) {
       }
       Print.info('Production mode: serving optimized files from /dist');
     } else {
-      Print.info('Development mode: serving files from /src with hot reload');
+      Print.info('Development mode: serving files from /src (HMR enabled)');
     }
 
     Print.newLine();

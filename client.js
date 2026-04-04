@@ -174,12 +174,10 @@ buildCommand
 // DEV COMMAND (DEVELOPMENT)
 sliceClient
   .command("dev")
-  .description("Start development server")
+  .description("Start development server with hot reload enabled by default")
   .option("-p, --port <port>", "Port for development server", 3000)
-  .option("-w, --watch", "Enable watch mode for file changes")
+  .option("--no-hmr", "Disable hot module reload (enabled by default)")
   .action(async (options) => {
-    // Ensure the process.env.NODE_ENV reflects the requested mode for any
-    // code (builds, spawned processes, libraries) that reads it.
     const prevEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'development';
     try {
@@ -187,8 +185,7 @@ sliceClient
         await startServer({
           mode: 'development',
           port: parseInt(options.port),
-          watch: options.watch,
-          bundled: false
+          watch: options.hmr
         });
       });
     } finally {
@@ -199,9 +196,8 @@ sliceClient
 // START COMMAND - PRODUCTION MODE
 sliceClient
   .command("start")
-  .description("Start production server")
+  .description("Serve production files from dist/ (requires prior slice build)")
   .option("-p, --port <port>", "Port for server", 3000)
-  .option("-w, --watch", "Enable watch mode for file changes")
   .action(async (options) => {
     const prevEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
@@ -209,9 +205,7 @@ sliceClient
       await runWithVersionCheck(async () => {
         await startServer({
           mode: 'production',
-          port: parseInt(options.port),
-          watch: options.watch,
-          bundled: false
+          port: parseInt(options.port)
         });
       });
     } finally {
