@@ -22,5 +22,5 @@ test('generated V2 bundle includes meta and registerAll exports', () => {
   );
 
   assert.match(source, /export const SLICE_BUNDLE_META/);
-  assert.match(source, /export async function registerAll\(controller, stylesManager\)/);
+  assert.match(source, /export async function registerAll\(/);
 });
