@@ -36,3 +36,40 @@ test('computeBundleIntegrity changes with component dependencies', () => {
   // Assert
   assert.notEqual(baseIntegrity, changedIntegrity);
 });
+
+test('generateBundleConfig outputs V2 manifest fields', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {
+      totalComponents: 0,
+      totalRoutes: 0,
+      sharedPercentage: 0,
+      totalSize: 0
+    }
+  });
+
+  const config = generator.generateBundleConfig(null);
+
+  assert.equal(config.format, 'v2');
+  assert.ok(config.generated);
+  assert.ok(config.bundles);
+  assert.ok(['enabled', 'disabled'].includes(config.loadingPolicy));
+});
+
+test('loading policy is enabled when sliceConfig loading.enabled is true', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {
+      totalComponents: 0,
+      totalRoutes: 0,
+      sharedPercentage: 0,
+      totalSize: 0
+    },
+    sliceConfig: { loading: { enabled: true } }
+  });
+
+  const config = generator.generateBundleConfig(null);
+  assert.equal(config.loadingPolicy, 'enabled');
+});
