@@ -48,7 +48,33 @@ test('generateBundleFileContent deduplicates components by name', () => {
   );
 
   assert.equal((source.match(/const SLICE_CLASS_FACTORY_SliceComponent_Button/g) || []).length, 1);
-  assert.equal((source.match(/controller\.classes\.set\("Button", SLICE_CLASS_FACTORY_SliceComponent_Button\(\)\);/g) || []).length, 1);
+  assert.equal((source.match(/if \(!controller\.classes\.has\("Button"\)\) \{\s*controller\.classes\.set\("Button", SLICE_CLASS_FACTORY_SliceComponent_Button\(\)\);\s*\}/g) || []).length, 1);
+});
+
+test('registerAll guards class, template, style, and category writes', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {
+      totalComponents: 0,
+      totalRoutes: 0,
+      sharedPercentage: 0,
+      totalSize: 0
+    }
+  }, { output: 'src' });
+
+  const source = generator.generateBundleFileContent(
+    'slice-bundle.test.js',
+    'route',
+    [{ name: 'Button', category: 'Visual', categoryType: 'Visual', dependencies: new Set(), size: 100, js: '', html: '<button>ok</button>', css: '.btn{}' }],
+    '/test'
+  );
+
+  assert.match(source, /if \(!controller\.classes\.has\("Button"\)\) \{\s*controller\.classes\.set\("Button", SLICE_CLASS_FACTORY_SliceComponent_Button\(\)\);\s*\}/);
+  assert.match(source, /if \(!controller\.templates\.has\("Button"\)\) \{\s*controller\.templates\.set\("Button", __templateElement_SliceComponent_Button\);\s*\}/);
+  assert.match(source, /if \(!stylesManager\.__sliceRegisteredComponentStyles\) \{\s*stylesManager\.__sliceRegisteredComponentStyles = new Set\(\);\s*\}/);
+  assert.match(source, /if \(!stylesManager\.__sliceRegisteredComponentStyles\.has\("Button"\)\) \{\s*stylesManager\.registerComponentStyles\("Button", ".*"\);\s*stylesManager\.__sliceRegisteredComponentStyles\.add\("Button"\);\s*\}/);
+  assert.match(source, /if \(!controller\.componentCategories\.has\("Button"\)\) \{\s*controller\.componentCategories\.set\("Button", "Visual"\);\s*\}/);
 });
 
 test('registerAll stores templates as template elements', () => {

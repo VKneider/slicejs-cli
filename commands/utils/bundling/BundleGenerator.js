@@ -1012,22 +1012,36 @@ export default class BundleGenerator {
       .join('\n');
 
     const classRegistrations = uniqueComponents
-      .map((component) => `  controller.classes.set(${JSON.stringify(component.name)}, ${this.classFactoryName(component.name)}());`)
+      .map((component) => {
+        const componentName = JSON.stringify(component.name);
+        return `  if (!controller.classes.has(${componentName})) {\n    controller.classes.set(${componentName}, ${this.classFactoryName(component.name)}());\n  }`;
+      })
       .join('\n');
 
     const templateRegistrations = uniqueComponents
       .map((component) => {
+        const componentName = JSON.stringify(component.name);
         const templateVarName = `__templateElement_${this.toSafeIdentifier(component.name)}`;
-        return `  controller.templates.set(${JSON.stringify(component.name)}, ${templateVarName});`;
+        return `  if (!controller.templates.has(${componentName})) {\n    controller.templates.set(${componentName}, ${templateVarName});\n  }`;
       })
       .join('\n');
 
+    const cssRegistrationInit = uniqueComponents.length
+      ? `  if (!stylesManager.__sliceRegisteredComponentStyles) {\n    stylesManager.__sliceRegisteredComponentStyles = new Set();\n  }`
+      : '';
+
     const cssRegistrations = uniqueComponents
-      .map((component) => `  stylesManager.registerComponentStyles(${JSON.stringify(component.name)}, ${JSON.stringify(component.css || '')});`)
+      .map((component) => {
+        const componentName = JSON.stringify(component.name);
+        return `  if (!stylesManager.__sliceRegisteredComponentStyles.has(${componentName})) {\n    stylesManager.registerComponentStyles(${componentName}, ${JSON.stringify(component.css || '')});\n    stylesManager.__sliceRegisteredComponentStyles.add(${componentName});\n  }`;
+      })
       .join('\n');
 
     const categoryRegistrations = uniqueComponents
-      .map((component) => `  controller.componentCategories.set(${JSON.stringify(component.name)}, ${JSON.stringify(component.category)});`)
+      .map((component) => {
+        const componentName = JSON.stringify(component.name);
+        return `  if (!controller.componentCategories.has(${componentName})) {\n    controller.componentCategories.set(${componentName}, ${JSON.stringify(component.category)});\n  }`;
+      })
       .join('\n');
 
     const metadata = {
@@ -1038,7 +1052,7 @@ export default class BundleGenerator {
       componentCount: uniqueComponents.length
     };
 
-    return `export const SLICE_BUNDLE_META = ${JSON.stringify(metadata, null, 2)};\n\n${dependencyModuleBlock}\n\n${classFactoryDefinitions}\n\n${templateDeclarations}\n\nexport async function registerAll(controller, stylesManager) {\n${classRegistrations}\n${templateRegistrations}\n${cssRegistrations}\n${categoryRegistrations}\n}\n`;
+    return `export const SLICE_BUNDLE_META = ${JSON.stringify(metadata, null, 2)};\n\n${dependencyModuleBlock}\n\n${classFactoryDefinitions}\n\n${templateDeclarations}\n\nexport async function registerAll(controller, stylesManager) {\n${classRegistrations}\n${templateRegistrations}\n${cssRegistrationInit}${cssRegistrationInit ? '\n' : ''}${cssRegistrations}\n${categoryRegistrations}\n}\n`;
   }
 
   buildV2DependencyModuleBlock(components) {
