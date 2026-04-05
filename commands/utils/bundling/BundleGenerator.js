@@ -22,12 +22,16 @@ export default class BundleGenerator {
       minify: !!options.minify,
       obfuscate: !!options.obfuscate
     };
+    this.format = 'v2';
+    this.loadingPolicy = this.analysisData?.sliceConfig?.loading?.enabled ? 'enabled' : 'disabled';
 
     // Configuration
     this.config = {
       maxCriticalSize: 50 * 1024, // 50KB
       maxCriticalComponents: 15,
       minSharedUsage: 3, // Minimum routes to be considered "shared"
+      maxRouteBundleSize: 120 * 1024,
+      maxRouteRequests: 12,
       strategy: 'hybrid' // 'global', 'hybrid', 'per-route'
     };
 
@@ -154,6 +158,7 @@ export default class BundleGenerator {
     // Filter critical candidates
     const candidates = components
       .filter(comp => {
+        if (!this.isComponentAllowedByLoadingPolicy(comp)) return false;
         // Shared components (used in 3+ routes)
         const isShared = comp.routes.size >= this.config.minSharedUsage;
 
@@ -173,8 +178,8 @@ export default class BundleGenerator {
         return priorityB - priorityA;
       });
 
-    const loadingComponent = components.find((comp) => comp.name === 'Loading');
-    if (loadingComponent && !candidates.includes(loadingComponent)) {
+    const loadingComponent = components.find((comp) => comp.name === 'Loading' && this.isComponentAllowedByLoadingPolicy(comp));
+    if (this.loadingPolicy === 'enabled' && loadingComponent && !candidates.includes(loadingComponent)) {
       candidates.unshift(loadingComponent);
     }
 
@@ -203,6 +208,11 @@ export default class BundleGenerator {
       }
     }
 
+    if (this.loadingPolicy === 'disabled') {
+      this.bundles.critical.components = this.bundles.critical.components.filter((comp) => comp.name !== 'Loading');
+      this.bundles.critical.size = this.bundles.critical.components.reduce((sum, comp) => sum + comp.size, 0);
+    }
+
     console.log(`✓ Critical bundle: ${this.bundles.critical.components.length} components, ${(this.bundles.critical.size / 1024).toFixed(1)} KB`);
   }
 
@@ -217,6 +227,12 @@ export default class BundleGenerator {
     } else {
       this.assignPerRouteBundles(criticalNames);
     }
+
+    this.extractSharedComponents(criticalNames);
+    this.rebalanceBundlesByBudget(this.bundles.routes, {
+      maxBundleSize: this.config.maxRouteBundleSize,
+      maxRequests: this.config.maxRouteRequests
+    });
   }
 
   /**
@@ -240,7 +256,7 @@ export default class BundleGenerator {
 
       // Filter those already in critical
       const uniqueComponents = Array.from(allComponents).filter(comp =>
-        !criticalNames.has(comp.name)
+        !criticalNames.has(comp.name) && this.isComponentAllowedByLoadingPolicy(comp)
       );
 
       if (uniqueComponents.length === 0) continue;
@@ -250,7 +266,7 @@ export default class BundleGenerator {
 
       this.bundles.routes[routeKey] = {
         path: routePath,
-        components: uniqueComponents,
+        components: this.sortComponentsByName(uniqueComponents),
         size: totalSize,
         file: `slice-bundle.${routeKey}.js`
       };
@@ -313,7 +329,7 @@ export default class BundleGenerator {
 
           // Filter those already in critical
           const uniqueComponents = Array.from(allComponents).filter(comp =>
-            !criticalNames.has(comp.name)
+            !criticalNames.has(comp.name) && this.isComponentAllowedByLoadingPolicy(comp)
           );
 
           if (uniqueComponents.length > 0) {
@@ -321,7 +337,7 @@ export default class BundleGenerator {
 
             this.bundles.routes[groupKey] = {
               paths: groupData.routes,
-              components: uniqueComponents,
+              components: this.sortComponentsByName(uniqueComponents),
               size: totalSize,
               file: `slice-bundle.${this.routeToFileName(groupKey)}.js`
             };
@@ -368,7 +384,7 @@ export default class BundleGenerator {
 
       // Filter those already in critical
       const uniqueComponents = Array.from(allComponents).filter(comp =>
-        !criticalNames.has(comp.name)
+        !criticalNames.has(comp.name) && this.isComponentAllowedByLoadingPolicy(comp)
       );
 
       if (uniqueComponents.length === 0) continue;
@@ -378,13 +394,149 @@ export default class BundleGenerator {
 
       this.bundles.routes[category] = {
         paths: routePaths,
-        components: uniqueComponents,
+        components: this.sortComponentsByName(uniqueComponents),
         size: totalSize,
         file: `slice-bundle.${this.routeToFileName(category)}.js`
       };
 
       console.log(`✓ Bundle ${category}: ${uniqueComponents.length} components, ${(totalSize / 1024).toFixed(1)} KB (${routes.length} routes)`);
     }
+  }
+
+  isComponentAllowedByLoadingPolicy(component) {
+    if (!component) return false;
+    if (this.loadingPolicy === 'disabled' && component.name === 'Loading') {
+      return false;
+    }
+    return true;
+  }
+
+  sortComponentsByName(components) {
+    return [...components].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  extractSharedComponents(criticalNames) {
+    const usage = new Map();
+
+    for (const bundle of Object.values(this.bundles.routes)) {
+      for (const component of bundle.components || []) {
+        if (criticalNames.has(component.name)) continue;
+        if (!this.isComponentAllowedByLoadingPolicy(component)) continue;
+        if (!usage.has(component.name)) {
+          usage.set(component.name, { component, count: 0 });
+        }
+        usage.get(component.name).count += 1;
+      }
+    }
+
+    const sharedComponents = Array.from(usage.values())
+      .filter((entry) => entry.count >= this.config.minSharedUsage)
+      .map((entry) => entry.component);
+
+    if (sharedComponents.length === 0) {
+      return;
+    }
+
+    const sharedSet = new Set(sharedComponents.map((component) => component.name));
+    const orderedShared = this.sortComponentsByName(sharedComponents);
+
+    for (const bundle of Object.values(this.bundles.routes)) {
+      const filtered = (bundle.components || []).filter((component) => !sharedSet.has(component.name));
+      bundle.components = this.sortComponentsByName(filtered);
+      bundle.size = bundle.components.reduce((sum, component) => sum + component.size, 0);
+    }
+
+    this.bundles.routes['shared-core'] = {
+      paths: [],
+      components: orderedShared,
+      size: orderedShared.reduce((sum, component) => sum + component.size, 0),
+      file: `slice-bundle.${this.routeToFileName('shared-core')}.js`
+    };
+
+    for (const [key, bundle] of Object.entries(this.bundles.routes)) {
+      if (key === 'shared-core') continue;
+      if ((bundle.components || []).length === 0) {
+        delete this.bundles.routes[key];
+      }
+    }
+  }
+
+  rebalanceBundlesByBudget(bundles, limits = {}) {
+    const maxBundleSize = limits.maxBundleSize || this.config.maxRouteBundleSize;
+    const maxRequests = limits.maxRequests || this.config.maxRouteRequests;
+    const orderedEntries = Object.entries(bundles)
+      .sort(([a], [b]) => a.localeCompare(b));
+    const rebalanced = {};
+
+    for (const [key, bundle] of orderedEntries) {
+      const sortedComponents = this.sortComponentsByName(bundle.components || []);
+      const totalSize = sortedComponents.reduce((sum, component) => sum + component.size, 0);
+      if (totalSize <= maxBundleSize || sortedComponents.length <= 1) {
+        rebalanced[key] = {
+          ...bundle,
+          components: sortedComponents,
+          size: totalSize,
+          file: `slice-bundle.${this.routeToFileName(key)}.js`
+        };
+        continue;
+      }
+
+      let partIndex = 1;
+      let currentChunk = [];
+      let currentSize = 0;
+
+      for (const component of sortedComponents) {
+        const nextSize = currentSize + component.size;
+        const shouldFlush = currentChunk.length > 0 && nextSize > maxBundleSize;
+
+        if (shouldFlush) {
+          const partKey = `${key}--p${partIndex}`;
+          rebalanced[partKey] = {
+            ...bundle,
+            components: currentChunk,
+            size: currentSize,
+            file: `slice-bundle.${this.routeToFileName(partKey)}.js`
+          };
+          partIndex += 1;
+          currentChunk = [];
+          currentSize = 0;
+        }
+
+        currentChunk.push(component);
+        currentSize += component.size;
+      }
+
+      if (currentChunk.length > 0) {
+        const partKey = `${key}--p${partIndex}`;
+        rebalanced[partKey] = {
+          ...bundle,
+          components: currentChunk,
+          size: currentSize,
+          file: `slice-bundle.${this.routeToFileName(partKey)}.js`
+        };
+      }
+    }
+
+    const keys = Object.keys(rebalanced).sort((a, b) => a.localeCompare(b));
+    while (keys.length > maxRequests) {
+      const lastKey = keys.pop();
+      const targetKey = keys[keys.length - 1];
+      if (!lastKey || !targetKey) break;
+      const mergedComponents = this.sortComponentsByName([
+        ...(rebalanced[targetKey].components || []),
+        ...(rebalanced[lastKey].components || [])
+      ]);
+      rebalanced[targetKey].components = mergedComponents;
+      rebalanced[targetKey].size = mergedComponents.reduce((sum, component) => sum + component.size, 0);
+      delete rebalanced[lastKey];
+    }
+
+    Object.keys(bundles).forEach((key) => delete bundles[key]);
+    for (const [key, bundle] of Object.entries(rebalanced).sort(([a], [b]) => a.localeCompare(b))) {
+      bundles[key] = bundle;
+    }
+
+    return bundles;
   }
 
   /**
@@ -674,14 +826,12 @@ export default class BundleGenerator {
    * Generates the content of a bundle
    */
   async generateBundleContent(components, type, routePath, bundleKey, fileName) {
-    const componentsData = {};
+    const bundleComponents = [];
 
     for (const comp of components) {
       const fileBaseName = comp.fileName || comp.name;
       const jsPath = path.join(comp.path, `${fileBaseName}.js`);
       const jsContent = await fs.readFile(jsPath, 'utf-8');
-
-      const dependencyContents = await this.buildDependencyContents(jsContent, comp.path);
 
       let htmlContent = null;
       let cssContent = null;
@@ -697,36 +847,74 @@ export default class BundleGenerator {
         cssContent = await fs.readFile(cssPath, 'utf-8');
       }
 
-      const componentKey = comp.isFramework ? `Framework/Structural/${comp.name}` : comp.name;
-      componentsData[componentKey] = {
+      bundleComponents.push({
         name: comp.name,
         category: comp.category,
         categoryType: comp.categoryType,
-        isFramework: !!comp.isFramework,
         js: this.cleanJavaScript(jsContent, comp.name),
-        externalDependencies: dependencyContents, // Files imported with import statements
-        componentDependencies: Array.from(comp.dependencies), // Other components this one depends on
         html: htmlContent,
         css: cssContent,
         size: comp.size
-      };
+      });
     }
 
+    return this.generateBundleFileContent(fileName, type, this.sortComponentsByName(bundleComponents), routePath);
+  }
+
+  classFactoryName(componentName) {
+    return `SLICE_CLASS_FACTORY_${this.toSafeIdentifier(componentName)}`;
+  }
+
+  indentCodeBlock(code, spaces = 2) {
+    const indentation = ' '.repeat(spaces);
+    return String(code)
+      .split('\n')
+      .map((line) => `${indentation}${line}`)
+      .join('\n');
+  }
+
+  generateBundleFileContent(fileName, type, components, routePath = null) {
+    const bundleKey = type === 'critical'
+      ? 'critical'
+      : type === 'framework'
+        ? 'framework'
+        : this.routeToFileName(routePath || fileName.replace('slice-bundle.', '').replace('.js', ''));
+
+    const classFactoryDefinitions = components
+      .map((component) => {
+        const factoryName = this.classFactoryName(component.name);
+        const body = component.js && component.js.trim()
+          ? component.js
+          : `return window.${component.name};`;
+        return `const ${factoryName} = () => {\n${this.indentCodeBlock(body, 2)}\n};`;
+      })
+      .join('\n\n');
+
+    const classRegistrations = components
+      .map((component) => `  controller.classes.set(${JSON.stringify(component.name)}, ${this.classFactoryName(component.name)}());`)
+      .join('\n');
+
+    const templateRegistrations = components
+      .map((component) => `  controller.templates.set(${JSON.stringify(component.name)}, ${JSON.stringify(component.html || '')});`)
+      .join('\n');
+
+    const cssRegistrations = components
+      .map((component) => `  stylesManager.registerComponentStyles(${JSON.stringify(component.name)}, ${JSON.stringify(component.css || '')});`)
+      .join('\n');
+
+    const categoryRegistrations = components
+      .map((component) => `  controller.componentCategories.set(${JSON.stringify(component.name)}, ${JSON.stringify(component.category)});`)
+      .join('\n');
+
     const metadata = {
-      version: '2.0.0',
-      type,
-      route: routePath,
+      version: '2',
       bundleKey,
-      file: fileName,
-      generated: new Date().toISOString(),
-      totalSize: components.reduce((sum, c) => sum + c.size, 0),
-      componentCount: components.length,
-      strategy: this.config.strategy,
-      minified: this.options.minify,
-      obfuscated: this.options.obfuscate
+      type,
+      routes: routePath ? [routePath] : [],
+      componentCount: components.length
     };
 
-    return this.formatBundleFile(componentsData, metadata);
+    return `export const SLICE_BUNDLE_META = ${JSON.stringify(metadata, null, 2)};\n\n${classFactoryDefinitions}\n\nexport async function registerAll(controller, stylesManager) {\n${classRegistrations}\n${templateRegistrations}\n${cssRegistrations}\n${categoryRegistrations}\n}\n`;
   }
 
   async buildDependencyContents(jsContent, componentPath) {
@@ -981,6 +1169,8 @@ if (window.slice && window.slice.controller) {
   generateBundleConfig(frameworkBundle = null) {
     const config = {
       version: '2.0.0',
+      format: this.format,
+      loadingPolicy: this.loadingPolicy,
       strategy: this.config.strategy,
       minified: this.options.minify,
       obfuscated: this.options.obfuscate,
