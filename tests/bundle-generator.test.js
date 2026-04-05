@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'fs-extra';
+import os from 'node:os';
+import path from 'node:path';
 import BundleGenerator from '../commands/utils/bundling/BundleGenerator.js';
 
 const createComponent = (name, deps = []) => ({
@@ -72,6 +75,71 @@ test('loading policy is enabled when sliceConfig loading.enabled is true', () =>
 
   const config = generator.generateBundleConfig(null);
   assert.equal(config.loadingPolicy, 'enabled');
+});
+
+test('loading policy falls back to project sliceConfig when analysisData lacks sliceConfig', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'slice-bundle-test-'));
+  const srcDir = path.join(tempRoot, 'src');
+  const previousInitCwd = process.env.INIT_CWD;
+
+  await fs.ensureDir(srcDir);
+  await fs.writeJson(path.join(srcDir, 'sliceConfig.json'), {
+    loading: { enabled: true }
+  });
+
+  process.env.INIT_CWD = tempRoot;
+
+  try {
+    const generator = new BundleGenerator(import.meta.url, {
+      components: [],
+      routes: [],
+      metrics: {
+        totalComponents: 0,
+        totalRoutes: 0,
+        sharedPercentage: 0,
+        totalSize: 0
+      }
+    });
+
+    const config = generator.generateBundleConfig(null);
+    assert.equal(config.loadingPolicy, 'enabled');
+  } finally {
+    if (previousInitCwd === undefined) {
+      delete process.env.INIT_CWD;
+    } else {
+      process.env.INIT_CWD = previousInitCwd;
+    }
+    await fs.remove(tempRoot);
+  }
+});
+
+test('loading enabled always includes Loading component in critical bundle', () => {
+  const loading = {
+    ...createComponent('Loading'),
+    routes: new Set(),
+    size: 100000
+  };
+  const home = {
+    ...createComponent('HomePage'),
+    routes: new Set(['/'])
+  };
+
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [loading, home],
+    routes: [{ path: '/', component: 'HomePage' }],
+    metrics: {
+      totalComponents: 2,
+      totalRoutes: 1,
+      sharedPercentage: 0,
+      totalSize: 100010
+    },
+    sliceConfig: { loading: { enabled: true } }
+  });
+
+  generator.identifyCriticalComponents();
+
+  assert.ok(generator.bundles.critical.components.some((component) => component.name === 'Loading'));
+  assert.equal(generator.generateBundleConfig().loadingPolicy, 'enabled');
 });
 
 test('shared-core is wired as dependency for affected route bundles', () => {

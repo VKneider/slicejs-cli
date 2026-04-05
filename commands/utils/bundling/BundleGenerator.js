@@ -5,12 +5,12 @@ import crypto from 'crypto';
 import { parse } from '@babel/parser';
 import traverse from '@babel/traverse';
 import { minify as terserMinify } from 'terser';
-import { getSrcPath, getComponentsJsPath, getDistPath } from '../PathHelper.js';
+import { getSrcPath, getComponentsJsPath, getDistPath, getConfigPath } from '../PathHelper.js';
 
 export default class BundleGenerator {
   constructor(moduleUrl, analysisData, options = {}) {
     this.moduleUrl = moduleUrl;
-    this.analysisData = analysisData;
+    this.analysisData = analysisData || { components: [], routes: [], metrics: {} };
     this.srcPath = getSrcPath(moduleUrl);
     this.distPath = getDistPath(moduleUrl);
     this.output = options.output || 'src';
@@ -23,7 +23,8 @@ export default class BundleGenerator {
       obfuscate: !!options.obfuscate
     };
     this.format = 'v2';
-    this.loadingPolicy = this.analysisData?.sliceConfig?.loading?.enabled ? 'enabled' : 'disabled';
+    this.sliceConfig = this.resolveSliceConfig();
+    this.loadingPolicy = this.resolveLoadingPolicy();
 
     // Configuration
     this.config = {
@@ -43,6 +44,27 @@ export default class BundleGenerator {
       },
       routes: {}
     };
+  }
+
+  resolveSliceConfig() {
+    if (this.analysisData?.sliceConfig && typeof this.analysisData.sliceConfig === 'object') {
+      return this.analysisData.sliceConfig;
+    }
+
+    try {
+      const configPath = getConfigPath(this.moduleUrl);
+      if (fs.existsSync(configPath)) {
+        return fs.readJsonSync(configPath);
+      }
+    } catch (error) {
+      console.warn('Warning: Could not read sliceConfig.json for loading policy:', error.message);
+    }
+
+    return {};
+  }
+
+  resolveLoadingPolicy() {
+    return this.sliceConfig?.loading?.enabled ? 'enabled' : 'disabled';
   }
 
   /**
@@ -938,6 +960,7 @@ export default class BundleGenerator {
         js: this.cleanJavaScript(jsContent, comp.name),
         html: htmlContent,
         css: cssContent,
+        externalDependencies: await this.buildDependencyContents(jsContent, comp.path),
         size: comp.size
       });
     }
@@ -965,22 +988,38 @@ export default class BundleGenerator {
         ? 'framework'
         : this.routeToFileName(routePath || fileName.replace('slice-bundle.', '').replace('.js', ''));
 
+    const dependencyModuleBlock = this.buildV2DependencyModuleBlock(uniqueComponents);
+
     const classFactoryDefinitions = uniqueComponents
       .map((component) => {
         const factoryName = this.classFactoryName(component.name);
+        const dependencyBindings = this.buildDependencyBindings(component.externalDependencies || {});
         const body = component.js && component.js.trim()
           ? component.js
           : `return window.${component.name};`;
-        return `const ${factoryName} = () => {\n${this.indentCodeBlock(body, 2)}\n};`;
+        const bodyWithBindings = dependencyBindings
+          ? `${dependencyBindings}\n${body}`
+          : body;
+        return `const ${factoryName} = () => {\n${this.indentCodeBlock(bodyWithBindings, 2)}\n};`;
       })
       .join('\n\n');
+
+    const templateDeclarations = uniqueComponents
+      .map((component) => {
+        const templateVarName = `__templateElement_${this.toSafeIdentifier(component.name)}`;
+        return `const ${templateVarName} = document.createElement('template');\n${templateVarName}.innerHTML = ${JSON.stringify(component.html || '')};`;
+      })
+      .join('\n');
 
     const classRegistrations = uniqueComponents
       .map((component) => `  controller.classes.set(${JSON.stringify(component.name)}, ${this.classFactoryName(component.name)}());`)
       .join('\n');
 
     const templateRegistrations = uniqueComponents
-      .map((component) => `  controller.templates.set(${JSON.stringify(component.name)}, ${JSON.stringify(component.html || '')});`)
+      .map((component) => {
+        const templateVarName = `__templateElement_${this.toSafeIdentifier(component.name)}`;
+        return `  controller.templates.set(${JSON.stringify(component.name)}, ${templateVarName});`;
+      })
       .join('\n');
 
     const cssRegistrations = uniqueComponents
@@ -999,7 +1038,31 @@ export default class BundleGenerator {
       componentCount: uniqueComponents.length
     };
 
-    return `export const SLICE_BUNDLE_META = ${JSON.stringify(metadata, null, 2)};\n\n${classFactoryDefinitions}\n\nexport async function registerAll(controller, stylesManager) {\n${classRegistrations}\n${templateRegistrations}\n${cssRegistrations}\n${categoryRegistrations}\n}\n`;
+    return `export const SLICE_BUNDLE_META = ${JSON.stringify(metadata, null, 2)};\n\n${dependencyModuleBlock}\n\n${classFactoryDefinitions}\n\n${templateDeclarations}\n\nexport async function registerAll(controller, stylesManager) {\n${classRegistrations}\n${templateRegistrations}\n${cssRegistrations}\n${categoryRegistrations}\n}\n`;
+  }
+
+  buildV2DependencyModuleBlock(components) {
+    const modules = new Map();
+    for (const component of components || []) {
+      const externalDependencies = component.externalDependencies || {};
+      for (const [moduleName, entry] of Object.entries(externalDependencies)) {
+        if (modules.has(moduleName)) continue;
+        const content = typeof entry === 'string' ? entry : entry?.content;
+        if (!content) continue;
+        modules.set(moduleName, { name: moduleName, content });
+      }
+    }
+
+    const lines = ['const SLICE_BUNDLE_DEPENDENCIES = {};'];
+    Array.from(modules.values()).forEach((module, index) => {
+      const exportVar = `__sliceDepExports${index}`;
+      const transformedContent = this.transformDependencyContent(module.content, exportVar, module.name);
+      lines.push(`const ${exportVar} = {};`);
+      lines.push(transformedContent.trim());
+      lines.push(`SLICE_BUNDLE_DEPENDENCIES[${JSON.stringify(module.name)}] = ${exportVar};`);
+    });
+
+    return lines.join('\n');
   }
 
   async buildDependencyContents(jsContent, componentPath) {
@@ -1252,6 +1315,7 @@ if (window.slice && window.slice.controller) {
    * Generates the bundle configuration
    */
   generateBundleConfig(frameworkBundle = null) {
+    const metrics = this.analysisData.metrics || {};
     const config = {
       version: '2.0.0',
       format: this.format,
@@ -1263,11 +1327,11 @@ if (window.slice && window.slice.controller) {
       generated: new Date().toISOString(),
 
       stats: {
-        totalComponents: this.analysisData.metrics.totalComponents,
-        totalRoutes: this.analysisData.metrics.totalRoutes,
+        totalComponents: metrics.totalComponents || 0,
+        totalRoutes: metrics.totalRoutes || 0,
         sharedComponents: this.bundles.critical.components.length,
-        sharedPercentage: this.analysisData.metrics.sharedPercentage,
-        totalSize: this.analysisData.metrics.totalSize,
+        sharedPercentage: metrics.sharedPercentage || 0,
+        totalSize: metrics.totalSize || 0,
         criticalSize: this.bundles.critical.size
       },
 
