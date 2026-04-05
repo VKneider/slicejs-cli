@@ -73,3 +73,66 @@ test('loading policy is enabled when sliceConfig loading.enabled is true', () =>
   const config = generator.generateBundleConfig(null);
   assert.equal(config.loadingPolicy, 'enabled');
 });
+
+test('shared-core is wired as dependency for affected route bundles', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {
+      totalComponents: 0,
+      totalRoutes: 0,
+      sharedPercentage: 0,
+      totalSize: 0
+    }
+  });
+
+  generator.config.minSharedUsage = 2;
+
+  generator.bundles.routes = {
+    alpha: {
+      path: '/alpha',
+      components: [createComponent('SharedWidget'), createComponent('AlphaOnly')],
+      size: 20,
+      file: 'slice-bundle.alpha.js'
+    },
+    beta: {
+      path: '/beta',
+      components: [createComponent('SharedWidget'), createComponent('BetaOnly')],
+      size: 20,
+      file: 'slice-bundle.beta.js'
+    }
+  };
+
+  generator.extractSharedComponents(new Set());
+  const config = generator.generateBundleConfig();
+
+  assert.ok(config.bundles.routes['shared-core']);
+  assert.deepEqual(config.bundles.routes.alpha.dependencies, ['critical', 'shared-core']);
+  assert.deepEqual(config.bundles.routes.beta.dependencies, ['critical', 'shared-core']);
+  assert.deepEqual(config.routeBundles['/alpha'], ['critical', 'shared-core', 'alpha']);
+  assert.deepEqual(config.routeBundles['/beta'], ['critical', 'shared-core', 'beta']);
+});
+
+test('rebalance merge preserves and merges route path metadata deterministically', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {
+      totalComponents: 0,
+      totalRoutes: 0,
+      sharedPercentage: 0,
+      totalSize: 0
+    }
+  });
+
+  const bundles = {
+    alpha: { path: '/alpha', components: [createComponent('Alpha')], size: 10, file: 'slice-bundle.alpha.js' },
+    beta: { paths: ['/beta', '/beta-alt'], components: [createComponent('Beta')], size: 10, file: 'slice-bundle.beta.js' },
+    gamma: { path: '/gamma', components: [createComponent('Gamma')], size: 10, file: 'slice-bundle.gamma.js' }
+  };
+
+  generator.rebalanceBundlesByBudget(bundles, { maxBundleSize: 99999, maxRequests: 2 });
+
+  assert.equal(Object.keys(bundles).length, 2);
+  assert.deepEqual(bundles.beta.paths, ['/beta', '/beta-alt', '/gamma']);
+});

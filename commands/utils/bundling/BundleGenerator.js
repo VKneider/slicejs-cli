@@ -415,13 +415,80 @@ export default class BundleGenerator {
     return [...components].sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  dedupeComponentsByName(components = []) {
+    const byName = new Map();
+    for (const component of components) {
+      if (!component?.name) continue;
+      if (!byName.has(component.name)) {
+        byName.set(component.name, component);
+      }
+    }
+    return this.sortComponentsByName(Array.from(byName.values()));
+  }
+
+  getBundlePaths(bundle = {}) {
+    const raw = Array.isArray(bundle.paths)
+      ? bundle.paths
+      : Array.isArray(bundle.path)
+        ? bundle.path
+        : bundle.path
+          ? [bundle.path]
+          : [];
+
+    return Array.from(new Set(raw.filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  }
+
+  setBundlePaths(bundle, paths = []) {
+    const mergedPaths = Array.from(new Set((paths || []).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+    if (mergedPaths.length === 0) {
+      delete bundle.path;
+      delete bundle.paths;
+      return;
+    }
+    if (mergedPaths.length === 1) {
+      bundle.path = mergedPaths[0];
+      delete bundle.paths;
+      return;
+    }
+    bundle.paths = mergedPaths;
+    delete bundle.path;
+  }
+
+  mergeBundleDependencies(...dependencyLists) {
+    const merged = [];
+    const append = (dep) => {
+      if (!dep || merged.includes(dep)) return;
+      if (dep === 'critical') {
+        merged.unshift(dep);
+        return;
+      }
+      merged.push(dep);
+    };
+
+    dependencyLists
+      .flat()
+      .forEach(append);
+
+    if (!merged.includes('critical')) {
+      merged.unshift('critical');
+    }
+
+    const rest = merged
+      .filter((dep) => dep !== 'critical')
+      .sort((a, b) => a.localeCompare(b));
+    return ['critical', ...rest];
+  }
+
   extractSharedComponents(criticalNames) {
     const usage = new Map();
 
     for (const bundle of Object.values(this.bundles.routes)) {
-      for (const component of bundle.components || []) {
+      const seenInBundle = new Set();
+      for (const component of this.dedupeComponentsByName(bundle.components || [])) {
         if (criticalNames.has(component.name)) continue;
         if (!this.isComponentAllowedByLoadingPolicy(component)) continue;
+        if (seenInBundle.has(component.name)) continue;
+        seenInBundle.add(component.name);
         if (!usage.has(component.name)) {
           usage.set(component.name, { component, count: 0 });
         }
@@ -441,9 +508,14 @@ export default class BundleGenerator {
     const orderedShared = this.sortComponentsByName(sharedComponents);
 
     for (const bundle of Object.values(this.bundles.routes)) {
-      const filtered = (bundle.components || []).filter((component) => !sharedSet.has(component.name));
+      const original = this.dedupeComponentsByName(bundle.components || []);
+      const filtered = original.filter((component) => !sharedSet.has(component.name));
+      const removedShared = original.length - filtered.length;
       bundle.components = this.sortComponentsByName(filtered);
       bundle.size = bundle.components.reduce((sum, component) => sum + component.size, 0);
+      if (removedShared > 0) {
+        bundle.dependencies = this.mergeBundleDependencies(bundle.dependencies || [], ['shared-core']);
+      }
     }
 
     this.bundles.routes['shared-core'] = {
@@ -469,7 +541,7 @@ export default class BundleGenerator {
     const rebalanced = {};
 
     for (const [key, bundle] of orderedEntries) {
-      const sortedComponents = this.sortComponentsByName(bundle.components || []);
+      const sortedComponents = this.dedupeComponentsByName(bundle.components || []);
       const totalSize = sortedComponents.reduce((sum, component) => sum + component.size, 0);
       if (totalSize <= maxBundleSize || sortedComponents.length <= 1) {
         rebalanced[key] = {
@@ -522,12 +594,23 @@ export default class BundleGenerator {
       const lastKey = keys.pop();
       const targetKey = keys[keys.length - 1];
       if (!lastKey || !targetKey) break;
-      const mergedComponents = this.sortComponentsByName([
+      const mergedComponents = this.dedupeComponentsByName([
         ...(rebalanced[targetKey].components || []),
         ...(rebalanced[lastKey].components || [])
       ]);
+      const mergedPaths = [
+        ...this.getBundlePaths(rebalanced[targetKey]),
+        ...this.getBundlePaths(rebalanced[lastKey])
+      ];
+      const mergedDependencies = this.mergeBundleDependencies(
+        rebalanced[targetKey].dependencies || [],
+        rebalanced[lastKey].dependencies || []
+      );
+
       rebalanced[targetKey].components = mergedComponents;
       rebalanced[targetKey].size = mergedComponents.reduce((sum, component) => sum + component.size, 0);
+      rebalanced[targetKey].dependencies = mergedDependencies;
+      this.setBundlePaths(rebalanced[targetKey], mergedPaths);
       delete rebalanced[lastKey];
     }
 
@@ -827,8 +910,9 @@ export default class BundleGenerator {
    */
   async generateBundleContent(components, type, routePath, bundleKey, fileName) {
     const bundleComponents = [];
+    const uniqueComponents = this.dedupeComponentsByName(components || []);
 
-    for (const comp of components) {
+    for (const comp of uniqueComponents) {
       const fileBaseName = comp.fileName || comp.name;
       const jsPath = path.join(comp.path, `${fileBaseName}.js`);
       const jsContent = await fs.readFile(jsPath, 'utf-8');
@@ -874,13 +958,14 @@ export default class BundleGenerator {
   }
 
   generateBundleFileContent(fileName, type, components, routePath = null) {
+    const uniqueComponents = this.dedupeComponentsByName(components || []);
     const bundleKey = type === 'critical'
       ? 'critical'
       : type === 'framework'
         ? 'framework'
         : this.routeToFileName(routePath || fileName.replace('slice-bundle.', '').replace('.js', ''));
 
-    const classFactoryDefinitions = components
+    const classFactoryDefinitions = uniqueComponents
       .map((component) => {
         const factoryName = this.classFactoryName(component.name);
         const body = component.js && component.js.trim()
@@ -890,19 +975,19 @@ export default class BundleGenerator {
       })
       .join('\n\n');
 
-    const classRegistrations = components
+    const classRegistrations = uniqueComponents
       .map((component) => `  controller.classes.set(${JSON.stringify(component.name)}, ${this.classFactoryName(component.name)}());`)
       .join('\n');
 
-    const templateRegistrations = components
+    const templateRegistrations = uniqueComponents
       .map((component) => `  controller.templates.set(${JSON.stringify(component.name)}, ${JSON.stringify(component.html || '')});`)
       .join('\n');
 
-    const cssRegistrations = components
+    const cssRegistrations = uniqueComponents
       .map((component) => `  stylesManager.registerComponentStyles(${JSON.stringify(component.name)}, ${JSON.stringify(component.css || '')});`)
       .join('\n');
 
-    const categoryRegistrations = components
+    const categoryRegistrations = uniqueComponents
       .map((component) => `  controller.componentCategories.set(${JSON.stringify(component.name)}, ${JSON.stringify(component.category)});`)
       .join('\n');
 
@@ -911,7 +996,7 @@ export default class BundleGenerator {
       bundleKey,
       type,
       routes: routePath ? [routePath] : [],
-      componentCount: components.length
+      componentCount: uniqueComponents.length
     };
 
     return `export const SLICE_BUNDLE_META = ${JSON.stringify(metadata, null, 2)};\n\n${classFactoryDefinitions}\n\nexport async function registerAll(controller, stylesManager) {\n${classRegistrations}\n${templateRegistrations}\n${cssRegistrations}\n${categoryRegistrations}\n}\n`;
@@ -1210,6 +1295,7 @@ if (window.slice && window.slice.controller) {
       const routeIdentifier = Array.isArray(bundle.path || bundle.paths)
         ? key
         : (bundle.path || bundle.paths || key);
+      const dependencies = this.mergeBundleDependencies(bundle.dependencies || []);
 
       config.bundles.routes[key] = {
         path: bundle.path || bundle.paths || key, // Support both single path and array of paths, fallback to key
@@ -1218,7 +1304,7 @@ if (window.slice && window.slice.controller) {
         hash: bundle.hash || null,
         integrity: bundle.integrity || null,
         components: bundle.components.map(c => c.name),
-        dependencies: ['critical']
+        dependencies
       };
 
       const paths = Array.isArray(config.bundles.routes[key].path)
@@ -1228,6 +1314,11 @@ if (window.slice && window.slice.controller) {
       for (const routePath of paths) {
         if (!config.routeBundles[routePath]) {
           config.routeBundles[routePath] = ['critical'];
+        }
+        for (const dependency of dependencies.filter((dep) => dep !== 'critical')) {
+          if (!config.routeBundles[routePath].includes(dependency)) {
+            config.routeBundles[routePath].push(dependency);
+          }
         }
         if (!config.routeBundles[routePath].includes(key)) {
           config.routeBundles[routePath].push(key);
