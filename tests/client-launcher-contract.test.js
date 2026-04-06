@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from '@babel/parser';
+import babelTraverse from '@babel/traverse';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clientPath = path.join(__dirname, '..', 'client.js');
@@ -12,6 +13,7 @@ const ast = parse(source, {
   sourceType: 'module',
   plugins: []
 });
+const traverse = babelTraverse.default || babelTraverse;
 
 function walk(node, visit) {
   if (!node || typeof node !== 'object') {
@@ -32,8 +34,8 @@ function walk(node, visit) {
   }
 }
 
-function getImportedLocalNames(fromSource) {
-  const localNames = new Set();
+function getImportedBindings(fromSource) {
+  const bindings = new Map();
 
   for (const statement of ast.program.body) {
     if (statement.type !== 'ImportDeclaration') {
@@ -45,37 +47,68 @@ function getImportedLocalNames(fromSource) {
     }
 
     for (const specifier of statement.specifiers) {
-      if (
-        specifier.type === 'ImportSpecifier' ||
-        specifier.type === 'ImportDefaultSpecifier' ||
-        specifier.type === 'ImportNamespaceSpecifier'
-      ) {
-        localNames.add(specifier.local.name);
+      if (specifier.type === 'ImportSpecifier' && specifier.imported.type === 'Identifier') {
+        bindings.set(specifier.imported.name, specifier.local.name);
       }
     }
   }
 
-  return localNames;
+  return bindings;
 }
 
-function getIdentifierCallPositions(name) {
+function getBoundImportedCallPositions(fromSource, importedName) {
   const positions = [];
+  const importedBindings = getImportedBindings(fromSource);
+  const localName = importedBindings.get(importedName);
 
-  walk(ast.program, (node) => {
-    if (node.type !== 'CallExpression') {
-      return;
-    }
+  if (!localName) {
+    return positions;
+  }
 
-    if (node.callee.type === 'Identifier' && node.callee.name === name) {
-      positions.push(node.start);
+  traverse(ast, {
+    CallExpression(callPath) {
+      if (callPath.node.callee.type !== 'Identifier') {
+        return;
+      }
+
+      if (callPath.node.callee.name !== localName) {
+        return;
+      }
+
+      const binding = callPath.scope.getBinding(localName);
+      if (!binding) {
+        return;
+      }
+
+      if (binding.path.node.type !== 'ImportSpecifier') {
+        return;
+      }
+
+      if (binding.path.parent.type !== 'ImportDeclaration') {
+        return;
+      }
+
+      if (binding.path.parent.source.value !== fromSource) {
+        return;
+      }
+
+      if (binding.path.node.imported.type !== 'Identifier') {
+        return;
+      }
+
+      if (binding.path.node.imported.name !== importedName) {
+        return;
+      }
+
+      positions.push(callPath.node.start);
     }
   });
 
   return positions;
 }
 
-function getFirstCommandRegistrationPosition() {
-  let first = Infinity;
+function getCommandRegistrationPositions() {
+  const positions = [];
 
   walk(ast.program, (node) => {
     if (node.type !== 'CallExpression') {
@@ -88,30 +121,51 @@ function getFirstCommandRegistrationPosition() {
       node.callee.property.type === 'Identifier' &&
       node.callee.property.name === 'command'
     ) {
-      first = Math.min(first, node.start);
+      positions.push(node.start);
     }
   });
 
-  return first;
+  return positions;
 }
 
-const firstCommandRegistrationPos = getFirstCommandRegistrationPosition();
+const launcherModulePath = './commands/utils/LocalCliDelegation.js';
+const commandRegistrationPositions = getCommandRegistrationPositions();
+const firstCommandRegistrationPos = Math.min(...commandRegistrationPositions);
 
 test('client imports LocalCliDelegation utility', () => {
-  const importedFromModule = getImportedLocalNames('./commands/utils/LocalCliDelegation.js');
+  const importedBindings = getImportedBindings(launcherModulePath);
 
   assert.ok(
-    importedFromModule.size > 0,
+    importedBindings.size > 0,
     'Contract clause failed: client.js must import launcher helpers from ./commands/utils/LocalCliDelegation.js'
   );
+
+  for (const requiredImport of [
+    'isLocalDelegationDisabled',
+    'findNearestLocalCliEntry',
+    'shouldDelegateToLocalCli'
+  ]) {
+    assert.ok(
+      importedBindings.has(requiredImport),
+      `Contract clause failed: client.js must import ${requiredImport} from ${launcherModulePath}`
+    );
+  }
 });
 
 test('client checks SLICE_NO_LOCAL_DELEGATION behavior before command runtime', () => {
-  const isDisabledCalls = getIdentifierCallPositions('isLocalDelegationDisabled');
+  const isDisabledCalls = getBoundImportedCallPositions(
+    launcherModulePath,
+    'isLocalDelegationDisabled'
+  );
 
   assert.ok(
     isDisabledCalls.length > 0,
-    'Contract clause failed: client.js must call isLocalDelegationDisabled() in launcher path'
+    'Contract clause failed: client.js must call imported isLocalDelegationDisabled() in launcher path'
+  );
+
+  assert.ok(
+    commandRegistrationPositions.length > 0,
+    'Contract clause failed: client.js must define at least one .command(...) registration before launcher ordering checks'
   );
 
   assert.ok(
@@ -121,17 +175,28 @@ test('client checks SLICE_NO_LOCAL_DELEGATION behavior before command runtime', 
 });
 
 test('client performs local candidate resolution and delegation decision', () => {
-  const findNearestCalls = getIdentifierCallPositions('findNearestLocalCliEntry');
-  const shouldDelegateCalls = getIdentifierCallPositions('shouldDelegateToLocalCli');
+  const findNearestCalls = getBoundImportedCallPositions(
+    launcherModulePath,
+    'findNearestLocalCliEntry'
+  );
+  const shouldDelegateCalls = getBoundImportedCallPositions(
+    launcherModulePath,
+    'shouldDelegateToLocalCli'
+  );
 
   assert.ok(
     findNearestCalls.length > 0,
-    'Contract clause failed: client.js must call findNearestLocalCliEntry() to resolve local CLI candidate in launcher path'
+    'Contract clause failed: client.js must call imported findNearestLocalCliEntry() to resolve local CLI candidate in launcher path'
   );
 
   assert.ok(
     shouldDelegateCalls.length > 0,
-    'Contract clause failed: client.js must call shouldDelegateToLocalCli() to gate delegation in launcher path'
+    'Contract clause failed: client.js must call imported shouldDelegateToLocalCli() to gate delegation in launcher path'
+  );
+
+  assert.ok(
+    commandRegistrationPositions.length > 0,
+    'Contract clause failed: client.js must define at least one .command(...) registration before launcher ordering checks'
   );
 
   assert.ok(
