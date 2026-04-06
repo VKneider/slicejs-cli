@@ -11,7 +11,7 @@ export function isLocalDelegationDisabled(env = process.env) {
 }
 
 export function findNearestLocalCliEntry(startDirectory, resolveCandidate) {
-  if (!startDirectory) {
+  if (!startDirectory || typeof resolveCandidate !== 'function') {
     return null;
   }
 
@@ -29,7 +29,13 @@ export function findNearestLocalCliEntry(startDirectory, resolveCandidate) {
 
 export function resolveLocalCliCandidate(directory) {
   const candidate = path.join(directory, 'node_modules', 'slicejs-cli', 'client.js');
-  return fs.existsSync(candidate) ? candidate : null;
+
+  try {
+    const stats = fs.statSync(candidate);
+    return stats.isFile() ? candidate : null;
+  } catch {
+    return null;
+  }
 }
 
 export function shouldDelegateToLocalCli(currentEntryPath, localEntryPath) {

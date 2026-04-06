@@ -1,8 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {
   findNearestLocalCliEntry,
+  resolveLocalCliCandidate,
   shouldDelegateToLocalCli,
   isLocalDelegationDisabled
 } from '../commands/utils/LocalCliDelegation.js';
@@ -54,4 +57,23 @@ test('findNearestLocalCliEntry returns first match while traversing upward', () 
 
   assert.equal(result, '/repo/apps/web/node_modules/slicejs-cli/client.js');
   assert.deepEqual(calls, ['/repo/apps/web/src', '/repo/apps/web']);
+});
+
+test('findNearestLocalCliEntry returns null when resolver is not a function', () => {
+  const result = findNearestLocalCliEntry('/repo/apps/web/src', null);
+  assert.equal(result, null);
+});
+
+test('resolveLocalCliCandidate returns null when candidate path is a directory', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'slice-cli-delegation-'));
+  const candidateDirectory = path.join(tempRoot, 'node_modules', 'slicejs-cli', 'client.js');
+
+  fs.mkdirSync(candidateDirectory, { recursive: true });
+
+  try {
+    const result = resolveLocalCliCandidate(tempRoot);
+    assert.equal(result, null);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
