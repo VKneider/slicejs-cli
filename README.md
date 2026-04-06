@@ -182,7 +182,7 @@ slice sync
 ```bash
 # Version info
 slice version
-slice -v
+slice v
 
 # Updates (CLI and Framework)
 slice update              # Check and prompt to update
