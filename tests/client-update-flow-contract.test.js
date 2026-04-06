@@ -38,15 +38,12 @@ function walk(node, visit) {
   }
 }
 
-function isUpdateManagerCall(node, methodName) {
+function isMethodCall(node, methodName) {
   return (
     node &&
     node.type === 'CallExpression' &&
     node.callee &&
     node.callee.type === 'MemberExpression' &&
-    node.callee.object &&
-    node.callee.object.type === 'Identifier' &&
-    node.callee.object.name === 'updateManager' &&
     node.callee.property &&
     node.callee.property.type === 'Identifier' &&
     node.callee.property.name === methodName
@@ -123,6 +120,39 @@ function getFunctionBodyNode(fnNode) {
   return null;
 }
 
+function getFunctionLikeByName(name) {
+  let foundNode = null;
+
+  walk(ast, (node) => {
+    if (
+      node.type === 'FunctionDeclaration' &&
+      node.id &&
+      node.id.type === 'Identifier' &&
+      node.id.name === name
+    ) {
+      foundNode = node;
+      return;
+    }
+
+    if (node.type !== 'VariableDeclarator') {
+      return;
+    }
+
+    if (!node.id || node.id.type !== 'Identifier' || node.id.name !== name) {
+      return;
+    }
+
+    if (
+      node.init &&
+      (node.init.type === 'ArrowFunctionExpression' || node.init.type === 'FunctionExpression')
+    ) {
+      foundNode = node.init;
+    }
+  });
+
+  return foundNode;
+}
+
 test('runWithVersionCheck uses non-blocking update notifications', () => {
   const runWithVersionCheckNode = getRunWithVersionCheckNode();
   const runWithVersionCheckBody = getFunctionBodyNode(runWithVersionCheckNode);
@@ -140,11 +170,11 @@ test('runWithVersionCheck uses non-blocking update notifications', () => {
   walk(runWithVersionCheckBody, (node) => {
     if (
       node.type === 'AwaitExpression' &&
-      isUpdateManagerCall(node.argument, 'notifyAvailableUpdates')
+      isMethodCall(node.argument, 'notifyAvailableUpdates')
     ) {
       hasAwaitedNotifyCall = true;
     }
-    if (isUpdateManagerCall(node, 'checkAndPromptUpdates')) {
+    if (isMethodCall(node, 'checkAndPromptUpdates')) {
       hasPromptCall = true;
       promptCallLine = promptCallLine ?? lineOf(node);
     }
@@ -166,6 +196,7 @@ test('update command remains explicitly interactive', () => {
   let foundAwaitedInteractiveUpdateAction = false;
   let updateActionHandlerLine = null;
   let relatedPromptCallLine = null;
+  let handlerReferenceName = null;
 
   walk(ast, (node) => {
     if (
@@ -178,24 +209,41 @@ test('update command remains explicitly interactive', () => {
       isCommandUpdateExpression(node.callee.object)
     ) {
       const actionHandler = node.arguments[0];
-      if (
-        !actionHandler ||
-        actionHandler.async !== true ||
-        (actionHandler.type !== 'ArrowFunctionExpression' && actionHandler.type !== 'FunctionExpression')
-      ) {
+      if (!actionHandler) {
         return;
       }
 
-      updateActionHandlerLine = updateActionHandlerLine ?? lineOf(actionHandler);
+      let resolvedHandler = null;
 
-      walk(actionHandler.body, (actionNode) => {
-        if (isUpdateManagerCall(actionNode, 'checkAndPromptUpdates')) {
+      if (actionHandler.type === 'Identifier') {
+        handlerReferenceName = actionHandler.name;
+        resolvedHandler = getFunctionLikeByName(actionHandler.name);
+      } else if (
+        actionHandler.type === 'ArrowFunctionExpression' ||
+        actionHandler.type === 'FunctionExpression'
+      ) {
+        resolvedHandler = actionHandler;
+      }
+
+      if (!resolvedHandler || resolvedHandler.async !== true) {
+        return;
+      }
+
+      const resolvedBody = getFunctionBodyNode(resolvedHandler);
+      if (!resolvedBody) {
+        return;
+      }
+
+      updateActionHandlerLine = updateActionHandlerLine ?? lineOf(resolvedHandler);
+
+      walk(resolvedBody, (actionNode) => {
+        if (isMethodCall(actionNode, 'checkAndPromptUpdates')) {
           relatedPromptCallLine = relatedPromptCallLine ?? lineOf(actionNode);
         }
 
         if (
           actionNode.type !== 'AwaitExpression' ||
-          !isUpdateManagerCall(actionNode.argument, 'checkAndPromptUpdates')
+          !isMethodCall(actionNode.argument, 'checkAndPromptUpdates')
         ) {
           return;
         }
@@ -208,6 +256,6 @@ test('update command remains explicitly interactive', () => {
   assert.equal(
     foundAwaitedInteractiveUpdateAction,
     true,
-    `update command action must await updateManager.checkAndPromptUpdates(...) (action line ${updateActionHandlerLine ?? 'unknown'}, related call line ${relatedPromptCallLine ?? 'unknown'})`
+    `update command action must await checkAndPromptUpdates(...) (action line ${updateActionHandlerLine ?? 'unknown'}, related call line ${relatedPromptCallLine ?? 'unknown'}${handlerReferenceName ? `, handler reference ${handlerReferenceName}` : ''})`
   );
 });
