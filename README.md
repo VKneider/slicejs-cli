@@ -45,6 +45,22 @@ npm run dev
 npm run slice -- get Button
 ```
 
+4. Use `slice` directly when the launcher command is available on your system.
+   The launcher delegates to your nearest project-local `node_modules/slicejs-cli`
+   so project-pinned behavior is used from the project root and subdirectories.
+
+```bash
+slice dev
+slice build
+slice version
+```
+
+If `slice` is not available in your shell, use:
+
+```bash
+npx slicejs-cli dev
+```
+
 ### Global (Not Recommended)
 
 Global installations can lead to version mismatches and "works on my machine" issues.
@@ -55,7 +71,10 @@ npm install -g slicejs-cli
 
 ## Usage
 
-After installation, you can use the `slice` command directly:
+After installation, prefer your project-local CLI. When the `slice` launcher command is
+available, it automatically delegates to the nearest local `slicejs-cli` install.
+
+Use the `slice` command directly:
 
 ```bash
 slice [command] [options]
@@ -66,6 +85,8 @@ Or with npx (without global install):
 ```bash
 npx slicejs-cli [command]
 ```
+
+Use `npx slicejs-cli [command]` as a fallback when the `slice` launcher command is unavailable.
 
 ## Essential Commands
 
@@ -325,10 +346,10 @@ slice init
 ### Command not found
 
 ```bash
-# Use npx if not installed globally
+# If the launcher command is unavailable, run the local CLI via npx
 npx slicejs-cli dev
 
-# Or install globally
+# Optional: install globally to expose the slice launcher command
 npm install -g slicejs-cli
 ```
 
