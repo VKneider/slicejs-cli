@@ -84,10 +84,7 @@ async function runWithVersionCheck(commandFunction, ...args) {
       } catch {}
     })();
 
-    const updateInfo = await updateManager.checkForUpdates();
-    if (updateInfo && updateInfo.hasUpdates) {
-      await updateManager.checkAndPromptUpdates({});
-    }
+    await updateManager.notifyAvailableUpdates();
 
     const result = await commandFunction(...args);
 
