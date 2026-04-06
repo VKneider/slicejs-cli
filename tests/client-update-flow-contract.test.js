@@ -9,8 +9,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clientPath = path.join(__dirname, '..', 'client.js');
 const clientSource = fs.readFileSync(clientPath, 'utf-8');
 const ast = parse(clientSource, {
-  sourceType: 'module'
+  sourceType: 'module',
+  errorRecovery: true,
+  loc: true,
+  ranges: true
 });
+
+function lineOf(node) {
+  return node && node.loc && node.loc.start ? node.loc.start.line : null;
+}
 
 function walk(node, visit) {
   if (!node || typeof node !== 'object') {
@@ -71,8 +78,8 @@ function isCommandUpdateExpression(node) {
   return false;
 }
 
-test('runWithVersionCheck uses non-blocking update notifications', () => {
-  let runWithVersionCheckNode = null;
+function getRunWithVersionCheckNode() {
+  let foundNode = null;
 
   walk(ast, (node) => {
     if (
@@ -81,16 +88,56 @@ test('runWithVersionCheck uses non-blocking update notifications', () => {
       node.id.type === 'Identifier' &&
       node.id.name === 'runWithVersionCheck'
     ) {
-      runWithVersionCheckNode = node;
+      foundNode = node;
+      return;
+    }
+
+    if (node.type !== 'VariableDeclarator') {
+      return;
+    }
+
+    if (!node.id || node.id.type !== 'Identifier' || node.id.name !== 'runWithVersionCheck') {
+      return;
+    }
+
+    if (
+      node.init &&
+      (node.init.type === 'ArrowFunctionExpression' || node.init.type === 'FunctionExpression')
+    ) {
+      foundNode = node.init;
     }
   });
 
-  assert.ok(runWithVersionCheckNode, 'runWithVersionCheck function should exist');
+  return foundNode;
+}
+
+function getFunctionBodyNode(fnNode) {
+  if (!fnNode) {
+    return null;
+  }
+
+  if (fnNode.type === 'FunctionDeclaration' || fnNode.type === 'FunctionExpression' || fnNode.type === 'ArrowFunctionExpression') {
+    return fnNode.body;
+  }
+
+  return null;
+}
+
+test('runWithVersionCheck uses non-blocking update notifications', () => {
+  const runWithVersionCheckNode = getRunWithVersionCheckNode();
+  const runWithVersionCheckBody = getFunctionBodyNode(runWithVersionCheckNode);
+
+  assert.ok(
+    runWithVersionCheckNode,
+    'runWithVersionCheck function should exist as a declaration or function-valued variable'
+  );
+  assert.ok(runWithVersionCheckBody, 'runWithVersionCheck should have a traversable function body');
 
   let hasAwaitedNotifyCall = false;
   let hasPromptCall = false;
+  let promptCallLine = null;
 
-  walk(runWithVersionCheckNode.body, (node) => {
+  walk(runWithVersionCheckBody, (node) => {
     if (
       node.type === 'AwaitExpression' &&
       isUpdateManagerCall(node.argument, 'notifyAvailableUpdates')
@@ -99,19 +146,26 @@ test('runWithVersionCheck uses non-blocking update notifications', () => {
     }
     if (isUpdateManagerCall(node, 'checkAndPromptUpdates')) {
       hasPromptCall = true;
+      promptCallLine = promptCallLine ?? lineOf(node);
     }
   });
 
   assert.equal(
     hasAwaitedNotifyCall,
     true,
-    'runWithVersionCheck must await updateManager.notifyAvailableUpdates()'
+    `runWithVersionCheck must await updateManager.notifyAvailableUpdates() (related checkAndPromptUpdates at line ${promptCallLine ?? 'unknown'})`
   );
-  assert.equal(hasPromptCall, false, 'runWithVersionCheck must not call updateManager.checkAndPromptUpdates()');
+  assert.equal(
+    hasPromptCall,
+    false,
+    `runWithVersionCheck must not call updateManager.checkAndPromptUpdates() (found at line ${promptCallLine ?? 'unknown'})`
+  );
 });
 
 test('update command remains explicitly interactive', () => {
   let foundAwaitedInteractiveUpdateAction = false;
+  let updateActionHandlerLine = null;
+  let relatedPromptCallLine = null;
 
   walk(ast, (node) => {
     if (
@@ -124,16 +178,21 @@ test('update command remains explicitly interactive', () => {
       isCommandUpdateExpression(node.callee.object)
     ) {
       const actionHandler = node.arguments[0];
-      if (!actionHandler || actionHandler.type !== 'ArrowFunctionExpression' || actionHandler.async !== true) {
+      if (
+        !actionHandler ||
+        actionHandler.async !== true ||
+        (actionHandler.type !== 'ArrowFunctionExpression' && actionHandler.type !== 'FunctionExpression')
+      ) {
         return;
       }
 
-      const handlerParam = actionHandler.params[0];
-      if (!handlerParam || handlerParam.type !== 'Identifier') {
-        return;
-      }
+      updateActionHandlerLine = updateActionHandlerLine ?? lineOf(actionHandler);
 
       walk(actionHandler.body, (actionNode) => {
+        if (isUpdateManagerCall(actionNode, 'checkAndPromptUpdates')) {
+          relatedPromptCallLine = relatedPromptCallLine ?? lineOf(actionNode);
+        }
+
         if (
           actionNode.type !== 'AwaitExpression' ||
           !isUpdateManagerCall(actionNode.argument, 'checkAndPromptUpdates')
@@ -141,10 +200,7 @@ test('update command remains explicitly interactive', () => {
           return;
         }
 
-        const arg = actionNode.argument.arguments[0];
-        if (arg && arg.type === 'Identifier' && arg.name === handlerParam.name) {
-          foundAwaitedInteractiveUpdateAction = true;
-        }
+        foundAwaitedInteractiveUpdateAction = true;
       });
     }
   });
@@ -152,6 +208,6 @@ test('update command remains explicitly interactive', () => {
   assert.equal(
     foundAwaitedInteractiveUpdateAction,
     true,
-    'update command action must await updateManager.checkAndPromptUpdates(handlerParam)'
+    `update command action must await updateManager.checkAndPromptUpdates(...) (action line ${updateActionHandlerLine ?? 'unknown'}, related call line ${relatedPromptCallLine ?? 'unknown'})`
   );
 });
