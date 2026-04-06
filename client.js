@@ -14,12 +14,18 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { getConfigPath, getProjectRoot } from "./commands/utils/PathHelper.js";
-import { exec } from "child_process";
+import { exec, spawnSync } from "child_process";
 import { promisify } from "util";
 import validations from "./commands/Validations.js";
 import Print from "./commands/Print.js";
 import build from './commands/build/build.js';
 import { cleanBundles, bundleInfo } from './commands/bundle/bundle.js';
+import {
+  isLocalDelegationDisabled,
+  findNearestLocalCliEntry,
+  resolveLocalCliCandidate,
+  shouldDelegateToLocalCli
+} from './commands/utils/LocalCliDelegation.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -98,6 +104,33 @@ async function runWithVersionCheck(commandFunction, ...args) {
     return false;
   }
 }
+
+function maybeDelegateToLocalCli() {
+  if (isLocalDelegationDisabled()) {
+    return;
+  }
+
+  const currentEntryPath = fileURLToPath(import.meta.url);
+  const localEntryPath = findNearestLocalCliEntry(process.cwd(), resolveLocalCliCandidate);
+
+  if (!shouldDelegateToLocalCli(currentEntryPath, localEntryPath)) {
+    return;
+  }
+
+  const child = spawnSync(
+    process.execPath,
+    [localEntryPath, ...process.argv.slice(2)],
+    {
+      stdio: 'inherit',
+      cwd: process.cwd(),
+      env: process.env
+    }
+  );
+
+  process.exit(child.status ?? 1);
+}
+
+maybeDelegateToLocalCli();
 
 const sliceClient = program;
 
