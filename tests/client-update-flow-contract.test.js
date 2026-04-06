@@ -163,11 +163,17 @@ test('runWithVersionCheck uses non-blocking update notifications', () => {
   );
   assert.ok(runWithVersionCheckBody, 'runWithVersionCheck should have a traversable function body');
 
+  let hasNotifyCall = false;
   let hasAwaitedNotifyCall = false;
+  let notifyCallLine = null;
   let hasPromptCall = false;
   let promptCallLine = null;
 
   walk(runWithVersionCheckBody, (node) => {
+    if (isMethodCall(node, 'notifyAvailableUpdates')) {
+      hasNotifyCall = true;
+      notifyCallLine = notifyCallLine ?? lineOf(node);
+    }
     if (
       node.type === 'AwaitExpression' &&
       isMethodCall(node.argument, 'notifyAvailableUpdates')
@@ -181,9 +187,14 @@ test('runWithVersionCheck uses non-blocking update notifications', () => {
   });
 
   assert.equal(
-    hasAwaitedNotifyCall,
+    hasNotifyCall,
     true,
-    `runWithVersionCheck must await updateManager.notifyAvailableUpdates() (related checkAndPromptUpdates at line ${promptCallLine ?? 'unknown'})`
+    `runWithVersionCheck must call updateManager.notifyAvailableUpdates() (found at line ${notifyCallLine ?? 'unknown'})`
+  );
+  assert.equal(
+    hasAwaitedNotifyCall,
+    false,
+    `runWithVersionCheck should fire-and-forget notifyAvailableUpdates() without await (notify call line ${notifyCallLine ?? 'unknown'})`
   );
   assert.equal(
     hasPromptCall,

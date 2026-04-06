@@ -84,7 +84,7 @@ async function runWithVersionCheck(commandFunction, ...args) {
       } catch {}
     })();
 
-    await updateManager.notifyAvailableUpdates();
+    updateManager.notifyAvailableUpdates().catch(() => {});
 
     const result = await commandFunction(...args);
 
