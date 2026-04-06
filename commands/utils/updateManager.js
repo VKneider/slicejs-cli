@@ -13,7 +13,7 @@ import fs from "fs-extra";
 
 const execAsync = promisify(exec);
 
-class UpdateManager {
+export class UpdateManager {
     constructor() {
         this.packagesToUpdate = [];
     }
@@ -85,6 +85,18 @@ class UpdateManager {
             Print.error(`Checking for updates: ${error.message}`);
             return null;
         }
+    }
+
+    async notifyAvailableUpdates() {
+        const updateInfo = await this.checkForUpdates();
+
+        if (!updateInfo || !updateInfo.hasUpdates) {
+            return false;
+        }
+
+        this.displayUpdates(updateInfo);
+        Print.info("Run 'slice update' to install updates when convenient.");
+        return true;
     }
 
     /**
