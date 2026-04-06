@@ -46,7 +46,9 @@ export class UpdateManager {
     /**
      * Check for available updates and return structured info
      */
-    async checkForUpdates() {
+    async checkForUpdates(options = {}) {
+        const { silentErrors = false } = options;
+
         try {
             const updateInfo = await versionChecker.checkForUpdates(true); // Silent mode
 
@@ -82,13 +84,15 @@ export class UpdateManager {
                 allCurrent: updateInfo.cli.status === 'current' && updateInfo.framework.status === 'current'
             };
         } catch (error) {
-            Print.error(`Checking for updates: ${error.message}`);
+            if (!silentErrors) {
+                Print.error(`Checking for updates: ${error.message}`);
+            }
             return null;
         }
     }
 
     async notifyAvailableUpdates() {
-        const updateInfo = await this.checkForUpdates();
+        const updateInfo = await this.checkForUpdates({ silentErrors: true });
 
         if (!updateInfo || !updateInfo.hasUpdates) {
             return false;
