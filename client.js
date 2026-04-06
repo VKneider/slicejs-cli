@@ -14,7 +14,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import { getConfigPath, getProjectRoot } from "./commands/utils/PathHelper.js";
-import { exec, spawnSync } from "child_process";
+import { exec, spawnSync } from "node:child_process";
 import { promisify } from "util";
 import validations from "./commands/Validations.js";
 import Print from "./commands/Print.js";
@@ -106,7 +106,7 @@ async function runWithVersionCheck(commandFunction, ...args) {
 }
 
 function maybeDelegateToLocalCli() {
-  if (isLocalDelegationDisabled()) {
+  if (isLocalDelegationDisabled(process.env)) {
     return;
   }
 
