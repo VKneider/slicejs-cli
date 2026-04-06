@@ -87,24 +87,31 @@ test('runWithVersionCheck uses non-blocking update notifications', () => {
 
   assert.ok(runWithVersionCheckNode, 'runWithVersionCheck function should exist');
 
-  let hasNotifyCall = false;
+  let hasAwaitedNotifyCall = false;
   let hasPromptCall = false;
 
   walk(runWithVersionCheckNode.body, (node) => {
-    if (isUpdateManagerCall(node, 'notifyAvailableUpdates')) {
-      hasNotifyCall = true;
+    if (
+      node.type === 'AwaitExpression' &&
+      isUpdateManagerCall(node.argument, 'notifyAvailableUpdates')
+    ) {
+      hasAwaitedNotifyCall = true;
     }
     if (isUpdateManagerCall(node, 'checkAndPromptUpdates')) {
       hasPromptCall = true;
     }
   });
 
-  assert.equal(hasNotifyCall, true, 'runWithVersionCheck must call updateManager.notifyAvailableUpdates()');
+  assert.equal(
+    hasAwaitedNotifyCall,
+    true,
+    'runWithVersionCheck must await updateManager.notifyAvailableUpdates()'
+  );
   assert.equal(hasPromptCall, false, 'runWithVersionCheck must not call updateManager.checkAndPromptUpdates()');
 });
 
 test('update command remains explicitly interactive', () => {
-  let foundInteractiveUpdateAction = false;
+  let foundAwaitedInteractiveUpdateAction = false;
 
   walk(ast, (node) => {
     if (
@@ -121,23 +128,30 @@ test('update command remains explicitly interactive', () => {
         return;
       }
 
-      const optionsParam = actionHandler.params[0];
-      if (!optionsParam || optionsParam.type !== 'Identifier' || optionsParam.name !== 'options') {
+      const handlerParam = actionHandler.params[0];
+      if (!handlerParam || handlerParam.type !== 'Identifier') {
         return;
       }
 
       walk(actionHandler.body, (actionNode) => {
-        if (!isUpdateManagerCall(actionNode, 'checkAndPromptUpdates')) {
+        if (
+          actionNode.type !== 'AwaitExpression' ||
+          !isUpdateManagerCall(actionNode.argument, 'checkAndPromptUpdates')
+        ) {
           return;
         }
 
-        const arg = actionNode.arguments[0];
-        if (arg && arg.type === 'Identifier' && arg.name === 'options') {
-          foundInteractiveUpdateAction = true;
+        const arg = actionNode.argument.arguments[0];
+        if (arg && arg.type === 'Identifier' && arg.name === handlerParam.name) {
+          foundAwaitedInteractiveUpdateAction = true;
         }
       });
     }
   });
 
-  assert.equal(foundInteractiveUpdateAction, true, 'update command action must call updateManager.checkAndPromptUpdates(options)');
+  assert.equal(
+    foundAwaitedInteractiveUpdateAction,
+    true,
+    'update command action must await updateManager.checkAndPromptUpdates(handlerParam)'
+  );
 });
