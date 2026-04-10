@@ -204,3 +204,185 @@ test('rebalance merge preserves and merges route path metadata deterministically
   assert.equal(Object.keys(bundles).length, 2);
   assert.deepEqual(bundles.beta.paths, ['/beta', '/beta-alt', '/gamma']);
 });
+
+test('stripImports preserves absolute imports from configured publicFolders', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {},
+    sliceConfig: {
+      publicFolders: ['/public', '/assets']
+    }
+  });
+
+  const source = "import logo from '/public/logo.js';\nimport hero from '/assets/hero.js';\nclass Demo {}\n";
+  const cleaned = generator.stripImports(source);
+
+  assert.match(cleaned, /import\s+logo\s+from\s+'\/public\/logo\.js';/);
+  assert.match(cleaned, /import\s+hero\s+from\s+'\/assets\/hero\.js';/);
+});
+
+test('stripImports removes relative imports', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {},
+    sliceConfig: {
+      publicFolders: ['/public']
+    }
+  });
+
+  const source = "import localDep from './local.js';\nimport parentDep from '../parent.js';\nclass Demo {}\n";
+  const cleaned = generator.stripImports(source);
+
+  assert.doesNotMatch(cleaned, /\.\/local\.js/);
+  assert.doesNotMatch(cleaned, /\.\.\/parent\.js/);
+  assert.match(cleaned, /class Demo \{\}/);
+});
+
+test('stripImports warns on bare imports', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {},
+    sliceConfig: {
+      publicFolders: ['/public']
+    }
+  });
+
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+
+  try {
+    const source = "import { html } from 'lit';\nclass Demo {}\n";
+    const cleaned = generator.stripImports(source);
+
+    assert.doesNotMatch(cleaned, /from\s+'lit'/);
+    assert.ok(warnings.some((msg) => msg.includes('bare import') && msg.includes('lit')));
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('stripImports warns on absolute imports outside publicFolders', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {},
+    sliceConfig: {
+      publicFolders: ['/public']
+    }
+  });
+
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+
+  try {
+    const source = "import secret from '/private/secret.js';\nclass Demo {}\n";
+    const cleaned = generator.stripImports(source);
+
+    assert.doesNotMatch(cleaned, /\/private\/secret\.js/);
+    assert.ok(warnings.some((msg) => msg.includes('outside publicFolders') && msg.includes('/private/secret.js')));
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test('stripImports supports side-effect and multiline imports in fallback mode', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {},
+    sliceConfig: {
+      publicFolders: ['/public']
+    }
+  });
+
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+
+  const originalParse = generator.parseImportsFromCode;
+  generator.parseImportsFromCode = () => {
+    throw new Error('forced parser failure');
+  };
+
+  try {
+    const source = [
+      "import '/public/effects.js';",
+      "import '/private/effects.js';",
+      "import {",
+      '  html,',
+      '  css',
+      "} from 'lit';",
+      'class Demo {}'
+    ].join('\n');
+    const cleaned = generator.stripImports(source, { sourceContext: 'DemoComponent' });
+
+    assert.match(cleaned, /import '\/public\/effects\.js';/);
+    assert.doesNotMatch(cleaned, /\/private\/effects\.js/);
+    assert.doesNotMatch(cleaned, /from 'lit'/);
+    assert.ok(warnings.some((msg) => msg.includes('outside publicFolders') && msg.includes('/private/effects.js') && msg.includes('[DemoComponent]')));
+    assert.ok(warnings.some((msg) => msg.includes('bare import') && msg.includes('lit') && msg.includes('[DemoComponent]')));
+  } finally {
+    generator.parseImportsFromCode = originalParse;
+    console.warn = originalWarn;
+  }
+});
+
+test('cleanJavaScript hoists allowed absolute imports and removes them from component code', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {},
+    sliceConfig: {
+      publicFolders: ['/public']
+    }
+  });
+
+  const source = [
+    "import hero from '/public/hero.js';",
+    'class Demo extends HTMLElement {}',
+    'customElements.define("x-demo", Demo);'
+  ].join('\n');
+
+  const result = generator.cleanJavaScript(source, 'Demo', 'DemoPath.js');
+
+  assert.doesNotMatch(result.code, /import hero from '\/public\/hero\.js';/);
+  assert.ok(result.hoistedImports.includes("import hero from '/public/hero.js';"));
+});
+
+test('formatBundleFile emits hoisted imports for framework-compatible output', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {}
+  });
+
+  const source = generator.formatBundleFile({
+    'Framework/Structural/Bootstrap': {
+      name: 'Bootstrap',
+      category: 'Framework',
+      categoryType: 'Structural',
+      componentDependencies: [],
+      externalDependencies: {},
+      hoistedImports: ["import boot from '/public/bootstrap.js';"],
+      js: 'class Bootstrap extends HTMLElement {}\nreturn Bootstrap;',
+      html: '',
+      css: '',
+      size: 10,
+      isFramework: true
+    }
+  }, {
+    type: 'framework',
+    generated: new Date().toISOString(),
+    strategy: 'hybrid',
+    componentCount: 1,
+    totalSize: 10
+  });
+
+  assert.match(source, /import boot from '\/public\/bootstrap\.js';/);
+  assert.match(source, /const SLICE_BUNDLE_DEPENDENCIES = \{\};/);
+});

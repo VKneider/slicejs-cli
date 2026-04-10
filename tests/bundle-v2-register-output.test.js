@@ -139,3 +139,113 @@ test('bundle output inlines dependency modules and binds imported symbols in cla
   assert.match(source, /SLICE_BUNDLE_DEPENDENCIES\["App\/documentationRoutes\.js"\] = __sliceDepExports0;/);
   assert.match(source, /const documentationRoutes = SLICE_BUNDLE_DEPENDENCIES\["App\/documentationRoutes\.js"\]\.documentationRoutes;/);
 });
+
+test('bundle output hoists allowed absolute imports to module top-level', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {
+      totalComponents: 0,
+      totalRoutes: 0,
+      sharedPercentage: 0,
+      totalSize: 0
+    }
+  }, { output: 'src' });
+
+  const source = generator.generateBundleFileContent(
+    'slice-bundle.test.js',
+    'route',
+    [{
+      name: 'HeroCard',
+      category: 'Visual',
+      categoryType: 'Visual',
+      dependencies: new Set(),
+      size: 100,
+      js: 'class HeroCard extends HTMLElement {}\nwindow.HeroCard = HeroCard;\nreturn HeroCard;',
+      html: '',
+      css: '',
+      hoistedImports: ["import hero from '/public/hero.js';"]
+    }],
+    '/test'
+  );
+
+  assert.match(source, /import hero from '\/public\/hero\.js';/);
+  assert.doesNotMatch(source, /SLICE_CLASS_FACTORY_SliceComponent_HeroCard = \(\) => \{[\s\S]*import hero from '\/public\/hero\.js';/);
+});
+
+test('generateBundleFileContent throws on hoisted import local binding collisions', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {
+      totalComponents: 0,
+      totalRoutes: 0,
+      sharedPercentage: 0,
+      totalSize: 0
+    }
+  }, { output: 'src' });
+
+  assert.throws(() => {
+    generator.generateBundleFileContent(
+      'slice-bundle.test.js',
+      'route',
+      [
+        {
+          name: 'CompA',
+          category: 'Visual',
+          categoryType: 'Visual',
+          dependencies: new Set(),
+          size: 100,
+          js: 'class CompA extends HTMLElement {}\nwindow.CompA = CompA;\nreturn CompA;',
+          html: '',
+          css: '',
+          hoistedImports: ["import foo from '/public/a.js';"]
+        },
+        {
+          name: 'CompB',
+          category: 'Visual',
+          categoryType: 'Visual',
+          dependencies: new Set(),
+          size: 100,
+          js: 'class CompB extends HTMLElement {}\nwindow.CompB = CompB;\nreturn CompB;',
+          html: '',
+          css: '',
+          hoistedImports: ["import foo from '/public/b.js';"]
+        }
+      ],
+      '/test'
+    );
+  }, /Hoisted import binding collision: foo/);
+});
+
+test('generateBundleFileContent throws on reserved identifier collision', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {
+      totalComponents: 0,
+      totalRoutes: 0,
+      sharedPercentage: 0,
+      totalSize: 0
+    }
+  }, { output: 'src' });
+
+  assert.throws(() => {
+    generator.generateBundleFileContent(
+      'slice-bundle.test.js',
+      'route',
+      [{
+        name: 'CompMeta',
+        category: 'Visual',
+        categoryType: 'Visual',
+        dependencies: new Set(),
+        size: 100,
+        js: 'class CompMeta extends HTMLElement {}\nwindow.CompMeta = CompMeta;\nreturn CompMeta;',
+        html: '',
+        css: '',
+        hoistedImports: ["import SLICE_BUNDLE_META from '/public/meta.js';"]
+      }],
+      '/test'
+    );
+  }, /reserved identifier collision: SLICE_BUNDLE_META/);
+});

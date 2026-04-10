@@ -953,11 +953,14 @@ export default class BundleGenerator {
         cssContent = await fs.readFile(cssPath, 'utf-8');
       }
 
+      const cleanedJavaScript = this.cleanJavaScript(jsContent, comp.name, jsPath);
+
       bundleComponents.push({
         name: comp.name,
         category: comp.category,
         categoryType: comp.categoryType,
-        js: this.cleanJavaScript(jsContent, comp.name),
+        js: cleanedJavaScript.code,
+        hoistedImports: cleanedJavaScript.hoistedImports,
         html: htmlContent,
         css: cssContent,
         externalDependencies: await this.buildDependencyContents(jsContent, comp.path),
@@ -988,7 +991,22 @@ export default class BundleGenerator {
         ? 'framework'
         : this.routeToFileName(routePath || fileName.replace('slice-bundle.', '').replace('.js', ''));
 
+    const dependencyModules = this.collectDependencyModulesFromComponents(uniqueComponents);
     const dependencyModuleBlock = this.buildV2DependencyModuleBlock(uniqueComponents);
+    const rawHoistedImports = uniqueComponents
+      .flatMap((component) => component.hoistedImports || [])
+      .map((statement) => String(statement).trim())
+      .filter(Boolean);
+    const reservedIdentifiers = new Set([
+      'SLICE_BUNDLE_META',
+      'SLICE_BUNDLE_DEPENDENCIES',
+      ...uniqueComponents.map((component) => this.classFactoryName(component.name)),
+      ...uniqueComponents.map((component) => `__templateElement_${this.toSafeIdentifier(component.name)}`),
+      ...this.getDependencyExportVariableNames(dependencyModules)
+    ]);
+    this.validateHoistedImportCollisions(rawHoistedImports, reservedIdentifiers);
+    const hoistedImports = Array.from(new Set(rawHoistedImports));
+    const hoistedImportBlock = hoistedImports.join('\n');
 
     const classFactoryDefinitions = uniqueComponents
       .map((component) => {
@@ -1052,23 +1070,14 @@ export default class BundleGenerator {
       componentCount: uniqueComponents.length
     };
 
-    return `export const SLICE_BUNDLE_META = ${JSON.stringify(metadata, null, 2)};\n\n${dependencyModuleBlock}\n\n${classFactoryDefinitions}\n\n${templateDeclarations}\n\nexport async function registerAll(controller, stylesManager) {\n${classRegistrations}\n${templateRegistrations}\n${cssRegistrationInit}${cssRegistrationInit ? '\n' : ''}${cssRegistrations}\n${categoryRegistrations}\n}\n`;
+    return `${hoistedImportBlock}${hoistedImportBlock ? '\n\n' : ''}export const SLICE_BUNDLE_META = ${JSON.stringify(metadata, null, 2)};\n\n${dependencyModuleBlock}\n\n${classFactoryDefinitions}\n\n${templateDeclarations}\n\nexport async function registerAll(controller, stylesManager) {\n${classRegistrations}\n${templateRegistrations}\n${cssRegistrationInit}${cssRegistrationInit ? '\n' : ''}${cssRegistrations}\n${categoryRegistrations}\n}\n`;
   }
 
   buildV2DependencyModuleBlock(components) {
-    const modules = new Map();
-    for (const component of components || []) {
-      const externalDependencies = component.externalDependencies || {};
-      for (const [moduleName, entry] of Object.entries(externalDependencies)) {
-        if (modules.has(moduleName)) continue;
-        const content = typeof entry === 'string' ? entry : entry?.content;
-        if (!content) continue;
-        modules.set(moduleName, { name: moduleName, content });
-      }
-    }
+    const modules = this.collectDependencyModulesFromComponents(components);
 
     const lines = ['const SLICE_BUNDLE_DEPENDENCIES = {};'];
-    Array.from(modules.values()).forEach((module, index) => {
+    modules.forEach((module, index) => {
       const exportVar = `__sliceDepExports${index}`;
       const transformedContent = this.transformDependencyContent(module.content, exportVar, module.name);
       lines.push(`const ${exportVar} = {};`);
@@ -1105,12 +1114,17 @@ export default class BundleGenerator {
   /**
    * Cleans JavaScript code by removing imports/exports and ensuring class is available globally
    */
-  cleanJavaScript(code, componentName) {
+  cleanJavaScript(code, componentName, sourceContext = componentName) {
     // Remove export default
     code = code.replace(/export\s+default\s+/g, '');
 
-    // Remove imports (components will already be available)
-    code = code.replace(/import\s+.*?from\s+['"].*?['"];?\s*/g, '');
+    // Remove only unsupported imports (relative always removed, allowed absolute kept)
+    const stripped = this.stripImports(code, {
+      sourceContext,
+      collectHoistedImports: true
+    });
+    const hoistedImports = stripped.hoistedImports || [];
+    code = stripped.code;
 
     // Guard customElements.define to avoid duplicate registrations
     code = code.replace(
@@ -1144,7 +1158,10 @@ export default class BundleGenerator {
     // Add return statement for bundle evaluation compatibility
     code += `\nreturn ${componentName};`;
 
-    return code;
+    return {
+      code,
+      hoistedImports
+    };
   }
 
   /**
@@ -1173,10 +1190,28 @@ export default class BundleGenerator {
       .update(JSON.stringify(integrityPayload))
       .digest('hex')}`;
 
+    const dependencyModules = this.collectDependencyModules(componentsData);
+    const frameworkComponentKeys = Object.keys(componentsData || {});
+    const frameworkClassIdentifiers = frameworkComponentKeys.map((key) => this.toSafeIdentifier(key));
+    const frameworkReservedIdentifiers = new Set([
+      'SLICE_BUNDLE',
+      'SLICE_BUNDLE_COMPONENTS',
+      'SLICE_BUNDLE_DEPENDENCIES',
+      'SLICE_FRAMEWORK_CLASSES',
+      ...frameworkClassIdentifiers,
+      ...this.getDependencyExportVariableNames(dependencyModules)
+    ]);
+    const rawHoistedImports = Object.values(componentsData || {})
+      .flatMap((component) => component?.hoistedImports || [])
+      .map((statement) => String(statement).trim())
+      .filter(Boolean);
+    this.validateHoistedImportCollisions(rawHoistedImports, frameworkReservedIdentifiers);
+    const hoistedImportBlock = Array.from(new Set(rawHoistedImports)).join('\n');
+
     const dependencyBlock = this.buildDependencyModuleBlock(componentsData);
     const componentBlock = this.buildComponentBundleBlock(componentsData);
 
-    return `/**
+    return `${hoistedImportBlock}${hoistedImportBlock ? '\n\n' : ''}/**
  * Slice.js Bundle
  * Type: ${metadata.type}
  * Generated: ${metadata.generated}
@@ -1229,6 +1264,24 @@ if (window.slice && window.slice.controller) {
       });
     });
     return Array.from(modules.values());
+  }
+
+  collectDependencyModulesFromComponents(components = []) {
+    const modules = new Map();
+    for (const component of components || []) {
+      const externalDependencies = component.externalDependencies || {};
+      for (const [moduleName, entry] of Object.entries(externalDependencies)) {
+        if (modules.has(moduleName)) continue;
+        const content = typeof entry === 'string' ? entry : entry?.content;
+        if (!content) continue;
+        modules.set(moduleName, { name: moduleName, content });
+      }
+    }
+    return Array.from(modules.values());
+  }
+
+  getDependencyExportVariableNames(dependencyModules = []) {
+    return (dependencyModules || []).map((_, index) => `__sliceDepExports${index}`);
   }
 
   transformDependencyContent(content, exportVar, moduleName) {
@@ -1450,12 +1503,15 @@ if (window.slice && window.slice.controller) {
       const jsPath = path.join(comp.path, `${fileBaseName}.js`);
       const jsContent = fs.readFileSync(jsPath, 'utf-8');
       const dependencyContents = this.buildDependencyContentsSync(jsContent, comp.path);
+      const cleanedJavaScript = this.cleanJavaScript(jsContent, comp.name, jsPath);
+
       componentsData[componentKey] = {
         name: comp.name,
         category: comp.category,
         categoryType: comp.categoryType,
         isFramework: true,
-        js: this.cleanJavaScript(jsContent, comp.name),
+        js: cleanedJavaScript.code,
+        hoistedImports: cleanedJavaScript.hoistedImports,
         externalDependencies: dependencyContents,
         componentDependencies: Array.from(comp.dependencies),
         html: fs.existsSync(path.join(comp.path, `${fileBaseName}.html`))
@@ -1511,8 +1567,293 @@ if (window.slice && window.slice.controller) {
     return dependencyContents;
   }
 
-  stripImports(code) {
-    return code.replace(/import\s+.*?from\s+['"].*?['"];?\s*/g, '');
+  getConfiguredPublicFolders() {
+    const publicFolders = Array.isArray(this.sliceConfig?.publicFolders)
+      ? this.sliceConfig.publicFolders
+      : [];
+
+    return publicFolders
+      .map((folder) => this.normalizePublicFolder(folder))
+      .filter(Boolean);
+  }
+
+  normalizePublicFolder(folder) {
+    if (typeof folder !== 'string') return null;
+    let normalized = folder.trim();
+    if (!normalized) return null;
+
+    if (!normalized.startsWith('/')) {
+      normalized = `/${normalized}`;
+    }
+
+    normalized = normalized.replace(/\\+/g, '/').replace(/\/+/g, '/');
+    if (normalized.length > 1 && normalized.endsWith('/')) {
+      normalized = normalized.slice(0, -1);
+    }
+
+    return normalized;
+  }
+
+  normalizeImportPath(importPath) {
+    if (typeof importPath !== 'string') return '';
+    const cleanPath = importPath.split(/[?#]/)[0];
+    return cleanPath.replace(/\\+/g, '/').replace(/\/+/g, '/');
+  }
+
+  isRelativeImport(importPath) {
+    return importPath.startsWith('./') || importPath.startsWith('../');
+  }
+
+  isAbsoluteImport(importPath) {
+    return importPath.startsWith('/');
+  }
+
+  isImportInPublicFolders(importPath, publicFolders) {
+    const normalizedImport = this.normalizeImportPath(importPath);
+    return publicFolders.some((folder) => normalizedImport === folder || normalizedImport.startsWith(`${folder}/`));
+  }
+
+  classifyImport(importPath, publicFolders) {
+    if (typeof importPath !== 'string' || !importPath) {
+      return { keep: false, warning: 'Warning: Removing bare import: <unknown>' };
+    }
+
+    if (this.isRelativeImport(importPath)) {
+      return { keep: false, warning: null };
+    }
+
+    if (this.isAbsoluteImport(importPath)) {
+      if (this.isImportInPublicFolders(importPath, publicFolders)) {
+        return { keep: true, warning: null };
+      }
+
+      return {
+        keep: false,
+        warning: `Warning: Removing absolute import outside publicFolders: ${importPath}`
+      };
+    }
+
+    return {
+      keep: false,
+      warning: `Warning: Removing bare import: ${importPath}`
+    };
+  }
+
+  buildImportWarningMessage(baseMessage, sourceContext) {
+    if (!sourceContext) return baseMessage;
+    return `${baseMessage} [${sourceContext}]`;
+  }
+
+  extractLocalBindingsFromImportStatement(statement) {
+    const source = String(statement || '').trim();
+    if (!source.startsWith('import ')) return [];
+    if (/^import\s+['"][^'"]+['"]\s*;?$/.test(source)) return [];
+
+    const bindings = [];
+
+    const defaultMatch = source.match(/^import\s+([A-Za-z_$][\w$]*)\s*(,|\s+from\s+)/);
+    if (defaultMatch && defaultMatch[1] !== '*') {
+      bindings.push(defaultMatch[1]);
+    }
+
+    const namespaceMatch = source.match(/,?\s*\*\s+as\s+([A-Za-z_$][\w$]*)\s+from\s+['"]/);
+    if (namespaceMatch) {
+      bindings.push(namespaceMatch[1]);
+    }
+
+    const namedMatch = source.match(/\{([\s\S]*?)\}\s*from\s*['"]/);
+    if (namedMatch) {
+      const namedSection = namedMatch[1];
+      for (const part of namedSection.split(',')) {
+        const cleanPart = part.trim();
+        if (!cleanPart) continue;
+        const aliasParts = cleanPart.split(/\s+as\s+/i).map((v) => v.trim()).filter(Boolean);
+        const localName = aliasParts.length > 1 ? aliasParts[1] : aliasParts[0];
+        if (/^[A-Za-z_$][\w$]*$/.test(localName)) {
+          bindings.push(localName);
+        }
+      }
+    }
+
+    return Array.from(new Set(bindings));
+  }
+
+  validateHoistedImportCollisions(importStatements, reservedIdentifiers = new Set()) {
+    const reserved = reservedIdentifiers instanceof Set
+      ? reservedIdentifiers
+      : new Set(reservedIdentifiers || []);
+    const bindingToStatement = new Map();
+
+    for (const statement of importStatements || []) {
+      const normalizedStatement = String(statement || '').trim();
+      if (!normalizedStatement) continue;
+      const localBindings = this.extractLocalBindingsFromImportStatement(normalizedStatement);
+
+      for (const localBinding of localBindings) {
+        if (reserved.has(localBinding)) {
+          throw new Error(`Hoisted import reserved identifier collision: ${localBinding}`);
+        }
+        const previousStatement = bindingToStatement.get(localBinding);
+        if (previousStatement && previousStatement !== normalizedStatement) {
+          throw new Error(`Hoisted import binding collision: ${localBinding}`);
+        }
+        bindingToStatement.set(localBinding, normalizedStatement);
+      }
+    }
+  }
+
+  parseImportsFromCode(code) {
+    const ast = parse(code, {
+      sourceType: 'module',
+      plugins: ['jsx']
+    });
+
+    const importNodes = [];
+    traverse.default(ast, {
+      ImportDeclaration(pathNode) {
+        importNodes.push(pathNode.node);
+      }
+    });
+
+    return importNodes
+      .filter((node) => typeof node.start === 'number' && typeof node.end === 'number')
+      .sort((a, b) => a.start - b.start);
+  }
+
+  parseImportsWithFallbackScanner(code) {
+    const entries = [];
+    const importRegex = /\bimport\b/g;
+    let match = null;
+
+    while ((match = importRegex.exec(code)) !== null) {
+      const start = match.index;
+      const nextChar = code[start + 'import'.length];
+      if (nextChar === '(') {
+        continue;
+      }
+
+      let index = start + 'import'.length;
+      let quote = null;
+      let escaped = false;
+
+      while (index < code.length) {
+        const char = code[index];
+
+        if (quote) {
+          if (escaped) {
+            escaped = false;
+          } else if (char === '\\') {
+            escaped = true;
+          } else if (char === quote) {
+            quote = null;
+          }
+          index += 1;
+          continue;
+        }
+
+        if (char === '\'' || char === '"' || char === '`') {
+          quote = char;
+          index += 1;
+          continue;
+        }
+
+        if (char === ';') {
+          index += 1;
+          break;
+        }
+
+        index += 1;
+      }
+
+      const end = index;
+      const statement = code.slice(start, end);
+      const fromMatch = statement.match(/\bfrom\s+['"]([^'"]+)['"]/);
+      const sideEffectMatch = statement.match(/\bimport\s+['"]([^'"]+)['"]/);
+      const importPath = fromMatch?.[1] || sideEffectMatch?.[1] || null;
+
+      if (!importPath) {
+        continue;
+      }
+
+      entries.push({ start, end, statement, importPath });
+      importRegex.lastIndex = end;
+    }
+
+    return entries;
+  }
+
+  stripImportsWithFallbackRegex(code, publicFolders, sourceContext, collectHoistedImports) {
+    const hoistedImports = [];
+    const importEntries = this.parseImportsWithFallbackScanner(code);
+    if (importEntries.length === 0) {
+      return { code, hoistedImports };
+    }
+
+    let cleanedCode = '';
+    let cursor = 0;
+    for (const entry of importEntries) {
+      const { start, end, statement, importPath } = entry;
+      const classification = this.classifyImport(importPath, publicFolders);
+      cleanedCode += code.slice(cursor, start);
+      if (classification.keep) {
+        if (collectHoistedImports) {
+          hoistedImports.push(statement.trim());
+        } else {
+          cleanedCode += statement;
+        }
+      } else if (classification.warning) {
+        console.warn(this.buildImportWarningMessage(classification.warning, sourceContext));
+      }
+      cursor = end;
+    }
+
+    cleanedCode += code.slice(cursor);
+
+    return { code: cleanedCode, hoistedImports };
+  }
+
+  stripImports(code, options = {}) {
+    const { sourceContext = null, collectHoistedImports = false } = options;
+    const publicFolders = this.getConfiguredPublicFolders();
+    const hoistedImports = [];
+
+    try {
+      const importNodes = this.parseImportsFromCode(code);
+
+      if (importNodes.length === 0) {
+        return collectHoistedImports ? { code, hoistedImports } : code;
+      }
+
+      let cleaned = '';
+      let cursor = 0;
+
+      for (const node of importNodes) {
+        const importPath = node.source?.value;
+        const classification = this.classifyImport(importPath, publicFolders);
+        const statement = code.slice(node.start, node.end);
+
+        cleaned += code.slice(cursor, node.start);
+        if (classification.keep) {
+          if (collectHoistedImports) {
+            hoistedImports.push(statement.trim());
+          } else {
+            cleaned += statement;
+          }
+        } else if (classification.warning) {
+          console.warn(this.buildImportWarningMessage(classification.warning, sourceContext));
+        }
+
+        cursor = node.end;
+      }
+
+      cleaned += code.slice(cursor);
+      return collectHoistedImports
+        ? { code: cleaned, hoistedImports }
+        : cleaned;
+    } catch (error) {
+      const fallback = this.stripImportsWithFallbackRegex(code, publicFolders, sourceContext, collectHoistedImports);
+      return collectHoistedImports ? fallback : fallback.code;
+    }
   }
 
   async loadComponentsMap() {
