@@ -31,9 +31,20 @@ export default class BundleGenerator {
       maxCriticalSize: 50 * 1024, // 50KB
       maxCriticalComponents: 15,
       minSharedUsage: 3, // Minimum routes to be considered "shared"
+      minVendorSharedUsage: 2,
+      minVendorSharedTransformedSize: 2 * 1024,
       maxRouteBundleSize: 120 * 1024,
       maxRouteRequests: 12,
       strategy: 'hybrid' // 'global', 'hybrid', 'per-route'
+    };
+
+    this.vendorShared = {
+      file: 'slice-bundle.vendor-shared.js',
+      dependencyModules: new Map(),
+      dependencyUsage: new Map(),
+      sharedDependencySet: new Set(),
+      bundleKeysUsingSharedDependencies: new Set(),
+      bundle: null
     };
 
     this.bundles = {
@@ -710,6 +721,14 @@ export default class BundleGenerator {
   async generateBundleFiles() {
     const files = [];
 
+    await this.prepareVendorSharedDependencies();
+
+    if (this.vendorShared.sharedDependencySet.size > 0) {
+      const vendorSharedFile = await this.createVendorSharedDependencyBundleFile(this.vendorShared.sharedDependencySet);
+      this.vendorShared.bundle = vendorSharedFile;
+      files.push(vendorSharedFile);
+    }
+
     // 1. Critical bundle
     if (this.bundles.critical.components.length > 0) {
       const criticalFile = await this.createBundleFile(
@@ -751,6 +770,148 @@ export default class BundleGenerator {
     }
 
     return files;
+  }
+
+  async prepareVendorSharedDependencies() {
+    const routeDependencyIndex = await this.collectRouteExternalDependencyIndex();
+    const usageIndex = this.indexExternalDependencyUsage(routeDependencyIndex);
+    const sharedDependencySet = this.computeSharedDependencySet(usageIndex);
+
+    this.vendorShared.dependencyUsage = usageIndex;
+    this.vendorShared.sharedDependencySet = sharedDependencySet;
+    this.vendorShared.bundleKeysUsingSharedDependencies = new Set();
+
+    if (sharedDependencySet.size === 0) {
+      return;
+    }
+
+    for (const dependencyName of sharedDependencySet) {
+      const usageEntry = usageIndex.get(dependencyName);
+      for (const bundleKey of usageEntry?.bundleKeys || []) {
+        this.vendorShared.bundleKeysUsingSharedDependencies.add(bundleKey);
+      }
+    }
+
+    for (const bundleKey of this.vendorShared.bundleKeysUsingSharedDependencies) {
+      const bundle = this.bundles.routes[bundleKey];
+      if (!bundle) continue;
+      bundle.dependencies = this.mergeBundleDependencies(bundle.dependencies || [], ['vendor-shared']);
+    }
+  }
+
+  async collectRouteExternalDependencyIndex() {
+    const routeDependencyIndex = {};
+
+    for (const [bundleKey, bundle] of Object.entries(this.bundles.routes)) {
+      routeDependencyIndex[bundleKey] = {};
+      const uniqueComponents = this.dedupeComponentsByName(bundle.components || []);
+
+      for (const comp of uniqueComponents) {
+        const fileBaseName = comp.fileName || comp.name;
+        const jsPath = path.join(comp.path, `${fileBaseName}.js`);
+        if (!await fs.pathExists(jsPath)) continue;
+        const jsContent = await fs.readFile(jsPath, 'utf-8');
+        const dependencies = await this.buildDependencyContents(jsContent, comp.path);
+        for (const [depName, depEntry] of Object.entries(dependencies || {})) {
+          if (!routeDependencyIndex[bundleKey][depName]) {
+            routeDependencyIndex[bundleKey][depName] = depEntry;
+          }
+          if (!this.vendorShared.dependencyModules.has(depName)) {
+            this.vendorShared.dependencyModules.set(depName, {
+              name: depName,
+              content: depEntry?.content || ''
+            });
+          }
+        }
+      }
+    }
+
+    return routeDependencyIndex;
+  }
+
+  indexExternalDependencyUsage(routeDependencyIndex = {}) {
+    const usage = new Map();
+
+    for (const [bundleKey, dependencies] of Object.entries(routeDependencyIndex || {})) {
+      for (const [dependencyName, dependencyEntry] of Object.entries(dependencies || {})) {
+        if (!usage.has(dependencyName)) {
+          usage.set(dependencyName, {
+            name: dependencyName,
+            bundleKeys: new Set(),
+            bundleCount: 0,
+            content: dependencyEntry?.content || ''
+          });
+        }
+        const entry = usage.get(dependencyName);
+        entry.bundleKeys.add(bundleKey);
+        entry.bundleCount = entry.bundleKeys.size;
+      }
+    }
+
+    return usage;
+  }
+
+  computeSharedDependencySet(usageIndex = new Map()) {
+    const shared = new Set();
+
+    for (const [dependencyName, entry] of usageIndex.entries()) {
+      if ((entry?.bundleCount || 0) < this.config.minVendorSharedUsage) continue;
+      const transformedContent = this.transformDependencyContent(
+        entry?.content || '',
+        '__sliceVendorSharedProbe',
+        dependencyName
+      );
+      const transformedSize = Buffer.byteLength(transformedContent, 'utf-8');
+      if (transformedSize < this.config.minVendorSharedTransformedSize) continue;
+      shared.add(dependencyName);
+    }
+
+    return shared;
+  }
+
+  generateVendorSharedDependencyBundleContent(sharedDependencySet = new Set()) {
+    const selectedModules = Array.from(sharedDependencySet)
+      .sort((a, b) => a.localeCompare(b))
+      .map((dependencyName) => {
+        const fromUsage = this.vendorShared.dependencyUsage.get(dependencyName)?.content;
+        const fromCollected = this.vendorShared.dependencyModules.get(dependencyName)?.content;
+        const content = fromUsage || fromCollected || '';
+        return { name: dependencyName, content };
+      })
+      .filter((entry) => !!entry.content);
+
+    const dependencyModuleBlock = this.buildV2DependencyModuleBlockFromModules(selectedModules);
+    const metadata = {
+      version: '2',
+      bundleKey: 'vendor-shared',
+      type: 'vendor-shared',
+      routes: [],
+      componentCount: 0,
+      dependencyCount: selectedModules.length
+    };
+
+    return `export const SLICE_BUNDLE_META = ${JSON.stringify(metadata, null, 2)};\n\n${dependencyModuleBlock}\n\nexport async function registerAll() {\n  return SLICE_BUNDLE_DEPENDENCIES;\n}\n`;
+  }
+
+  async createVendorSharedDependencyBundleFile(sharedDependencySet) {
+    const fileName = this.vendorShared.file;
+    const filePath = path.join(this.bundlesPath, fileName);
+    const bundleContent = this.generateVendorSharedDependencyBundleContent(sharedDependencySet);
+    const finalContent = await this.applyBundleTransforms(bundleContent, fileName);
+    await fs.ensureDir(path.dirname(filePath));
+    await fs.writeFile(filePath, finalContent, 'utf-8');
+
+    const hash = crypto.createHash('sha256').update(finalContent).digest('hex');
+
+    return {
+      name: 'vendor-shared',
+      file: fileName,
+      path: filePath,
+      size: Buffer.byteLength(bundleContent, 'utf-8'),
+      hash,
+      integrity: `sha256:${hash}`,
+      componentCount: 0
+    };
   }
 
   /**
@@ -1075,6 +1236,10 @@ export default class BundleGenerator {
 
   buildV2DependencyModuleBlock(components) {
     const modules = this.collectDependencyModulesFromComponents(components);
+    return this.buildV2DependencyModuleBlockFromModules(modules);
+  }
+
+  buildV2DependencyModuleBlockFromModules(modules = []) {
 
     const lines = [
       'const SLICE_BUNDLE_DEPENDENCIES = {};',
@@ -1445,6 +1610,13 @@ if (window.slice && window.slice.controller) {
           hash: null,
           integrity: null,
           components: []
+        },
+        vendorShared: {
+          file: this.vendorShared.file,
+          size: this.vendorShared.bundle?.size || 0,
+          hash: this.vendorShared.bundle?.hash || null,
+          integrity: this.vendorShared.bundle?.integrity || null,
+          dependencies: Array.from(this.vendorShared.sharedDependencySet).sort((a, b) => a.localeCompare(b))
         },
         critical: {
           file: this.bundles.critical.file,

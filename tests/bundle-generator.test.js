@@ -627,3 +627,82 @@ test('named and namespace dependency bindings remain unchanged', () => {
   assert.equal(values.localAlpha, 99);
   assert.deepEqual(values.namedNamespace, { alpha: 99, other: 1 });
 });
+
+test('indexExternalDependencyUsage tracks unique route-bundle usage counts', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {}
+  });
+
+  const routeDependencyIndex = {
+    alpha: {
+      'deps/shared.js': { content: 'export const shared = true;' },
+      'deps/alpha.js': { content: 'export const alpha = true;' }
+    },
+    beta: {
+      'deps/shared.js': { content: 'export const shared = true;' },
+      'deps/beta.js': { content: 'export const beta = true;' }
+    }
+  };
+
+  const usageIndex = generator.indexExternalDependencyUsage(routeDependencyIndex);
+
+  assert.equal(usageIndex.get('deps/shared.js').bundleCount, 2);
+  assert.equal(usageIndex.get('deps/alpha.js').bundleCount, 1);
+  assert.deepEqual(Array.from(usageIndex.get('deps/shared.js').bundleKeys).sort(), ['alpha', 'beta']);
+});
+
+test('computeSharedDependencySet enforces usage and transformed-size thresholds', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {}
+  });
+
+  const largePayload = 'x'.repeat(2100);
+  const routeDependencyIndex = {
+    alpha: {
+      'deps/shared-large.js': { content: `export const payload = '${largePayload}';` },
+      'deps/shared-small.js': { content: 'export const tiny = 1;' }
+    },
+    beta: {
+      'deps/shared-large.js': { content: `export const payload = '${largePayload}';` },
+      'deps/shared-small.js': { content: 'export const tiny = 1;' }
+    },
+    gamma: {
+      'deps/shared-small.js': { content: 'export const tiny = 1;' }
+    }
+  };
+
+  const usageIndex = generator.indexExternalDependencyUsage(routeDependencyIndex);
+  const sharedSet = generator.computeSharedDependencySet(usageIndex);
+
+  assert.ok(sharedSet.has('deps/shared-large.js'));
+  assert.ok(!sharedSet.has('deps/shared-small.js'));
+});
+
+test('generateVendorSharedDependencyBundleContent emits shared dependency module once', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {}
+  });
+
+  const routeDependencyIndex = {
+    alpha: {
+      'deps/shared.js': { content: `export const payload = '${'y'.repeat(2200)}';` }
+    },
+    beta: {
+      'deps/shared.js': { content: `export const payload = '${'y'.repeat(2200)}';` }
+    }
+  };
+
+  const usageIndex = generator.indexExternalDependencyUsage(routeDependencyIndex);
+  const sharedSet = generator.computeSharedDependencySet(usageIndex);
+  generator.vendorShared.dependencyUsage = usageIndex;
+  const content = generator.generateVendorSharedDependencyBundleContent(sharedSet);
+  const assignmentMatches = content.match(/SLICE_BUNDLE_DEPENDENCIES\["deps\/shared\.js"\]/g) || [];
+
+  assert.equal(assignmentMatches.length, 1);
+});
