@@ -1634,11 +1634,15 @@ if (window.slice && window.slice.controller) {
           components: []
         },
         vendorShared: {
+          bundleKey: 'vendor-shared',
+          type: 'vendor-shared',
           file: this.vendorShared.file,
           size: this.vendorShared.bundle?.size || 0,
           hash: this.vendorShared.bundle?.hash || null,
           integrity: this.vendorShared.bundle?.integrity || null,
-          dependencies: Array.from(this.vendorShared.sharedDependencySet).sort((a, b) => a.localeCompare(b))
+          dependencies: Array.from(this.vendorShared.sharedDependencySet).sort((a, b) => a.localeCompare(b)),
+          dependencyCount: this.vendorShared.sharedDependencySet.size,
+          routes: Array.from(this.vendorShared.bundleKeysUsingSharedDependencies).sort((a, b) => a.localeCompare(b))
         },
         critical: {
           file: this.bundles.critical.file,
@@ -1649,14 +1653,20 @@ if (window.slice && window.slice.controller) {
         },
         routes: {}
       },
-      routeBundles: {}
+      routeBundles: {},
+      routeDependencyGraph: {}
     };
 
     for (const [key, bundle] of Object.entries(this.bundles.routes)) {
       const routeIdentifier = Array.isArray(bundle.path || bundle.paths)
         ? key
         : (bundle.path || bundle.paths || key);
-      const dependencies = this.mergeBundleDependencies(bundle.dependencies || []);
+      const usesVendorShared = this.vendorShared.bundleKeysUsingSharedDependencies.has(key)
+        || (bundle.dependencies || []).includes('vendor-shared');
+      const dependencies = this.mergeBundleDependencies(
+        bundle.dependencies || [],
+        usesVendorShared ? ['vendor-shared'] : []
+      );
 
       config.bundles.routes[key] = {
         path: bundle.path || bundle.paths || key, // Support both single path and array of paths, fallback to key
@@ -1684,6 +1694,27 @@ if (window.slice && window.slice.controller) {
         if (!config.routeBundles[routePath].includes(key)) {
           config.routeBundles[routePath].push(key);
         }
+
+        const graphEntry = config.routeDependencyGraph[routePath] || {
+          bundles: [],
+          edges: []
+        };
+        if (!graphEntry.bundles.includes(key)) {
+          graphEntry.bundles.push(key);
+          graphEntry.bundles.sort((a, b) => a.localeCompare(b));
+        }
+
+        const edgeKeys = new Set(graphEntry.edges.map((edge) => `${edge.from}->${edge.to}`));
+        const orderedEdgeSources = ['critical', ...dependencies.filter((dependency) => dependency !== 'critical')];
+        for (const source of orderedEdgeSources) {
+          const edgeKey = `${source}->${key}`;
+          if (!edgeKeys.has(edgeKey)) {
+            graphEntry.edges.push({ from: source, to: key });
+            edgeKeys.add(edgeKey);
+          }
+        }
+
+        config.routeDependencyGraph[routePath] = graphEntry;
       }
     }
 

@@ -425,3 +425,46 @@ test('generateBundleFileContent throws on reserved identifier collision', () => 
     );
   }, /reserved identifier collision: SLICE_BUNDLE_META/);
 });
+
+test('generateBundleConfig emits vendor-shared metadata and route dependency graph edges', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {
+      totalComponents: 0,
+      totalRoutes: 1,
+      sharedPercentage: 0,
+      totalSize: 0
+    }
+  }, { output: 'src' });
+
+  generator.bundles.routes = {
+    docs: {
+      path: '/docs',
+      components: [{ name: 'DocumentationPage' }],
+      size: 100,
+      file: 'slice-bundle.docs.js'
+    }
+  };
+
+  generator.vendorShared.sharedDependencySet = new Set(['App/documentationRoutes.js']);
+  generator.vendorShared.bundleKeysUsingSharedDependencies = new Set(['docs']);
+  generator.vendorShared.bundle = {
+    file: 'slice-bundle.vendor-shared.js',
+    size: 2048,
+    hash: 'deadbeef',
+    integrity: 'sha256:deadbeef'
+  };
+
+  const config = generator.generateBundleConfig(null);
+
+  assert.equal(config.bundles.vendorShared.bundleKey, 'vendor-shared');
+  assert.equal(config.bundles.vendorShared.type, 'vendor-shared');
+  assert.equal(config.bundles.vendorShared.dependencyCount, 1);
+  assert.deepEqual(config.bundles.routes.docs.dependencies, ['critical', 'vendor-shared']);
+  assert.deepEqual(config.routeBundles['/docs'], ['critical', 'vendor-shared', 'docs']);
+  assert.deepEqual(config.routeDependencyGraph['/docs'].edges, [
+    { from: 'critical', to: 'docs' },
+    { from: 'vendor-shared', to: 'docs' }
+  ]);
+});
