@@ -386,3 +386,244 @@ test('formatBundleFile emits hoisted imports for framework-compatible output', (
   assert.match(source, /import boot from '\/public\/bootstrap\.js';/);
   assert.match(source, /const SLICE_BUNDLE_DEPENDENCIES = \{\};/);
 });
+
+test('default dependency binding resolves transformed default key over named exports', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {}
+  });
+
+  const externalDependencies = {
+    'App/purify.js': {
+      content: 'export default () => "DEFAULT"; export const purify = () => "NAMED";',
+      bindings: [{ type: 'default', importedName: 'default', localName: 'purify' }]
+    }
+  };
+
+  const resolverSource = generator.getDefaultExportResolverLines().join('\n');
+  const bindingsSource = generator.buildDependencyBindings(externalDependencies);
+  const resolveBoundValue = new Function(
+    `${resolverSource}\n` +
+    'const SLICE_BUNDLE_DEPENDENCIES = {"App/purify.js": { purifyData: "DEFAULT", purify: "NAMED" }};\n' +
+    `${bindingsSource}\n` +
+    'return purify;'
+  );
+
+  assert.equal(resolveBoundValue(), 'DEFAULT');
+});
+
+const evaluateDefaultResolver = ({ dep, depName = 'App/dep.js', preferredKey = null, calls = 1 }) => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {}
+  });
+
+  const resolverSource = generator.getDefaultExportResolverLines().join('\n');
+  const resolve = new Function(
+    '__dep',
+    '__depName',
+    '__preferredKey',
+    '__calls',
+    `${resolverSource}\n` +
+      'const __capturedWarnings = [];' +
+      'const __originalWarn = console.warn;' +
+      'console.warn = (...args) => __capturedWarnings.push(args.join(" "));' +
+      'let __result;' +
+      'try {' +
+      '  for (let __i = 0; __i < __calls; __i += 1) {' +
+      '    __result = __sliceResolveDefaultExport(__dep, __depName, __preferredKey);' +
+      '  }' +
+      '} finally {' +
+      '  console.warn = __originalWarn;' +
+      '}' +
+      'return { result: __result, warnings: __capturedWarnings };'
+  );
+
+  return resolve(dep, depName, preferredKey, calls);
+};
+
+test('default resolver returns default when present', () => {
+  const { result, warnings } = evaluateDefaultResolver({
+    dep: { default: 'DEFAULT', alpha: 'ALPHA' }
+  });
+
+  assert.equal(result, 'DEFAULT');
+  assert.equal(warnings.length, 0);
+});
+
+test('default resolver preserves falsy default values', () => {
+  const falsyValues = [0, '', false, null];
+
+  for (const value of falsyValues) {
+    const { result, warnings } = evaluateDefaultResolver({ dep: { default: value, alt: 'fallback' } });
+    assert.equal(result, value);
+    assert.equal(warnings.length, 0);
+  }
+});
+
+test('default resolver falls back to single non-default key', () => {
+  const { result, warnings } = evaluateDefaultResolver({ dep: { onlyKey: 42 } });
+
+  assert.equal(result, 42);
+  assert.equal(warnings.length, 0);
+});
+
+test('default resolver respects preferred key hint when present', () => {
+  const { result, warnings } = evaluateDefaultResolver({
+    dep: { purifyData: 'PREFERRED', purify: 'OTHER' },
+    depName: 'App/purify.js',
+    preferredKey: 'purifyData'
+  });
+
+  assert.equal(result, 'PREFERRED');
+  assert.equal(warnings.length, 0);
+});
+
+test('default resolver prefers known keys module/exports/purify when unambiguous', () => {
+  const moduleResult = evaluateDefaultResolver({ dep: { module: 'MODULE', alpha: 'A' } });
+  const exportsResult = evaluateDefaultResolver({ dep: { exports: 'EXPORTS', beta: 'B' } });
+  const purifyResult = evaluateDefaultResolver({ dep: { purify: 'PURIFY', gamma: 'C' } });
+
+  assert.equal(moduleResult.result, 'MODULE');
+  assert.equal(exportsResult.result, 'EXPORTS');
+  assert.equal(purifyResult.result, 'PURIFY');
+  assert.equal(moduleResult.warnings.length, 0);
+  assert.equal(exportsResult.warnings.length, 0);
+  assert.equal(purifyResult.warnings.length, 0);
+});
+
+test('default resolver uses deterministic alphabetical fallback on ambiguous keys', () => {
+  const { result } = evaluateDefaultResolver({ dep: { zebra: 'Z', alpha: 'A', middle: 'M' } });
+  assert.equal(result, 'A');
+});
+
+test('default resolver source uses locale-independent comparator and named preferred keys constant', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {}
+  });
+
+  const resolverSource = generator.getDefaultExportResolverLines().join('\n');
+
+  assert.match(resolverSource, /const __sliceDefaultExportPreferredKeys = \['module', 'exports', 'purify'\];/);
+  assert.match(resolverSource, /const __sliceDeterministicKeyCompare = \(a, b\) => \(a < b \? -1 : a > b \? 1 : 0\);/);
+  assert.doesNotMatch(resolverSource, /localeCompare/);
+});
+
+test('default resolver warning includes dependency path keys and chosen key', () => {
+  const { warnings } = evaluateDefaultResolver({
+    dep: { zebra: 'Z', alpha: 'A', middle: 'M' },
+    depName: 'App/ambiguous.js'
+  });
+
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /App\/ambiguous\.js/);
+  assert.match(warnings[0], /Falling back to "alpha"/);
+  assert.match(warnings[0], /Keys: alpha, middle, zebra/);
+});
+
+test('default resolver deduplicates ambiguous warning per dependency in one evaluation', () => {
+  const { warnings } = evaluateDefaultResolver({
+    dep: { c: 3, a: 1, b: 2 },
+    depName: 'App/repeat-warning.js',
+    calls: 3
+  });
+
+  assert.equal(warnings.length, 1);
+});
+
+test('default resolver evaluation restores console.warn when resolver throws', () => {
+  const originalWarn = console.warn;
+
+  assert.throws(() => {
+    evaluateDefaultResolver({
+      dep: new Proxy({}, {
+        ownKeys() {
+          throw new Error('kaboom');
+        }
+      })
+    });
+  }, /kaboom/);
+
+  assert.equal(console.warn, originalWarn);
+});
+
+test('default resolver passes through non-object values and null/undefined', () => {
+  const fn = () => 'ok';
+  const functionResult = evaluateDefaultResolver({ dep: fn });
+  const stringResult = evaluateDefaultResolver({ dep: 'value' });
+  const numberResult = evaluateDefaultResolver({ dep: 7 });
+  const nullResult = evaluateDefaultResolver({ dep: null });
+  const undefinedResult = evaluateDefaultResolver({ dep: undefined });
+
+  assert.equal(functionResult.result, fn);
+  assert.equal(stringResult.result, 'value');
+  assert.equal(numberResult.result, 7);
+  assert.equal(nullResult.result, null);
+  assert.equal(undefinedResult.result, undefined);
+});
+
+test('analyzeDependencies resolves extensionless imports across js json and mjs', async () => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'slice-deps-ext-'));
+  const componentDir = path.join(tempRoot, 'Component');
+
+  await fs.ensureDir(componentDir);
+  await fs.writeFile(path.join(componentDir, 'dep-js.js'), 'export const value = 1;', 'utf-8');
+  await fs.writeFile(path.join(componentDir, 'dep-json.json'), '{"ok":true}', 'utf-8');
+  await fs.writeFile(path.join(componentDir, 'dep-mjs.mjs'), 'export const ok = true;', 'utf-8');
+
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {}
+  });
+
+  try {
+    const jsDeps = generator.analyzeDependencies("import dep from './dep-js';", componentDir);
+    const jsonDeps = generator.analyzeDependencies("import cfg from './dep-json';", componentDir);
+    const mjsDeps = generator.analyzeDependencies("import mod from './dep-mjs';", componentDir);
+
+    assert.equal(jsDeps.length, 1);
+    assert.equal(path.basename(jsDeps[0].path), 'dep-js.js');
+    assert.equal(jsonDeps.length, 1);
+    assert.equal(path.basename(jsonDeps[0].path), 'dep-json.json');
+    assert.equal(mjsDeps.length, 1);
+    assert.equal(path.basename(mjsDeps[0].path), 'dep-mjs.mjs');
+  } finally {
+    await fs.remove(tempRoot);
+  }
+});
+
+test('named and namespace dependency bindings remain unchanged', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {}
+  });
+
+  const externalDependencies = {
+    'App/named.js': {
+      content: 'export const alpha = 1;',
+      bindings: [
+        { type: 'named', importedName: 'alpha', localName: 'localAlpha' },
+        { type: 'namespace', localName: 'namedNamespace' }
+      ]
+    }
+  };
+
+  const resolverSource = generator.getDefaultExportResolverLines().join('\n');
+  const bindingsSource = generator.buildDependencyBindings(externalDependencies);
+  const evaluate = new Function(
+    `${resolverSource}\n` +
+      'const SLICE_BUNDLE_DEPENDENCIES = {"App/named.js": { alpha: 99, other: 1 }};' +
+      `${bindingsSource}\n` +
+      'return { localAlpha, namedNamespace };'
+  );
+
+  const values = evaluate();
+  assert.equal(values.localAlpha, 99);
+  assert.deepEqual(values.namedNamespace, { alpha: 99, other: 1 });
+});

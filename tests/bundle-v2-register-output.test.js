@@ -129,6 +129,10 @@ test('bundle output inlines dependency modules and binds imported symbols in cla
         'App/documentationRoutes.js': {
           content: 'export const documentationRoutes = ["/docs"];',
           bindings: [{ type: 'named', importedName: 'documentationRoutes', localName: 'documentationRoutes' }]
+        },
+        'App/purify.js': {
+          content: 'export const purify = (value) => value;',
+          bindings: [{ type: 'default', importedName: 'default', localName: 'purify' }]
         }
       }
     }],
@@ -136,8 +140,12 @@ test('bundle output inlines dependency modules and binds imported symbols in cla
   );
 
   assert.match(source, /const SLICE_BUNDLE_DEPENDENCIES = \{\};/);
+  assert.match(source, /function __sliceResolveDefaultExport\(dep, depName, preferredKey\) \{/);
   assert.match(source, /SLICE_BUNDLE_DEPENDENCIES\["App\/documentationRoutes\.js"\] = __sliceDepExports0;/);
   assert.match(source, /const documentationRoutes = SLICE_BUNDLE_DEPENDENCIES\["App\/documentationRoutes\.js"\]\.documentationRoutes;/);
+  assert.match(source, /const purify = __sliceResolveDefaultExport\(SLICE_BUNDLE_DEPENDENCIES\["App\/purify\.js"\], "App\/purify\.js", "purifyData"\);/);
+  assert.doesNotMatch(source, /\.default !== undefined \?/);
+  assert.doesNotMatch(source, /SLICE_BUNDLE_DEPENDENCIES\["App\/purify\.js"\]\.purifyData/);
 });
 
 test('bundle output hoists allowed absolute imports to module top-level', () => {

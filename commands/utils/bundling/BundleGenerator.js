@@ -1076,7 +1076,10 @@ export default class BundleGenerator {
   buildV2DependencyModuleBlock(components) {
     const modules = this.collectDependencyModulesFromComponents(components);
 
-    const lines = ['const SLICE_BUNDLE_DEPENDENCIES = {};'];
+    const lines = [
+      'const SLICE_BUNDLE_DEPENDENCIES = {};',
+      ...this.getDefaultExportResolverLines()
+    ];
     modules.forEach((module, index) => {
       const exportVar = `__sliceDepExports${index}`;
       const transformedContent = this.transformDependencyContent(module.content, exportVar, module.name);
@@ -1237,11 +1240,14 @@ if (window.slice && window.slice.controller) {
 
   buildDependencyModuleBlock(componentsData) {
     const dependencyModules = this.collectDependencyModules(componentsData);
+    const lines = [
+      'const SLICE_BUNDLE_DEPENDENCIES = {};',
+      ...this.getDefaultExportResolverLines()
+    ];
     if (dependencyModules.length === 0) {
-      return 'const SLICE_BUNDLE_DEPENDENCIES = {};';
+      return `${lines.join('\n')}`;
     }
 
-    const lines = ['const SLICE_BUNDLE_DEPENDENCIES = {};'];
     dependencyModules.forEach((module, index) => {
       const exportVar = `__sliceDepExports${index}`;
       const content = this.transformDependencyContent(module.content, exportVar, module.name);
@@ -1285,8 +1291,7 @@ if (window.slice && window.slice.controller) {
   }
 
   transformDependencyContent(content, exportVar, moduleName) {
-    const baseName = moduleName.split('/').pop().replace(/\.[^.]+$/, '');
-    const dataName = baseName ? `${baseName}Data` : null;
+    const dataName = this.getDependencyDefaultFallbackKey(moduleName);
     const exportPrefix = dataName ? `${exportVar}.${dataName} = ` : `${exportVar}.default = `;
 
     return content
@@ -1306,6 +1311,11 @@ if (window.slice && window.slice.controller) {
           .join('\n');
       })
       .replace(/^\s*export\s+/gm, '');
+  }
+
+  getDependencyDefaultFallbackKey(moduleName) {
+    const baseName = moduleName?.split('/').pop()?.replace(/\.[^.]+$/, '');
+    return baseName ? `${baseName}Data` : null;
   }
 
   buildComponentBundleBlock(componentsData) {
@@ -1349,14 +1359,12 @@ if (window.slice && window.slice.controller) {
     Object.entries(externalDependencies).forEach(([name, entry]) => {
       const bindings = typeof entry === 'string' ? [] : entry.bindings || [];
       const depVar = `SLICE_BUNDLE_DEPENDENCIES[${JSON.stringify(name)}]`;
-      const baseName = name.split('/').pop().replace(/\.[^.]+$/, '');
-      const dataName = baseName ? `${baseName}Data` : null;
 
       bindings.forEach((binding) => {
         if (!binding?.localName) return;
         if (binding.type === 'default') {
-          const fallback = dataName ? `${depVar}.${dataName}` : `${depVar}.default`;
-          lines.push(`const ${binding.localName} = ${depVar}.default !== undefined ? ${depVar}.default : ${fallback};`);
+          const preferredKey = this.getDependencyDefaultFallbackKey(name);
+          lines.push(`const ${binding.localName} = __sliceResolveDefaultExport(${depVar}, ${JSON.stringify(name)}, ${JSON.stringify(preferredKey)});`);
         }
         if (binding.type === 'named') {
           lines.push(`const ${binding.localName} = ${depVar}.${binding.importedName};`);
@@ -1368,6 +1376,34 @@ if (window.slice && window.slice.controller) {
     });
 
     return lines.join('\n');
+  }
+
+  getDefaultExportResolverLines() {
+    return [
+      'const __sliceDefaultExportWarningDeps = new Set();',
+      "const __sliceDefaultExportPreferredKeys = ['module', 'exports', 'purify'];",
+      'const __sliceDeterministicKeyCompare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);',
+      'function __sliceResolveDefaultExport(dep, depName, preferredKey) {',
+      '  if (dep?.default !== undefined) return dep.default;',
+      "  if (dep === null || (typeof dep !== 'object' && typeof dep !== 'function')) return dep;",
+      "  if (preferredKey && preferredKey !== 'default' && preferredKey !== '__esModule' && Object.prototype.hasOwnProperty.call(dep, preferredKey)) return dep[preferredKey];",
+      "  const keys = Object.keys(dep).filter((key) => key !== 'default' && key !== '__esModule');",
+      '  if (keys.length === 1) return dep[keys[0]];',
+      '  if (keys.length > 1) {',
+      '    const preferredMatches = __sliceDefaultExportPreferredKeys.filter((key) => keys.includes(key));',
+      '    if (preferredMatches.length === 1) return dep[preferredMatches[0]];',
+      '    const sortedKeys = [...keys].sort(__sliceDeterministicKeyCompare);',
+      '    const fallbackKey = sortedKeys[0];',
+      '    const warningDepName = depName || "<unknown dependency>";',
+      '    if (!__sliceDefaultExportWarningDeps.has(warningDepName)) {',
+      '      __sliceDefaultExportWarningDeps.add(warningDepName);',
+      '      console.warn(`[Slice.js bundler] Ambiguous default export resolution for "${warningDepName}". Falling back to "${fallbackKey}". Keys: ${sortedKeys.join(\', \')}`);',
+      '    }',
+      '    return dep[fallbackKey];',
+      '  }',
+      '  return dep;',
+      '}'
+    ];
   }
 
   toSafeIdentifier(name) {
