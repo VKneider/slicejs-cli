@@ -140,7 +140,7 @@ test('bundle output inlines dependency modules and binds imported symbols in cla
   );
 
   assert.match(source, /const SLICE_BUNDLE_DEPENDENCIES = \{\};/);
-  assert.match(source, /const __sliceSharedDeps = window\.__SLICE_SHARED_DEPS__ \|\| \{\};/);
+  assert.match(source, /const __sliceSharedDeps = typeof window !== 'undefined' \? \(window\.__SLICE_SHARED_DEPS__ \|\| \{\}\) : \{\};/);
   assert.match(source, /function __sliceResolveDefaultExport\(dep, depName, preferredKey\) \{/);
   assert.match(source, /SLICE_BUNDLE_DEPENDENCIES\["App\/documentationRoutes\.js"\] = __sliceDepExports0;/);
   assert.match(source, /const documentationRoutes = __sliceResolveBundleDependency\("App\/documentationRoutes\.js"\)\.documentationRoutes;/);
@@ -192,13 +192,128 @@ test('route bundle omits extracted vendor-shared modules from inline dependency 
     '/docs'
   );
 
-  assert.match(source, /const __sliceSharedDeps = window\.__SLICE_SHARED_DEPS__ \|\| \{\};/);
+  assert.match(source, /const __sliceSharedDeps = typeof window !== 'undefined' \? \(window\.__SLICE_SHARED_DEPS__ \|\| \{\}\) : \{\};/);
   assert.match(source, /const __sliceResolveBundleDependency = \(depName\) => Object\.prototype\.hasOwnProperty\.call\(__sliceSharedDeps, depName\) \? __sliceSharedDeps\[depName\] : SLICE_BUNDLE_DEPENDENCIES\[depName\];/);
   assert.doesNotMatch(source, /SLICE_BUNDLE_DEPENDENCIES\["App\/documentationRoutes\.js"\] = __sliceDepExports\d+;/);
   assert.match(source, /SLICE_BUNDLE_DEPENDENCIES\["App\/purify\.js"\] = __sliceDepExports\d+;/);
   assert.match(source, /const documentationRoutes = __sliceResolveBundleDependency\("App\/documentationRoutes\.js"\)\.documentationRoutes;/);
   assert.match(source, /const docsNs = __sliceResolveBundleDependency\("App\/documentationRoutes\.js"\);/);
   assert.match(source, /const purify = __sliceResolveDefaultExport\(__sliceResolveBundleDependency\("App\/purify\.js"\), "App\/purify\.js", "purifyData"\);/);
+});
+
+test('route bundle emits guarded shared deps resolver for non-browser contexts', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {
+      totalComponents: 0,
+      totalRoutes: 0,
+      sharedPercentage: 0,
+      totalSize: 0
+    }
+  }, { output: 'src' });
+
+  const source = generator.generateBundleFileContent(
+    'slice-bundle.test.js',
+    'route',
+    [{
+      name: 'DocsPage',
+      category: 'AppComponents',
+      categoryType: 'Visual',
+      dependencies: new Set(),
+      size: 100,
+      js: 'class DocsPage extends HTMLElement {}\nwindow.DocsPage = DocsPage;\nreturn DocsPage;',
+      html: '',
+      css: '',
+      externalDependencies: {
+        'App/deps.js': {
+          content: 'export const value = 1;',
+          bindings: [{ type: 'named', importedName: 'value', localName: 'value' }]
+        }
+      }
+    }],
+    '/docs'
+  );
+
+  assert.match(source, /const __sliceSharedDeps = typeof window !== 'undefined' \? \(window\.__SLICE_SHARED_DEPS__ \|\| \{\}\) : \{\};/);
+  assert.match(source, /const __sliceResolveBundleDependency = \(depName\) => Object\.prototype\.hasOwnProperty\.call\(__sliceSharedDeps, depName\) \? __sliceSharedDeps\[depName\] : SLICE_BUNDLE_DEPENDENCIES\[depName\];/);
+});
+
+test('non-route bundle does not emit shared resolver block', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {
+      totalComponents: 0,
+      totalRoutes: 0,
+      sharedPercentage: 0,
+      totalSize: 0
+    }
+  }, { output: 'src' });
+
+  const source = generator.generateBundleFileContent(
+    'slice-bundle.framework.js',
+    'framework',
+    [{
+      name: 'FrameworkComp',
+      category: 'Framework',
+      categoryType: 'Visual',
+      dependencies: new Set(),
+      size: 100,
+      js: 'class FrameworkComp extends HTMLElement {}\nwindow.FrameworkComp = FrameworkComp;\nreturn FrameworkComp;',
+      html: '',
+      css: '',
+      externalDependencies: {
+        'App/frameworkDep.js': {
+          content: 'export const dep = 1;',
+          bindings: [{ type: 'named', importedName: 'dep', localName: 'dep' }]
+        }
+      }
+    }],
+    null
+  );
+
+  assert.doesNotMatch(source, /const __sliceSharedDeps = /);
+  assert.doesNotMatch(source, /const __sliceResolveBundleDependency = /);
+  assert.match(source, /const dep = SLICE_BUNDLE_DEPENDENCIES\["App\/frameworkDep\.js"\]\.dep;/);
+});
+
+test('route bundle keeps local fallback binding when shared map is unavailable', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {
+      totalComponents: 0,
+      totalRoutes: 0,
+      sharedPercentage: 0,
+      totalSize: 0
+    }
+  }, { output: 'src' });
+
+  const source = generator.generateBundleFileContent(
+    'slice-bundle.test.js',
+    'route',
+    [{
+      name: 'FallbackComp',
+      category: 'Visual',
+      categoryType: 'Visual',
+      dependencies: new Set(),
+      size: 100,
+      js: 'class FallbackComp extends HTMLElement {}\nwindow.FallbackComp = FallbackComp;\nreturn FallbackComp;',
+      html: '',
+      css: '',
+      externalDependencies: {
+        'App/local.js': {
+          content: 'export const local = 1;',
+          bindings: [{ type: 'named', importedName: 'local', localName: 'local' }]
+        }
+      }
+    }],
+    '/fallback'
+  );
+
+  assert.match(source, /const __sliceResolveBundleDependency = \(depName\) => Object\.prototype\.hasOwnProperty\.call\(__sliceSharedDeps, depName\) \? __sliceSharedDeps\[depName\] : SLICE_BUNDLE_DEPENDENCIES\[depName\];/);
+  assert.match(source, /const local = __sliceResolveBundleDependency\("App\/local\.js"\)\.local;/);
 });
 
 test('bundle output hoists allowed absolute imports to module top-level', () => {

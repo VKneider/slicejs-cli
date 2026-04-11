@@ -1560,7 +1560,7 @@ if (window.slice && window.slice.controller) {
 
   getBundleDependencyResolverLines() {
     return [
-      'const __sliceSharedDeps = window.__SLICE_SHARED_DEPS__ || {};',
+      "const __sliceSharedDeps = typeof window !== 'undefined' ? (window.__SLICE_SHARED_DEPS__ || {}) : {};",
       'const __sliceResolveBundleDependency = (depName) => Object.prototype.hasOwnProperty.call(__sliceSharedDeps, depName) ? __sliceSharedDeps[depName] : SLICE_BUNDLE_DEPENDENCIES[depName];'
     ];
   }
