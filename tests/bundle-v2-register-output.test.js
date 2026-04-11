@@ -140,12 +140,65 @@ test('bundle output inlines dependency modules and binds imported symbols in cla
   );
 
   assert.match(source, /const SLICE_BUNDLE_DEPENDENCIES = \{\};/);
+  assert.match(source, /const __sliceSharedDeps = window\.__SLICE_SHARED_DEPS__ \|\| \{\};/);
   assert.match(source, /function __sliceResolveDefaultExport\(dep, depName, preferredKey\) \{/);
   assert.match(source, /SLICE_BUNDLE_DEPENDENCIES\["App\/documentationRoutes\.js"\] = __sliceDepExports0;/);
-  assert.match(source, /const documentationRoutes = SLICE_BUNDLE_DEPENDENCIES\["App\/documentationRoutes\.js"\]\.documentationRoutes;/);
-  assert.match(source, /const purify = __sliceResolveDefaultExport\(SLICE_BUNDLE_DEPENDENCIES\["App\/purify\.js"\], "App\/purify\.js", "purifyData"\);/);
+  assert.match(source, /const documentationRoutes = __sliceResolveBundleDependency\("App\/documentationRoutes\.js"\)\.documentationRoutes;/);
+  assert.match(source, /const purify = __sliceResolveDefaultExport\(__sliceResolveBundleDependency\("App\/purify\.js"\), "App\/purify\.js", "purifyData"\);/);
   assert.doesNotMatch(source, /\.default !== undefined \?/);
   assert.doesNotMatch(source, /SLICE_BUNDLE_DEPENDENCIES\["App\/purify\.js"\]\.purifyData/);
+});
+
+test('route bundle omits extracted vendor-shared modules from inline dependency block and keeps bindings', () => {
+  const generator = new BundleGenerator(import.meta.url, {
+    components: [],
+    routes: [],
+    metrics: {
+      totalComponents: 0,
+      totalRoutes: 0,
+      sharedPercentage: 0,
+      totalSize: 0
+    }
+  }, { output: 'src' });
+
+  generator.vendorShared.sharedDependencySet = new Set(['App/documentationRoutes.js']);
+
+  const source = generator.generateBundleFileContent(
+    'slice-bundle.test.js',
+    'route',
+    [{
+      name: 'DocumentationPage',
+      category: 'AppComponents',
+      categoryType: 'Visual',
+      dependencies: new Set(),
+      size: 100,
+      js: 'class DocumentationPage extends HTMLElement { connectedCallback(){ return [documentationRoutes.length, docsNs.documentationRoutes.length, purify(1)].length; } }\nwindow.DocumentationPage = DocumentationPage;\nreturn DocumentationPage;',
+      html: '',
+      css: '',
+      externalDependencies: {
+        'App/documentationRoutes.js': {
+          content: 'export const documentationRoutes = ["/docs"];',
+          bindings: [
+            { type: 'named', importedName: 'documentationRoutes', localName: 'documentationRoutes' },
+            { type: 'namespace', localName: 'docsNs' }
+          ]
+        },
+        'App/purify.js': {
+          content: 'export default (value) => value;',
+          bindings: [{ type: 'default', importedName: 'default', localName: 'purify' }]
+        }
+      }
+    }],
+    '/docs'
+  );
+
+  assert.match(source, /const __sliceSharedDeps = window\.__SLICE_SHARED_DEPS__ \|\| \{\};/);
+  assert.match(source, /const __sliceResolveBundleDependency = \(depName\) => Object\.prototype\.hasOwnProperty\.call\(__sliceSharedDeps, depName\) \? __sliceSharedDeps\[depName\] : SLICE_BUNDLE_DEPENDENCIES\[depName\];/);
+  assert.doesNotMatch(source, /SLICE_BUNDLE_DEPENDENCIES\["App\/documentationRoutes\.js"\] = __sliceDepExports\d+;/);
+  assert.match(source, /SLICE_BUNDLE_DEPENDENCIES\["App\/purify\.js"\] = __sliceDepExports\d+;/);
+  assert.match(source, /const documentationRoutes = __sliceResolveBundleDependency\("App\/documentationRoutes\.js"\)\.documentationRoutes;/);
+  assert.match(source, /const docsNs = __sliceResolveBundleDependency\("App\/documentationRoutes\.js"\);/);
+  assert.match(source, /const purify = __sliceResolveDefaultExport\(__sliceResolveBundleDependency\("App\/purify\.js"\), "App\/purify\.js", "purifyData"\);/);
 });
 
 test('bundle output hoists allowed absolute imports to module top-level', () => {

@@ -1153,7 +1153,11 @@ export default class BundleGenerator {
         : this.routeToFileName(routePath || fileName.replace('slice-bundle.', '').replace('.js', ''));
 
     const dependencyModules = this.collectDependencyModulesFromComponents(uniqueComponents);
-    const dependencyModuleBlock = this.buildV2DependencyModuleBlock(uniqueComponents);
+    const isRouteBundle = type === 'route';
+    const dependencyModuleBlock = this.buildV2DependencyModuleBlock(uniqueComponents, {
+      includeSharedResolver: isRouteBundle,
+      omittedDependencies: isRouteBundle ? this.vendorShared.sharedDependencySet : null
+    });
     const rawHoistedImports = uniqueComponents
       .flatMap((component) => component.hoistedImports || [])
       .map((statement) => String(statement).trim())
@@ -1172,7 +1176,9 @@ export default class BundleGenerator {
     const classFactoryDefinitions = uniqueComponents
       .map((component) => {
         const factoryName = this.classFactoryName(component.name);
-        const dependencyBindings = this.buildDependencyBindings(component.externalDependencies || {});
+        const dependencyBindings = this.buildDependencyBindings(component.externalDependencies || {}, {
+          preferShared: isRouteBundle
+        });
         const body = component.js && component.js.trim()
           ? component.js
           : `return window.${component.name};`;
@@ -1234,18 +1240,25 @@ export default class BundleGenerator {
     return `${hoistedImportBlock}${hoistedImportBlock ? '\n\n' : ''}export const SLICE_BUNDLE_META = ${JSON.stringify(metadata, null, 2)};\n\n${dependencyModuleBlock}\n\n${classFactoryDefinitions}\n\n${templateDeclarations}\n\nexport async function registerAll(controller, stylesManager) {\n${classRegistrations}\n${templateRegistrations}\n${cssRegistrationInit}${cssRegistrationInit ? '\n' : ''}${cssRegistrations}\n${categoryRegistrations}\n}\n`;
   }
 
-  buildV2DependencyModuleBlock(components) {
+  buildV2DependencyModuleBlock(components, options = {}) {
     const modules = this.collectDependencyModulesFromComponents(components);
-    return this.buildV2DependencyModuleBlockFromModules(modules);
+    return this.buildV2DependencyModuleBlockFromModules(modules, options);
   }
 
-  buildV2DependencyModuleBlockFromModules(modules = []) {
+  buildV2DependencyModuleBlockFromModules(modules = [], options = {}) {
+    const omittedDependencies = options.omittedDependencies instanceof Set
+      ? options.omittedDependencies
+      : new Set(options.omittedDependencies || []);
+    const filteredModules = modules.filter((module) => !omittedDependencies.has(module.name));
 
     const lines = [
       'const SLICE_BUNDLE_DEPENDENCIES = {};',
       ...this.getDefaultExportResolverLines()
     ];
-    modules.forEach((module, index) => {
+    if (options.includeSharedResolver) {
+      lines.push(...this.getBundleDependencyResolverLines());
+    }
+    filteredModules.forEach((module, index) => {
       const exportVar = `__sliceDepExports${index}`;
       const transformedContent = this.transformDependencyContent(module.content, exportVar, module.name);
       lines.push(`const ${exportVar} = {};`);
@@ -1519,11 +1532,13 @@ if (window.slice && window.slice.controller) {
     return `${componentDefs.join('\n\n')}\n\nconst SLICE_BUNDLE_COMPONENTS = {\n${componentEntries.join(',\n')}\n};\n${frameworkBlock}`;
   }
 
-  buildDependencyBindings(externalDependencies) {
+  buildDependencyBindings(externalDependencies, options = {}) {
     const lines = [];
     Object.entries(externalDependencies).forEach(([name, entry]) => {
       const bindings = typeof entry === 'string' ? [] : entry.bindings || [];
-      const depVar = `SLICE_BUNDLE_DEPENDENCIES[${JSON.stringify(name)}]`;
+      const depVar = options.preferShared
+        ? `__sliceResolveBundleDependency(${JSON.stringify(name)})`
+        : `SLICE_BUNDLE_DEPENDENCIES[${JSON.stringify(name)}]`;
 
       bindings.forEach((binding) => {
         if (!binding?.localName) return;
@@ -1541,6 +1556,13 @@ if (window.slice && window.slice.controller) {
     });
 
     return lines.join('\n');
+  }
+
+  getBundleDependencyResolverLines() {
+    return [
+      'const __sliceSharedDeps = window.__SLICE_SHARED_DEPS__ || {};',
+      'const __sliceResolveBundleDependency = (depName) => Object.prototype.hasOwnProperty.call(__sliceSharedDeps, depName) ? __sliceSharedDeps[depName] : SLICE_BUNDLE_DEPENDENCIES[depName];'
+    ];
   }
 
   getDefaultExportResolverLines() {
