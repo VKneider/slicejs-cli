@@ -19,6 +19,7 @@ import { promisify } from "util";
 import validations from "./commands/Validations.js";
 import Print from "./commands/Print.js";
 import build from './commands/build/build.js';
+import { runGenerateTypes } from './commands/types/types.js';
 import { cleanBundles, bundleInfo } from './commands/bundle/bundle.js';
 import {
   isLocalDelegationDisabled,
@@ -389,6 +390,27 @@ componentCommand
 // REGISTRY COMMAND GROUP - For component registry operations
 const registryCommand = sliceClient.command("registry").alias("reg").description("Manage components from official Slice.js repository");
 
+// TYPES COMMAND GROUP - TypeScript declarations from static props
+const typesCommand = sliceClient.command("types").description("Generate TypeScript declarations from component static props");
+
+typesCommand
+  .command("generate")
+  .description("Generate src/slice-build.generated.d.ts for slice.build autocomplete")
+  .option("-o, --output <path>", "Custom output path", "src/slice-build.generated.d.ts")
+  .action(async (options) => {
+    await runWithVersionCheck(async () => {
+      const projectRoot = getProjectRoot(import.meta.url);
+      const outputPath = path.isAbsolute(options.output)
+        ? options.output
+        : path.join(projectRoot, options.output);
+
+      await runGenerateTypes({
+        projectRoot,
+        outputPath
+      });
+    });
+  });
+
 // GET COMPONENTS FROM REGISTRY
 registryCommand
   .command("get [components...]")
@@ -529,12 +551,14 @@ Common Usage Examples:
   slice component create         - Create new local component
   slice list                     - List all local components
   slice doctor                   - Run project diagnostics
+  slice types generate           - Generate TypeScript typings for slice.build
 
 Command Categories:
   • init, dev, start             - Project lifecycle (development only)
   • get, browse, sync, list      - Quick shortcuts  
   • component <cmd>              - Local component management
   • registry <cmd>               - Official repository operations
+  • types generate               - Type declarations from static props
   • version, update, doctor      - Maintenance commands
 
 Development Workflow:

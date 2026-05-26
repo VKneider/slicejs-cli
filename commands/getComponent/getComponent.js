@@ -12,8 +12,8 @@ import ora from "ora";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Base URL del repositorio de documentación de Slice.js
-const DOCS_REPO_BASE_URL = 'https://raw.githubusercontent.com/VKneider/slicejs_docs/master/src/Components';
-const COMPONENTS_REGISTRY_URL = 'https://raw.githubusercontent.com/VKneider/slicejs_docs/master/src/Components/components.js';
+const DOCS_REPO_BASE_URL = 'https://raw.githubusercontent.com/VKneider/slice.js_visual_library/master/src/Components';
+const COMPONENTS_REGISTRY_URL = 'https://raw.githubusercontent.com/VKneider/slice.js_visual_library/master/src/Components/components.js';
 
 /**
  * Carga la configuración desde sliceConfig.json
