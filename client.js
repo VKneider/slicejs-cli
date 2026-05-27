@@ -528,6 +528,24 @@ sliceClient
     });
   });
 
+// SETUP COMMAND - Manual alternative to postinstall
+sliceClient
+  .command("setup")
+  .description("Show post-install setup guide (alternative to postinstall for --ignore-scripts users)")
+  .action(() => {
+    const isGlobal = process.env.npm_config_global === 'true';
+    if (isGlobal) {
+      Print.warning('Global installation of slicejs-cli detected.');
+      Print.info('We strongly recommend using a local installation to avoid version mismatches.');
+      Print.info('Uninstall global: npm uninstall -g slicejs-cli');
+      return;
+    }
+    Print.success('slicejs-cli installed successfully.');
+    Print.info('Add the CLI to your package.json scripts:');
+    Print.commandExample('Development server', 'npm run dev');
+    Print.commandExample('Slice dev command', 'slice dev');
+  });
+
 // Enhanced help
 sliceClient
   .option("--no-version-check", "Skip version check for this command")
@@ -552,6 +570,7 @@ Common Usage Examples:
   slice list                     - List all local components
   slice doctor                   - Run project diagnostics
   slice types generate           - Generate TypeScript typings for slice.build
+  slice setup                    - Show post-install setup guide
 
 Command Categories:
   • init, dev, start             - Project lifecycle (development only)
@@ -559,7 +578,7 @@ Command Categories:
   • component <cmd>              - Local component management
   • registry <cmd>               - Official repository operations
   • types generate               - Type declarations from static props
-  • version, update, doctor      - Maintenance commands
+  • version, update, doctor, setup - Maintenance commands
 
 Development Workflow:
   • slice init          - Initialize project
