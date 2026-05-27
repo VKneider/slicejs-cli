@@ -528,22 +528,66 @@ sliceClient
     });
   });
 
-// SETUP COMMAND - Manual alternative to postinstall
+// POSTINSTALL COMMAND - Manual alternative to postinstall
 sliceClient
-  .command("setup")
-  .description("Show post-install setup guide (alternative to postinstall for --ignore-scripts users)")
+  .command("postinstall")
+  .description("Configure npm scripts in package.json (alternative to postinstall for --ignore-scripts users)")
   .action(() => {
     const isGlobal = process.env.npm_config_global === 'true';
     if (isGlobal) {
-      Print.warning('Global installation of slicejs-cli detected.');
-      Print.info('We strongly recommend using a local installation to avoid version mismatches.');
-      Print.info('Uninstall global: npm uninstall -g slicejs-cli');
+      console.log('⚠️  Global installation of slicejs-cli detected.');
+      console.log('   We strongly recommend using a local installation to avoid version mismatches.');
+      console.log('   Uninstall global: npm uninstall -g slicejs-cli');
       return;
     }
-    Print.success('slicejs-cli installed successfully.');
-    Print.info('Add the CLI to your package.json scripts:');
-    Print.commandExample('Development server', 'npm run dev');
-    Print.commandExample('Slice dev command', 'slice dev');
+
+    const projectRoot = getProjectRoot(import.meta.url);
+    const pkgPath = path.join(projectRoot, 'package.json');
+
+    const sliceScripts = {
+      'slice:dev': 'slice dev',
+      'slice:start': 'slice start',
+      'slice:create': 'slice component create',
+      'slice:list': 'slice component list',
+      'slice:delete': 'slice component delete',
+      'slice:init': 'slice init',
+      'slice:get': 'slice get',
+      'slice:browse': 'slice browse',
+      'slice:sync': 'slice sync',
+      'slice:version': 'slice version',
+      'slice:update': 'slice update',
+    };
+
+    try {
+      let pkg = {};
+      if (fs.existsSync(pkgPath)) {
+        pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+      } else {
+        pkg = {
+          name: path.basename(projectRoot),
+          version: '1.0.0',
+          description: 'Slice.js project',
+          scripts: {}
+        };
+      }
+
+      pkg.scripts = pkg.scripts || {};
+      let addedCount = 0;
+      for (const [script, command] of Object.entries(sliceScripts)) {
+        if (!pkg.scripts[script]) {
+          pkg.scripts[script] = command;
+          addedCount++;
+        }
+      }
+
+      fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2), 'utf-8');
+      console.log(`✅  slicejs-cli installed successfully. Added ${addedCount} npm scripts to package.json.`);
+      console.log('   Run: npm run slice:dev');
+    } catch (err) {
+      console.log('✅  slicejs-cli installed successfully.');
+      console.log('   Could not auto-configure scripts:', err.message);
+      console.log('   Run: npx slice dev');
+    }
   });
 
 // Enhanced help
@@ -570,7 +614,7 @@ Common Usage Examples:
   slice list                     - List all local components
   slice doctor                   - Run project diagnostics
   slice types generate           - Generate TypeScript typings for slice.build
-  slice setup                    - Show post-install setup guide
+  slice postinstall              - Show post-install setup guide
 
 Command Categories:
   • init, dev, start             - Project lifecycle (development only)

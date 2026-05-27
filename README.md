@@ -68,6 +68,48 @@ You can disable launcher delegation for a command when needed:
 SLICE_NO_LOCAL_DELEGATION=1 slice version
 ```
 
+### Postinstall Scripts
+
+When you install `slicejs-cli`, the `postinstall` script automatically configures `slice:*` npm scripts in your project's `package.json`.
+
+If you install with `--ignore-scripts` (e.g. `npm install slicejs-cli --save-dev --ignore-scripts`), the postinstall hook is skipped. Run the following command to configure the scripts manually:
+
+```bash
+npx slicejs-cli postinstall
+```
+
+Or if `slice` is available in your PATH:
+
+```bash
+slice postinstall
+```
+
+This adds the following npm scripts to your `package.json`:
+
+```json
+{
+  "scripts": {
+    "slice:dev": "slice dev",
+    "slice:start": "slice start",
+    "slice:create": "slice component create",
+    "slice:list": "slice component list",
+    "slice:delete": "slice component delete",
+    "slice:init": "slice init",
+    "slice:get": "slice get",
+    "slice:browse": "slice browse",
+    "slice:sync": "slice sync",
+    "slice:version": "slice version",
+    "slice:update": "slice update"
+  }
+}
+```
+
+Then run your project with:
+
+```bash
+npm run slice:dev
+```
+
 ### Global (Not Recommended)
 
 Global installations can lead to version mismatches and "works on my machine" issues.
