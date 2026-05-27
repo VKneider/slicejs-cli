@@ -11,74 +11,74 @@
   </p>
 </div>
 
-## Sobre este repositorio
+## About this repository
 
-Este repositorio contiene el CLI de Slice.js (`slicejs-cli`), la herramienta de línea de comandos para desarrollar aplicaciones con el framework. Incluye servidor de desarrollo, sistema de builds, gestión de componentes y más.
+This repository contains the Slice.js CLI (`slicejs-cli`), the command-line tool for developing applications with the Slice.js framework. It includes a development server, build system, component management, and more.
 
-## Requisitos
+## Prerequisites
 
 - Node.js >= 20
-- npm o pnpm
+- npm or pnpm
 
-## Desarrollo local
+## Local development
 
-1. **Clonar el repositorio**
+1. **Clone the repository**
    ```bash
    git clone https://github.com/VKneider/slicejs-cli.git
    cd slicejs-cli
    ```
 
-2. **Instalar dependencias**
+2. **Install dependencies**
    ```bash
    npm install
    ```
 
-3. **Probar cambios localmente**
+3. **Test changes locally**
    ```bash
    node client.js --help
    ```
 
-   Para evitar que delegue a una instalación global:
+   To bypass delegation to a global installation:
    ```bash
    SLICE_NO_LOCAL_DELEGATION=1 node client.js --help
    ```
 
-4. **Ejecutar tests**
+4. **Run tests**
    ```bash
    npm test
    ```
 
-## Instalación (para usuarios)
+## Installation (for users)
 
-### Local (Recomendada)
+### Local (Recommended)
 
 ```bash
 npm install slicejs-cli --save-dev
 ```
 
-### Global (No recomendada)
+### Global (Not recommended)
 
 ```bash
 npm install -g slicejs-cli
 ```
 
-## Comandos principales
+## Main commands
 
-| Comando | Descripción |
+| Command | Description |
 |---------|-------------|
-| `slice init` | Inicializar un proyecto Slice.js |
-| `slice dev` | Servidor de desarrollo con hot reload |
-| `slice build` | Compilar para producción |
-| `slice start` | Servir build de producción |
-| `slice get <componente>` | Instalar componentes del registro oficial |
-| `slice browse` | Explorar componentes disponibles |
-| `slice component create` | Crear componente local |
-| `slice doctor` | Diagnosticar el proyecto |
-| `slice postinstall` | Configurar scripts npm (alternativa a postinstall) |
+| `slice init` | Initialize a Slice.js project |
+| `slice dev` | Development server with hot reload |
+| `slice build` | Build for production |
+| `slice start` | Serve production build |
+| `slice get <component>` | Install components from the official registry |
+| `slice browse` | Browse available components |
+| `slice component create` | Create a local component |
+| `slice doctor` | Run project diagnostics |
+| `slice postinstall` | Configure npm scripts (alternative to postinstall) |
 
 ## Postinstall Scripts
 
-Al instalar `slicejs-cli`, el script `postinstall` configura automáticamente los scripts `slice:*` en tu `package.json`:
+When you install `slicejs-cli`, the `postinstall` script automatically configures `slice:*` npm scripts in your `package.json`:
 
 ```json
 {
@@ -98,47 +98,47 @@ Al instalar `slicejs-cli`, el script `postinstall` configura automáticamente lo
 }
 ```
 
-Si instalaste con `--ignore-scripts`, ejecuta manualmente:
+If you installed with `--ignore-scripts`, run manually:
 
 ```bash
 npx slicejs-cli postinstall
 ```
 
-## Inicio rápido
+## Quick start
 
 ```bash
-# 1. Crear proyecto
+# 1. Create project
 mkdir my-project && cd my-project
 npm init -y
 
-# 2. Instalar CLI
+# 2. Install CLI
 npm install slicejs-cli --save-dev
 
-# 3. Inicializar
+# 3. Initialize
 npx slicejs-cli init
 
-# 4. Desarrollo
+# 4. Development
 npx slicejs-cli dev
 ```
 
 ## Tests
 
-El CLI usa el test runner nativo de Node.js:
+The CLI uses Node.js native test runner:
 
 ```bash
-# Todos los tests
+# All tests
 node --test
 
-# Tests específicos
+# Specific tests
 node --test tests/postinstall-command.test.js
 ```
 
-## Estructura del proyecto
+## Project structure
 
 ```
 slicejs-cli/
-├── client.js              # Entry point del CLI
-├── commands/              # Implementación de comandos
+├── client.js              # CLI entry point
+├── commands/              # Command implementations
 │   ├── init/              # slice init
 │   ├── build/             # slice build
 │   ├── startServer/       # slice dev / slice start
@@ -148,24 +148,24 @@ slicejs-cli/
 └── post.js                # Postinstall hook
 ```
 
-## Delegación local
+## Local delegation
 
-Cuando el comando `slice` está disponible globalmente, automáticamente delega al CLI local del proyecto (`node_modules/slicejs-cli`). Para deshabilitar:
+When the `slice` command is globally available, it automatically delegates to the project-local CLI (`node_modules/slicejs-cli`). To disable:
 
 ```bash
 SLICE_NO_LOCAL_DELEGATION=1 slice version
 ```
 
-## Contribuir
+## Contributing
 
-Damos la bienvenida a contribuciones. Revisa las guías en [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) antes de enviar cambios.
+We welcome contributions. Please review the guidelines in [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) before submitting changes.
 
-## Licencia
+## License
 
-Distribuido bajo licencia ISC. Ver `LICENSE` para más información.
+Distributed under the ISC License. See `LICENSE` for more information.
 
 ## Links
 
-- 📘 Documentación: https://slice-js-docs.vercel.app/Documentation/CLI
+- 📘 Documentation: https://slice-js-docs.vercel.app/Documentation/CLI
 - 🐙 GitHub: https://github.com/VKneider/slicejs-cli
 - 📦 npm: https://www.npmjs.com/package/slicejs-cli
