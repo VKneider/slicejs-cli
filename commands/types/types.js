@@ -427,13 +427,17 @@ const ensureEditorConfigForTypes = async ({ projectRoot, outputPath }) => {
       return `${dir}/**/*.d.ts`;
     })();
 
-    if (!(await fs.pathExists(jsconfigPath))) {
+    const writeDefaultJsconfig = async () => {
       const jsconfig = {
         compilerOptions: { ...DEFAULT_EDITOR_COMPILER_OPTIONS },
         include: [...DEFAULT_EDITOR_INCLUDE, declarationGlob],
         exclude: [...DEFAULT_EDITOR_EXCLUDE]
       };
       await fs.writeFile(jsconfigPath, `${JSON.stringify(jsconfig, null, 2)}\n`, 'utf8');
+    };
+
+    if (!(await fs.pathExists(jsconfigPath))) {
+      await writeDefaultJsconfig();
       return { mode: 'created_jsconfig', filePath: jsconfigPath, includeAdded: true };
     }
 
@@ -441,14 +445,19 @@ const ensureEditorConfigForTypes = async ({ projectRoot, outputPath }) => {
     try {
       jsconfigRaw = await fs.readFile(jsconfigPath, 'utf8');
     } catch {
-      return { mode: 'jsconfig_unreadable', filePath: jsconfigPath, includeAdded: false };
+      // Don't fail — fall back to writing the default options.
+      await writeDefaultJsconfig();
+      return { mode: 'reset_jsconfig', reason: 'unreadable', filePath: jsconfigPath, includeAdded: true };
     }
 
     let parsed;
     try {
       parsed = JSON.parse(jsconfigRaw);
     } catch {
-      return { mode: 'jsconfig_invalid_json', filePath: jsconfigPath, includeAdded: false };
+      // The jsconfig was edited into invalid JSON (a typo, comments, trailing commas...).
+      // Don't fail — just write the default options so editor IntelliSense keeps working.
+      await writeDefaultJsconfig();
+      return { mode: 'reset_jsconfig', reason: 'invalid_json', filePath: jsconfigPath, includeAdded: true };
     }
 
     const include = Array.isArray(parsed.include) ? parsed.include : [];
@@ -513,12 +522,10 @@ const runGenerateTypes = async ({ projectRoot, outputPath }) => {
     Print.info(`jsconfig.json already includes declaration glob. Editor IntelliSense should pick generated types.`);
   } else if (editorConfig.mode === 'tsconfig_exists') {
     Print.info(`tsconfig.json detected. Types declaration is generated; ensure include covers ${toPosixRelative(projectRoot, outputPath)}.`);
-  } else if (editorConfig.mode === 'jsconfig_invalid_json') {
-    Print.warning(`Could not update jsconfig.json because it contains invalid JSON.`);
-    Print.info(`Fix ${editorConfig.filePath} and run 'slice types generate' again.`);
-  } else if (editorConfig.mode === 'jsconfig_unreadable') {
-    Print.warning(`Could not read jsconfig.json to verify declaration include.`);
-    Print.info(`Check permissions for ${editorConfig.filePath} and run 'slice types generate' again.`);
+  } else if (editorConfig.mode === 'reset_jsconfig') {
+    const why = editorConfig.reason === 'invalid_json' ? 'contained invalid JSON' : 'could not be read';
+    Print.warning(`jsconfig.json ${why}; wrote the default options so editor IntelliSense keeps working.`);
+    Print.info(`Review ${editorConfig.filePath} if you had custom settings there.`);
   } else if (editorConfig.mode === 'editor_config_error') {
     Print.warning(`Unexpected editor config setup error: ${editorConfig.errorMessage}`);
   }

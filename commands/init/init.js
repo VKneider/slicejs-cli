@@ -11,6 +11,18 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Importar la clase ComponentRegistry del getComponent
 import { ComponentRegistry } from '../getComponent/getComponent.js';
 
+// Visual components used by the App Shell + MultiRoute starter project.
+// We install only these on init; newcomers add more on demand with `slice get <Name>`.
+const STARTER_VISUAL_COMPONENTS = [
+   'Button',
+   'Link',
+   'Loading',
+   'MultiRoute',
+   'Navbar',
+   'NotFound',
+   'Route'
+];
+
 export default async function initializeProject(projectType) {
     try {
         const projectRoot = getProjectRoot(import.meta.url);
@@ -126,11 +138,12 @@ export default async function initializeProject(projectType) {
             const registry = new ComponentRegistry();
             await registry.loadRegistry();
 
-            // Obtener TODOS los componentes Visual disponibles
-            const allVisualComponents = await getAllVisualComponents(registry);
+            // Install only the Visual components the starter project uses.
+            const allVisualComponents = STARTER_VISUAL_COMPONENTS;
+            Print.info(`Installing ${allVisualComponents.length} starter Visual components: ${allVisualComponents.join(', ')}`);
 
             if (allVisualComponents.length > 0) {
-                componentsSpinner.text = `Installing ${allVisualComponents.length} Visual components...`;
+                componentsSpinner.text = `Installing ${allVisualComponents.length} starter Visual components...`;
 
                 const results = await registry.installMultipleComponents(
                     allVisualComponents,
@@ -200,6 +213,7 @@ export default async function initializeProject(projectType) {
             // Utilidades
             pkg.scripts['slice:version'] = 'slice version';
             pkg.scripts['slice:update'] = 'slice update';
+            pkg.scripts['slice:types'] = 'slice types generate';
 
             // Legacy (compatibilidad)
             pkg.scripts['slice:init'] = 'slice init';
@@ -246,16 +260,6 @@ export default async function initializeProject(projectType) {
     }
 }
 
-/**
- * Obtiene TODOS los componentes Visual disponibles en el registry
- * @param {ComponentRegistry} registry - Instancia del registry cargado
- * @returns {Array} - Array con todos los nombres de componentes Visual
- */
-async function getAllVisualComponents(registry) {
-    const availableComponents = registry.getAvailableComponents('Visual');
-    const allVisualComponents = Object.keys(availableComponents);
-
-    Print.info(`Found ${allVisualComponents.length} Visual components in official repository`);
-
-    return allVisualComponents;
-}
+// NOTE: `slice init` now installs only STARTER_VISUAL_COMPONENTS (see top of file).
+// To install every registry component instead, iterate
+// `Object.keys(registry.getAvailableComponents('Visual'))`.

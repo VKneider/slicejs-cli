@@ -29,6 +29,7 @@ const sliceScripts = {
     'slice:sync': 'slice sync',
     'slice:version': 'slice version',
     'slice:update': 'slice update',
+    'slice:types': 'slice types generate',
 };
 
 try {

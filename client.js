@@ -249,10 +249,11 @@ const componentCommand = sliceClient.command("component").alias("comp").descript
 
 // CREATE LOCAL COMPONENT
 componentCommand
-  .command("create")
+  .command("create [name]")
   .alias("new")
   .description("Create a new component in your local project")
-  .action(async () => {
+  .option("-c, --category <category>", "Component category (e.g. Visual, Service, AppComponents). Skips the prompt when provided.")
+  .action(async (name, options) => {
     await runWithVersionCheck(async () => {
       const categories = getCategories();
       if (categories.length === 0) {
@@ -262,8 +263,14 @@ componentCommand
         return;
       }
 
-      const answers = await inquirer.prompt([
-        {
+      let componentName = name;
+      let category = options.category;
+
+      // Prompt only for the values not supplied on the command line. Passing both
+      // a name and --category runs fully non-interactively (handy for scripts/agents).
+      const prompts = [];
+      if (!componentName) {
+        prompts.push({
           type: "input",
           name: "componentName",
           message: "Enter the component name:",
@@ -274,18 +281,28 @@ componentCommand
             }
             return true;
           },
-        },
-        {
+        });
+      }
+      if (!category) {
+        prompts.push({
           type: "list",
           name: "category",
           message: "Select the component category:",
           choices: categories,
-        }
-      ]);
+        });
+      }
 
-      const result = createComponent(answers.componentName, answers.category);
+      if (prompts.length > 0) {
+        const answers = await inquirer.prompt(prompts);
+        componentName = componentName ?? answers.componentName;
+        category = category ?? answers.category;
+      }
+
+      // createComponent validates the name and the category (and reports a clear
+      // error listing valid categories if --category is wrong).
+      const result = createComponent(componentName, category);
       if (result) {
-        Print.success(`Component '${answers.componentName}' created successfully in category '${answers.category}'`);
+        Print.success(`Component '${componentName}' created successfully in category '${category}'`);
         Print.info("Listing updated components:");
         listComponents();
       }
@@ -306,10 +323,12 @@ componentCommand
 
 // DELETE LOCAL COMPONENT
 componentCommand
-  .command("delete")
+  .command("delete [name]")
   .alias("remove")
   .description("Delete a component from your local project")
-  .action(async () => {
+  .option("-c, --category <category>", "Component category. Skips the category prompt when provided.")
+  .option("-y, --yes", "Skip the confirmation prompt (for non-interactive use)")
+  .action(async (name, options) => {
     await runWithVersionCheck(async () => {
       const categories = getCategories();
       if (categories.length === 0) {
@@ -319,24 +338,35 @@ componentCommand
       }
 
       try {
-        // Paso 1: Seleccionar categoría
-        const categoryAnswer = await inquirer.prompt([
-          {
-            type: "list",
-            name: "category",
-            message: "Select the component category:",
-            choices: categories,
-          }
-        ]);
+        let category = options.category;
+        let componentName = name;
 
-        // Paso 2: Listar componentes de esa categoría
+        // Resolve category (prompt only if not provided)
+        if (!category) {
+          const categoryAnswer = await inquirer.prompt([
+            {
+              type: "list",
+              name: "category",
+              message: "Select the component category:",
+              choices: categories,
+            }
+          ]);
+          category = categoryAnswer.category;
+        }
+
         const config = loadConfig();
         if (!config) {
           Print.error("Could not load configuration");
           return;
         }
 
-        const categoryPath = config.paths.components[categoryAnswer.category].path;
+        if (!config.paths.components[category]) {
+          Print.error(`Invalid category: '${category}'`);
+          Print.info(`Available categories: ${categories.join(", ")}`);
+          return;
+        }
+
+        const categoryPath = config.paths.components[category].path;
         const fullPath = path.join(__dirname, "../../src", categoryPath);
 
         if (!fs.existsSync(fullPath)) {
@@ -344,40 +374,48 @@ componentCommand
           return;
         }
 
-        const components = fs.readdirSync(fullPath).filter(item => {
-          const itemPath = path.join(fullPath, item);
-          return fs.statSync(itemPath).isDirectory();
-        });
+        // Resolve component name (prompt with a list only if not provided)
+        if (!componentName) {
+          const components = fs.readdirSync(fullPath).filter(item => {
+            const itemPath = path.join(fullPath, item);
+            return fs.statSync(itemPath).isDirectory();
+          });
 
-        if (components.length === 0) {
-          Print.info(`No components found in category '${categoryAnswer.category}'`);
-          return;
-        }
-
-        // Paso 3: Seleccionar componente a eliminar
-        const componentAnswer = await inquirer.prompt([
-          {
-            type: "list",
-            name: "componentName",
-            message: "Select the component to delete:",
-            choices: components,
-          },
-          {
-            type: "confirm",
-            name: "confirm",
-            message: (answers) => `Are you sure you want to delete '${answers.componentName}'?`,
-            default: false,
+          if (components.length === 0) {
+            Print.info(`No components found in category '${category}'`);
+            return;
           }
-        ]);
 
-        if (!componentAnswer.confirm) {
-          Print.info("Delete operation cancelled");
-          return;
+          const componentAnswer = await inquirer.prompt([
+            {
+              type: "list",
+              name: "componentName",
+              message: "Select the component to delete:",
+              choices: components,
+            }
+          ]);
+          componentName = componentAnswer.componentName;
         }
 
-        // Paso 4: Eliminar el componente
-        if (deleteComponent(componentAnswer.componentName, categoryAnswer.category)) {
-          Print.success(`Component ${componentAnswer.componentName} deleted successfully`);
+        // Confirm unless --yes was passed (passing name + --category + --yes is fully non-interactive)
+        if (!options.yes) {
+          const { confirm } = await inquirer.prompt([
+            {
+              type: "confirm",
+              name: "confirm",
+              message: `Are you sure you want to delete '${componentName}' from '${category}'?`,
+              default: false,
+            }
+          ]);
+          if (!confirm) {
+            Print.info("Delete operation cancelled");
+            return;
+          }
+        }
+
+        // deleteComponent validates the name/category and that the component exists.
+        if (deleteComponent(componentName, category)) {
+          Print.success(`Component ${componentName} deleted successfully`);
           Print.info("Listing updated components:");
           listComponents();
         }
