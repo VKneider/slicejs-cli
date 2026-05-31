@@ -1,16 +1,13 @@
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import Table from 'cli-table3';
 import chalk from 'chalk';
 import Print from '../Print.js';
 import { getSrcPath, getComponentsJsPath, getConfigPath } from '../utils/PathHelper.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
 /**
- * Carga la configuración desde sliceConfig.json
- * @returns {object} - Objeto de configuración
+ * Loads configuration from sliceConfig.json
+ * @returns {object} - Configuration object
  */
 const loadConfig = () => {
     try {
@@ -30,9 +27,9 @@ const loadConfig = () => {
 };
 
 /**
- * Lista los archivos en una carpeta dada, filtrando solo los archivos .js
- * @param {string} folderPath - Ruta de la carpeta a leer
- * @returns {string[]} - Lista de archivos encontrados
+ * Lists files in a given folder, filtering only .js files
+ * @param {string} folderPath - Path of the folder to read
+ * @returns {string[]} - List of found files
  */
 const listComponents = (folderPath) => {
     try {
@@ -48,7 +45,7 @@ const listComponents = (folderPath) => {
 };
 
 /**
- * Cuenta archivos en un directorio de componente
+ * Counts files in a component directory
  */
 const countComponentFiles = (componentPath) => {
     try {
@@ -61,14 +58,14 @@ const countComponentFiles = (componentPath) => {
 };
 
 /**
- * Obtiene los componentes dinámicamente desde sliceConfig.json
- * @returns {object} - Mapeo de componentes con su categoría
+ * Gets components dynamically from sliceConfig.json
+ * @returns {object} - Component mapping with their category
  */
 const getComponents = () => {
     const config = loadConfig();
     if (!config) return {};
 
-    const folderSuffix = 'src'; // Siempre usar 'src' para desarrollo
+    const folderSuffix = 'src'; // Always use 'src' for development
     const componentPaths = config.paths?.components || {};
     let allComponents = new Map();
 
@@ -91,7 +88,7 @@ const getComponents = () => {
 
 function listComponentsReal() {
     try {
-        // Obtener componentes dinámicamente
+        // Get components dynamically
         const components = getComponents();
 
         if (Object.keys(components).length === 0) {
@@ -100,7 +97,7 @@ function listComponentsReal() {
             return;
         }
 
-        // Crear tabla con cli-table3
+        // Create table with cli-table3
         const table = new Table({
             head: [
                 chalk.cyan.bold('Component'),
@@ -114,7 +111,7 @@ function listComponentsReal() {
             }
         });
 
-        // Agrupar por categoría para mejor visualización
+        // Group by category for better visualization
         const byCategory = {};
         Object.entries(components).forEach(([name, data]) => {
             if (!byCategory[data.category]) {
@@ -123,18 +120,18 @@ function listComponentsReal() {
             byCategory[data.category].push({ name, files: data.files });
         });
 
-        // Agregar filas a la tabla
+        // Add rows to the table
         Object.entries(byCategory).forEach(([category, comps]) => {
             comps.forEach((comp, index) => {
                 if (index === 0) {
-                    // Primera fila de la categoría
+                    // First row of the category
                     table.push([
                         chalk.bold(comp.name),
                         chalk.yellow(category),
                         comp.files.toString()
                     ]);
                 } else {
-                    // Resto de componentes en la categoría
+                    // Rest of components in the category
                     table.push([
                         chalk.bold(comp.name),
                         chalk.gray('″'),  // Ditto mark
@@ -151,16 +148,16 @@ function listComponentsReal() {
         Print.newLine();
         Print.info(`Total: ${Object.keys(components).length} component${Object.keys(components).length !== 1 ? 's' : ''} found`);
 
-        // Ruta donde se generará components.js
+        // Path where components.js will be generated
         const outputPath = getComponentsJsPath(import.meta.url);
 
-        // Asegurar que el directorio existe
+        // Ensure the directory exists
         const outputDir = path.dirname(outputPath);
         if (!fs.existsSync(outputDir)) {
             fs.mkdirSync(outputDir, { recursive: true });
         }
 
-        // Generar archivo components.js con los componentes detectados
+        // Generate components.js file with detected components
         const componentsForExport = Object.fromEntries(
             Object.entries(components).map(([name, data]) => [name, data.category])
         );

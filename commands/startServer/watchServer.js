@@ -3,9 +3,9 @@ import chalk from 'chalk';
 import Print from '../Print.js';
 
 /**
- * Configura el watcher para archivos del proyecto
- * @param {ChildProcess} serverProcess - Proceso del servidor
- * @returns {FSWatcher} - Watcher de chokidar
+ * Configures the watcher for project files
+ * @param {ChildProcess} serverProcess - Server process
+ * @returns {FSWatcher} - Chokidar watcher
  */
 export default function setupWatcher(serverProcess, onRestart) {
     Print.info('Watch mode enabled - monitoring file changes...');
@@ -13,7 +13,7 @@ export default function setupWatcher(serverProcess, onRestart) {
 
     const watcher = chokidar.watch(['src/**/*', 'api/**/*'], {
         ignored: [
-            /(^|[\/\\])\../,  // archivos ocultos
+            /(^|[\/\\])\../,  // hidden files
             '**/node_modules/**',
             '**/dist/**',
             '**/bundles/**',
@@ -31,7 +31,7 @@ export default function setupWatcher(serverProcess, onRestart) {
 
     watcher
         .on('change', (path) => {
-            // Debounce para evitar múltiples reloads
+            // Debounce to avoid multiple reloads
             clearTimeout(reloadTimeout);
             reloadTimeout = setTimeout(() => {
                 if(onRestart) {
@@ -68,8 +68,8 @@ export default function setupWatcher(serverProcess, onRestart) {
 }
 
 /**
- * Detiene el watcher de forma segura
- * @param {FSWatcher} watcher - Watcher a detener
+ * Stops the watcher safely
+ * @param {FSWatcher} watcher - Watcher to stop
  */
 export function stopWatcher(watcher) {
     if (watcher) {

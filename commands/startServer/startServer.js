@@ -1,19 +1,16 @@
-// commands/startServer/startServer.js - MEJORADO CON VALIDACIÓN Y FEEDBACK
+// commands/startServer/startServer.js - IMPROVED WITH VALIDATION AND FEEDBACK
 
 import fs from 'fs-extra';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { createServer } from 'net';
 import setupWatcher, { stopWatcher } from './watchServer.js';
 import Print from '../Print.js';
-import { getConfigPath, getApiPath, getSrcPath, getDistPath } from '../utils/PathHelper.js';
+import { getConfigPath, getApiPath, getSrcPath, getDistPath, getPath } from '../utils/PathHelper.js';
 import build from '../build/build.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
 /**
- * Carga la configuración desde sliceConfig.json
+ * Loads configuration from sliceConfig.json
  */
 const loadConfig = () => {
   try {
@@ -27,7 +24,7 @@ const loadConfig = () => {
 };
 
 /**
- * Verifica si un puerto está disponible
+ * Checks if a port is available
  */
 async function isPortAvailable(port) {
   return new Promise((resolve) => {
@@ -51,16 +48,16 @@ async function isPortAvailable(port) {
 }
 
 /**
- * Verifica si existe un build de producción
+ * Checks if a production build exists
  */
 async function checkProductionBuild() {
   const distDir = getDistPath(import.meta.url);
-  const bundleConfigPath = path.join(distDir, 'bundles', 'bundle.config.json');
+  const bundleConfigPath = getPath(import.meta.url, 'dist', 'bundles', 'bundle.config.json');
   return (await fs.pathExists(distDir)) && (await fs.pathExists(bundleConfigPath));
 }
 
 /**
- * Verifica si existe la estructura de desarrollo
+ * Checks if the development structure exists
  */
 async function checkDevelopmentStructure() {
   const srcDir = getSrcPath(import.meta.url);
@@ -70,13 +67,13 @@ async function checkDevelopmentStructure() {
 }
 
 /**
- * Inicia el servidor Node.js con argumentos y mejor feedback
+ * Starts the Node.js server with arguments and improved feedback
  */
 function startNodeServer(port, mode) {
   return new Promise((resolve, reject) => {
     const apiIndexPath = getApiPath(import.meta.url, 'index.js');
 
-    // Verificar que el archivo existe
+    // Verify the file exists
     if (!fs.existsSync(apiIndexPath)) {
       reject(new Error(`Server file not found: ${apiIndexPath}`));
       return;
@@ -84,7 +81,7 @@ function startNodeServer(port, mode) {
 
     Print.serverStatus('starting', 'Starting server...');
 
-    // Construir argumentos basados en el modo
+    // Build arguments based on mode
     const args = [apiIndexPath];
     if (mode === 'production') {
       args.push('--production');
@@ -109,12 +106,12 @@ function startNodeServer(port, mode) {
     let serverStarted = false;
     let outputBuffer = '';
 
-    // Capturar la salida para detectar cuando el servidor está listo
+    // Capture output to detect when the server is ready
     serverProcess.stdout.on('data', (data) => {
       const output = data.toString();
       outputBuffer += output;
 
-      // Detectar mensajes comunes que indican que el servidor ha iniciado
+      // Detect common messages indicating the server has started
       if (!serverStarted && (
         output.includes('Server running') ||
         output.includes('listening on') ||
@@ -125,7 +122,7 @@ function startNodeServer(port, mode) {
         Print.serverReady(port);
       }
 
-      // Mostrar la salida del servidor
+      // Display server output
       process.stdout.write(output);
     });
 
@@ -161,7 +158,7 @@ function startNodeServer(port, mode) {
       serverProcess.kill('SIGTERM');
     });
 
-    // Si después de 3 segundos no detectamos inicio, asumimos que está listo
+    // If after 3 seconds we haven't detected startup, assume it's ready
     setTimeout(() => {
       if (!serverStarted) {
         serverStarted = true;
@@ -173,7 +170,7 @@ function startNodeServer(port, mode) {
 }
 
 /**
- * Función principal para iniciar servidor
+ * Main function to start the server
  */
 export default async function startServer(options = {}) {
   const config = loadConfig();
@@ -185,7 +182,7 @@ export default async function startServer(options = {}) {
     Print.title(`🚀 Starting Slice.js ${mode} server...`);
     Print.newLine();
 
-    // Verificar estructura del proyecto
+    // Verify project structure
     if (!await checkDevelopmentStructure()) {
       throw new Error('Project structure not found. Run "slice init" first.');
     }
@@ -204,7 +201,7 @@ export default async function startServer(options = {}) {
     Print.newLine();
 
     if (mode === 'production') {
-      // Verificar que existe build de producción
+      // Verify production build exists
       if (!await checkProductionBuild()) {
         Print.info('No production build found. Running "slice build"...');
         const success = await build({});
@@ -219,10 +216,10 @@ export default async function startServer(options = {}) {
 
     Print.newLine();
 
-    // Iniciar el servidor con argumentos
+    // Start the server with arguments
     let serverProcess = await startNodeServer(actualPort, mode);
 
-    // Configurar watch mode si está habilitado
+    // Configure watch mode if enabled
     if (watch) {
       Print.newLine();
       const watcher = setupWatcher(serverProcess, async (changedPath) => {
@@ -253,12 +250,12 @@ export default async function startServer(options = {}) {
 
   } catch (error) {
     Print.newLine();
-    Print.error(error.message);
+    Print.error(`Failed to start development server: ${error.message}`);
     throw error;
   }
 }
 
 /**
- * Funciones de utilidad exportadas
+ * Exported utility functions
  */
 export { checkProductionBuild, checkDevelopmentStructure, isPortAvailable };

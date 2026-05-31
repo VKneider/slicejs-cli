@@ -2,21 +2,19 @@
 import componentTemplates from './VisualComponentTemplate.js';
 import fs from 'fs-extra';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import Validations from '../Validations.js';
 import Print from '../Print.js';
 import { getSrcPath } from '../utils/PathHelper.js';
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function createComponent(componentName, category) {
-    // Validación: Nombre de componente requerido
+    // Validation: Component name is required
     if (!componentName) {
         Print.error('Component name is required');
         Print.commandExample("Create a component", "slice component create");
         return false;
     }
 
-    // Validación: Nombre de componente válido
+    // Validation: Valid component name
     if (!Validations.isValidComponentName(componentName)) {
         Print.error(`Invalid component name: '${componentName}'`);
         Print.info('Component name must start with a letter and contain only alphanumeric characters');
@@ -25,7 +23,7 @@ function createComponent(componentName, category) {
         return false;
     }
 
-    // Validación: Componente ya existe
+    // Validation: Component already exists
     if(Validations.componentExists(componentName)){
         Print.error(`Component '${componentName}' already exists in your project`);
         Print.info('Please use a different name or delete the existing component first');
@@ -33,7 +31,7 @@ function createComponent(componentName, category) {
         return false;
     }
 
-    // Validación: Categoría válida
+    // Validation: Valid category
     let flagCategory = Validations.isValidCategory(category);
 
     if (!flagCategory.isValid) {
@@ -44,14 +42,14 @@ function createComponent(componentName, category) {
     }
     category = flagCategory.category;
 
-    // Crear el nombre de la clase y del archivo
+    // Create class name and file name
     const className = componentName.charAt(0).toUpperCase() + componentName.slice(1);
     const fileName = `${className}.js`;
     let template;
 
     const type = Validations.getCategoryType(category);
 
-    // Generar template según el tipo
+    // Generate template based on type
     if(type === 'Visual'){
        template = componentTemplates.visual(className);
     } else if(type === 'Service'){
@@ -67,7 +65,7 @@ function createComponent(componentName, category) {
     const componentDir = getSrcPath(import.meta.url, categoryPathClean, className);
     
     try {
-        // Crear directorio del componente
+        // Create component directory
         fs.ensureDirSync(componentDir);
     } catch (error) {
         Print.error(`Failed to create component directory: '${componentDir}'`);
@@ -75,10 +73,10 @@ function createComponent(componentName, category) {
         return false;
     }
 
-    // Determinar la ruta del archivo
+    // Determine the file path
     let componentPath = path.join(componentDir, fileName);
 
-    // Verificar si el archivo ya existe (doble verificación)
+    // Verify if the file already exists (double check)
     if (fs.existsSync(componentPath)) {
         Print.error(`Component file already exists at: '${componentPath}'`);
         Print.info('This component may have been created outside the CLI');
@@ -86,13 +84,13 @@ function createComponent(componentName, category) {
     }
 
     try {
-        // Escribir el código del componente en el archivo
+        // Write component code to file
         fs.writeFileSync(componentPath, template);
 
-        // Si es Visual, crear archivos adicionales (CSS y HTML)
+        // If Visual, create additional files (CSS and HTML)
         if(type === 'Visual'){
-            const cssPath = `${componentDir}/${className}.css`;
-            const htmlPath = `${componentDir}/${className}.html`;
+            const cssPath = path.join(componentDir, `${className}.css`);
+            const htmlPath = path.join(componentDir, `${className}.html`);
             
             fs.writeFileSync(cssPath, '/* Styles for ' + componentName + ' component */\n');
             fs.writeFileSync(htmlPath, `<div class="${componentName.toLowerCase()}">\n  ${componentName}\n</div>`);
@@ -107,7 +105,7 @@ function createComponent(componentName, category) {
         Print.error(`Failed to create component files`);
         Print.info(`Error details: ${error.message}`);
         
-        // Intentar limpiar archivos parcialmente creados
+        // Try to clean up partially created files
         try {
             if (fs.existsSync(componentDir)) {
                 fs.removeSync(componentDir);

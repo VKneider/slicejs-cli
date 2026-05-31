@@ -3,12 +3,10 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import ora from 'ora';
 import Print from '../Print.js';
-import { getProjectRoot, getApiPath, getSrcPath } from '../utils/PathHelper.js';
+import { getProjectRoot, getApiPath, getSrcPath, getPath } from '../utils/PathHelper.js';
 import { execSync } from 'child_process';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// Importar la clase ComponentRegistry del getComponent
+// Import ComponentRegistry class from getComponent
 import { ComponentRegistry } from '../getComponent/getComponent.js';
 
 // Visual components used by the App Shell + MultiRoute starter project.
@@ -35,7 +33,7 @@ export default async function initializeProject(projectType) {
         try {
             const latest = execSync('npm view slicejs-web-framework version', { cwd: projectRoot }).toString().trim();
             latestVersion = latest;
-            const installedPkgPath = path.join(projectRoot, 'node_modules', 'slicejs-web-framework', 'package.json');
+            const installedPkgPath = getPath(import.meta.url, 'node_modules', 'slicejs-web-framework', 'package.json');
             let installed = null;
             if (await fs.pathExists(installedPkgPath)) {
                 const pkg = await fs.readJson(installedPkgPath);
@@ -44,9 +42,11 @@ export default async function initializeProject(projectType) {
             if (installed !== latest) {
                 execSync(`npm install slicejs-web-framework@${latest} --save`, { cwd: projectRoot, stdio: 'inherit' });
             }
-            sliceBaseDir = path.join(projectRoot, 'node_modules', 'slicejs-web-framework');
+            sliceBaseDir = getPath(import.meta.url, 'node_modules', 'slicejs-web-framework');
             fwSpinner.succeed(`slicejs-web-framework@${latest} ready`);
         } catch (err) {
+            // Fallback uses __dirname-style path because it looks for a local development copy,
+            // not a project-relative path — npm install failed, so we fall back to monorepo sibling.
             const fallback = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../../slicejs-web-framework');
             if (await fs.pathExists(fallback)) {
                 sliceBaseDir = fallback;
@@ -58,6 +58,8 @@ export default async function initializeProject(projectType) {
             }
         }
 
+        // These derive from sliceBaseDir (which comes from npm install or fallback),
+        // so they're already dynamic — no PathHelper needed.
         const apiDir = path.join(sliceBaseDir, 'api');
         const srcDir = path.join(sliceBaseDir, 'src');
 
@@ -69,7 +71,7 @@ export default async function initializeProject(projectType) {
             return;
         }
 
-        // 1. COPIAR LA CARPETA API (mantener lógica original)
+        // 1. COPY API FOLDER (keep original logic)
         const apiSpinner = ora('Copying API structure...').start();
         try {
             if (!fs.existsSync(apiDir)) throw new Error(`API folder not found: ${apiDir}`);
@@ -81,15 +83,15 @@ export default async function initializeProject(projectType) {
             return;
         }
 
-        // 2. CREAR ESTRUCTURA SRC BÁSICA (sin copiar componentes Visual)
+        // 2. CREATE BASIC SRC STRUCTURE (without copying Visual components)
         const srcSpinner = ora('Creating src structure...').start();
         try {
             if (!fs.existsSync(srcDir)) throw new Error(`src folder not found: ${srcDir}`);
 
-            // Copiar solo los archivos base de src, excluyendo Components/Visual
+            // Copy only base src files, excluding Components/Visual
             await fs.ensureDir(destinationSrc);
 
-            // Copiar archivos y carpetas de src excepto Components/Visual
+            // Copy src files and folders except Components/Visual
             const srcItems = await fs.readdir(srcDir);
 
             for (const item of srcItems) {
@@ -99,7 +101,7 @@ export default async function initializeProject(projectType) {
 
                 if (stat.isDirectory()) {
                     if (item === 'Components') {
-                        // Crear estructura de Components pero sin copiar Visual
+                        // Create Components structure but without copying Visual
                         await fs.ensureDir(destItemPath);
 
                         const componentItems = await fs.readdir(srcItemPath);
@@ -132,7 +134,7 @@ export default async function initializeProject(projectType) {
             return;
         }
 
-        // 3. DESCARGAR TODOS LOS COMPONENTES VISUAL DESDE EL REPOSITORIO OFICIAL
+        // 3. DOWNLOAD ALL VISUAL COMPONENTS FROM OFFICIAL REPOSITORY
         const componentsSpinner = ora('Loading component registry...').start();
         try {
             const registry = new ComponentRegistry();
@@ -148,7 +150,7 @@ export default async function initializeProject(projectType) {
                 const results = await registry.installMultipleComponents(
                     allVisualComponents,
                     'Visual',
-                    true // force = true para instalación inicial
+                    true // force = true for initial installation
                 );
 
                 const successful = results.filter(r => r.success).length;
@@ -174,11 +176,11 @@ export default async function initializeProject(projectType) {
             Print.info('You can add them later using "slice get <component-name>"');
         }
 
-        // 4. CONFIGURAR SCRIPTS EN package.json DEL PROYECTO
+        // 4. CONFIGURE SCRIPTS IN PROJECT package.json
         const pkgSpinner = ora('Configuring npm scripts...').start();
         try {
             const projectRoot = getProjectRoot(import.meta.url);
-            const pkgPath = path.join(projectRoot, 'package.json');
+            const pkgPath = getPath(import.meta.url, 'package.json');
 
             let pkg;
             if (await fs.pathExists(pkgPath)) {
@@ -200,7 +202,7 @@ export default async function initializeProject(projectType) {
             pkg.scripts['dev'] = 'slice dev';
             pkg.scripts['start'] = 'slice start';
 
-            // Gestión de componentes
+            // Component management
             pkg.scripts['component:create'] = 'slice component create';
             pkg.scripts['component:list'] = 'slice component list';
             pkg.scripts['component:delete'] = 'slice component delete';
@@ -215,7 +217,7 @@ export default async function initializeProject(projectType) {
             pkg.scripts['slice:update'] = 'slice update';
             pkg.scripts['slice:types'] = 'slice types generate';
 
-            // Legacy (compatibilidad)
+            // Legacy (compatibility)
             pkg.scripts['slice:init'] = 'slice init';
             pkg.scripts['slice:start'] = 'slice start';
             pkg.scripts['slice:dev'] = 'slice dev';
@@ -227,7 +229,7 @@ export default async function initializeProject(projectType) {
             pkg.scripts['slice:sync'] = 'slice sync';
             pkg.scripts['run'] = 'slice dev';
 
-            // Configuración de módulo
+            // Module configuration
             pkg.type = 'module';
             pkg.engines = pkg.engines || { node: '>=20.0.0' };
 
@@ -239,7 +241,7 @@ export default async function initializeProject(projectType) {
             await fs.writeFile(pkgPath, JSON.stringify(pkg, null, 2), 'utf8');
             pkgSpinner.succeed('npm scripts configured successfully');
 
-            console.log('\n🎯 New recommended commands:');
+            Print.title('New recommended commands:');
             console.log('  npm run dev            - Start development server');
             console.log('  npm run get            - Install components');
             console.log('  npm run browse         - Browse components');
@@ -248,9 +250,11 @@ export default async function initializeProject(projectType) {
         Print.error(error.message);
         }
 
-        Print.success('Project initialized successfully.');
+        const projectName = path.basename(process.cwd());
+        Print.success(`Project initialized successfully in "${projectName}/"`);
         Print.newLine();
-        Print.info('Next steps:');
+        Print.title('Next steps:');
+        console.log(`  cd ${projectName}`);
         console.log('  slice browse          - View available components');
         console.log('  slice get Button      - Install specific components');
         console.log('  slice sync            - Update all components to latest versions');

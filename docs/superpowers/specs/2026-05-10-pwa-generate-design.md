@@ -1,64 +1,64 @@
-# Diseno de `slice generate-pwa` (V1)
+# Design of `slice generate-pwa` (V1)
 
-## Objetivo
+## Objective
 
-Agregar un comando dedicado de CLI, `slice generate-pwa`, que convierta un build de Slice en una PWA usable offline, con estrategia de cache configurable y exclusion explicita de dominios de backend para evitar cache accidental de APIs REST.
+Add a dedicated CLI command, `slice generate-pwa`, that converts a Slice build into an offline-capable PWA, with configurable cache strategy and explicit backend domain exclusion to prevent accidental REST API caching.
 
-El comando debe ser postbundle, operar sobre `dist/` y mantener una experiencia simple de V1.
+The command must be post-bundle, operate on `dist/`, and maintain a simple V1 experience.
 
-## Alcance V1
+## V1 Scope
 
-- Nuevo comando `slice generate-pwa`.
-- Ejecutar `build` automaticamente antes del proceso PWA.
-- Generar `manifest.json` en `dist/`.
-- Generar `sw.js` en `dist/`.
-- Registrar Service Worker en el HTML de entrada de `dist`.
-- Soportar estrategias: `hybrid` (default), `offline-first`, `network-first`.
-- Persistir y leer configuracion desde `src/sliceConfig.json` en:
+- New `slice generate-pwa` command.
+- Automatically run `build` before the PWA process.
+- Generate `manifest.json` in `dist/`.
+- Generate `sw.js` in `dist/`.
+- Register Service Worker in the entry HTML of `dist`.
+- Support strategies: `hybrid` (default), `offline-first`, `network-first`.
+- Persist and read configuration from `src/sliceConfig.json` in:
   - `pwa.cache.excludeDomains`.
-- Aplicar exclusion efectiva de `localhost` y `127.0.0.1` en desarrollo.
+- Apply effective exclusion of `localhost` and `127.0.0.1` in development.
 
-## Fuera de alcance V1
+## Out of V1 Scope
 
-- Exclusion por paths o headers (`excludePaths`, `excludeHeaders`).
-- UI interactiva avanzada para crear iconos PWA.
-- Soporte de push notifications, background sync o runtime caching avanzado por tipo de API.
-- Plugin system formal; se deja preparado para evolucion futura.
+- Exclusion by paths or headers (`excludePaths`, `excludeHeaders`).
+- Advanced interactive UI for creating PWA icons.
+- Support for push notifications, background sync, or advanced runtime caching by API type.
+- Formal plugin system; left prepared for future evolution.
 
-## UX del comando
+## Command UX
 
-### Sintaxis
+### Syntax
 
 ```bash
 slice generate-pwa
 slice generate-pwa --strategy hybrid
 slice generate-pwa --strategy offline-first
 slice generate-pwa --strategy network-first
-slice generate-pwa --name "Mi App" --short-name "MiApp"
+slice generate-pwa --name "My App" --short-name "MyApp"
 ```
 
-### Flags V1
+### V1 Flags
 
 - `--strategy <hybrid|offline-first|network-first>` (default: `hybrid`)
 - `--name <string>`
 - `--short-name <string>`
 
-### Flujo de ejecucion
+### Execution flow
 
-1. Ejecuta build de produccion.
-2. Lee y normaliza configuracion PWA en `src/sliceConfig.json`.
-3. Genera manifiesto de assets para precache desde `dist/`.
-4. Genera `dist/manifest.json`.
-5. Genera `dist/sw.js` con la estrategia seleccionada.
-6. Inyecta (o asegura) registro SW en HTML de entrada de `dist`.
-7. Imprime resumen final:
-   - estrategia usada,
-   - cantidad de assets precacheados,
-   - dominios excluidos efectivos.
+1. Run production build.
+2. Read and normalize PWA configuration from `src/sliceConfig.json`.
+3. Generate asset manifest for precache from `dist/`.
+4. Generate `dist/manifest.json`.
+5. Generate `dist/sw.js` with the selected strategy.
+6. Inject (or ensure) SW registration in entry HTML of `dist`.
+7. Print final summary:
+   - strategy used,
+   - number of precached assets,
+   - effective excluded domains.
 
-## Configuracion en `sliceConfig.json`
+## Configuration in `sliceConfig.json`
 
-Seccion minima V1:
+V1 minimal section:
 
 ```json
 {
@@ -70,113 +70,113 @@ Seccion minima V1:
 }
 ```
 
-Reglas:
+Rules:
 
-- Si `pwa` no existe, el comando crea la seccion sin romper configuracion previa.
-- `excludeDomains` acepta hosts exactos (ej: `api.midominio.com`).
-- En ejecucion de desarrollo, se agregan de forma efectiva (no necesariamente persistida) `localhost` y `127.0.0.1`.
+- If `pwa` does not exist, the command creates the section without breaking existing configuration.
+- `excludeDomains` accepts exact hosts (e.g., `api.mydomain.com`).
+- In development execution, `localhost` and `127.0.0.1` are effectively added (not necessarily persisted).
 
-## Arquitectura propuesta
+## Proposed Architecture
 
-### Integracion CLI
+### CLI Integration
 
-- Agregar comando en `client.js`:
+- Add command in `client.js`:
   - `generate-pwa`
-  - opcion `--strategy`
-  - opciones de nombre para manifest
+  - `--strategy` option
+  - name options for manifest
 
-### Modulos nuevos
+### New Modules
 
 - `commands/pwa/generatePwa.js`
-  - Orquestador del flujo completo.
+  - Orchestrator of the complete flow.
 - `commands/pwa/ConfigResolver.js`
-  - Lee/crea/normaliza `pwa.cache.excludeDomains`.
+  - Reads/creates/normalizes `pwa.cache.excludeDomains`.
 - `commands/pwa/AssetManifestBuilder.js`
-  - Recorre `dist/` y arma lista precache.
+  - Iterates `dist/` and builds precache list.
 - `commands/pwa/ManifestGenerator.js`
-  - Genera `manifest.json` con defaults y overrides por flags.
+  - Generates `manifest.json` with defaults and flag overrides.
 - `commands/pwa/ServiceWorkerGenerator.js`
-  - Genera `sw.js` con estrategia seleccionada y exclusiones.
+  - Generates `sw.js` with selected strategy and exclusions.
 
-## Diseno de cache
+## Cache Design
 
-### Reglas globales
+### Global Rules
 
-- Interceptar solo requests `GET`.
-- Si el host esta en `excludeDomains`, hacer `fetch` directo (sin cache).
-- Versionado de cache por build id (timestamp o hash de build).
-- Al activar nuevo SW, limpiar caches viejas automaticamente.
+- Intercept only `GET` requests.
+- If the host is in `excludeDomains`, do a direct `fetch` (no cache).
+- Cache versioning by build id (timestamp or build hash).
+- On new SW activation, automatically clean old caches.
 
-### Estrategias
+### Strategies
 
 - `hybrid` (default):
-  - assets estaticos -> `cache-first`.
-  - navegacion HTML -> `network-first` con fallback offline.
+  - static assets -> `cache-first`.
+  - HTML navigation -> `network-first` with offline fallback.
 - `offline-first`:
-  - navegacion + estaticos -> `cache-first`.
-  - update en background cuando haya red.
+  - navigation + static -> `cache-first`.
+  - background update when online.
 - `network-first`:
-  - navegacion -> `network-first`.
-  - estaticos precacheados como respaldo.
+  - navigation -> `network-first`.
+  - precached static assets as fallback.
 
-## Manejo de API REST y seguridad
+## REST API and Security Handling
 
-Para evitar cache de backend no deseado:
+To prevent unwanted backend caching:
 
-- Exclusion por dominio con `excludeDomains` (regla principal de V1).
-- Limitar runtime cache a activos del frontend y navegacion segun estrategia.
-- No cachear metodos distintos de `GET`.
+- Domain exclusion via `excludeDomains` (main V1 rule).
+- Limit runtime cache to frontend assets and navigation per strategy.
+- Do not cache methods other than `GET`.
 
-Resultado: los assets del cliente se aceleran offline, pero el backend queda fuera de cache por configuracion explicita.
+Result: client assets are accelerated offline, but the backend stays out of the cache via explicit configuration.
 
 ## Error handling
 
-- Si build falla, abortar `generate-pwa` con mensaje claro.
-- Si `dist/` no existe tras build, abortar con diagnostico.
-- Si `sliceConfig.json` es invalido, mostrar error con sugerencia de reparacion.
-- Si no se puede inyectar registro SW en HTML, reportar warning y ruta objetivo.
+- If build fails, abort `generate-pwa` with a clear message.
+- If `dist/` does not exist after build, abort with diagnostics.
+- If `sliceConfig.json` is invalid, show error with repair suggestion.
+- If SW registration cannot be injected into HTML, report warning and target path.
 
 ## Testing
 
 ### Unit tests
 
 - `ConfigResolver`:
-  - crea seccion `pwa.cache.excludeDomains` cuando no existe,
-  - respeta config existente.
+  - creates `pwa.cache.excludeDomains` section when it does not exist,
+  - respects existing config.
 - `AssetManifestBuilder`:
-  - incluye assets esperados,
-  - excluye archivos no aptos.
+  - includes expected assets,
+  - excludes unsuitable files.
 - `ServiceWorkerGenerator`:
-  - genera logica correcta por estrategia,
-  - respeta `excludeDomains`.
+  - generates correct logic per strategy,
+  - respects `excludeDomains`.
 
-### Integracion
+### Integration
 
-- `slice generate-pwa` ejecuta build y crea `dist/manifest.json` + `dist/sw.js`.
-- registro SW presente en HTML de salida.
-- exclusiones de dominio aplicadas en codigo generado.
+- `slice generate-pwa` runs build and creates `dist/manifest.json` + `dist/sw.js`.
+- SW registration present in output HTML.
+- domain exclusions applied in generated code.
 
-### E2E manual minima
+### Minimal E2E manual
 
 - Build + generate-pwa.
-- Abrir app, validar installability (manifest).
-- Apagar red, validar navegacion offline en `hybrid`.
-- Verificar que requests a dominio excluido no se sirven desde cache SW.
+- Open app, validate installability (manifest).
+- Turn off network, validate offline navigation in `hybrid`.
+- Verify that requests to excluded domain are not served from SW cache.
 
-## Plan de evolucion (post V1)
+## Evolution Plan (post V1)
 
-- `excludePaths` y `excludeHeaders`.
-- soporte de iconos y shortcuts PWA asistidos.
-- estrategia por ruta (ej: `/api/*` network-only).
-- extraer pipeline postbundle reusable para otras features.
+- `excludePaths` and `excludeHeaders`.
+- Assisted PWA icon and shortcut support.
+- Per-route strategy (e.g., `/api/*` network-only).
+- Extract reusable postbundle pipeline for other features.
 
-## Criterios de aceptacion
+## Acceptance Criteria
 
-- Existe comando `slice generate-pwa` funcional.
-- Ejecuta build antes de generar artefactos PWA.
-- Genera `manifest.json` y `sw.js` en `dist/`.
-- Registra SW en HTML principal de salida.
-- `hybrid` es default con HTML `network-first` y fallback offline.
-- Lee/escribe `pwa.cache.excludeDomains` en `src/sliceConfig.json`.
-- Excluye dominios configurados del cache runtime.
-- Muestra resumen final legible al usuario.
+- Functional `slice generate-pwa` command exists.
+- Runs build before generating PWA artifacts.
+- Generates `manifest.json` and `sw.js` in `dist/`.
+- Registers SW in main output HTML.
+- `hybrid` is default with HTML `network-first` and offline fallback.
+- Reads/writes `pwa.cache.excludeDomains` in `src/sliceConfig.json`.
+- Excludes configured domains from runtime cache.
+- Shows a readable final summary to the user.

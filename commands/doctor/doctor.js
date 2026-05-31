@@ -1,6 +1,5 @@
 import fs from 'fs-extra';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { createServer } from 'net';
 import chalk from 'chalk';
 import Table from 'cli-table3';
@@ -11,10 +10,8 @@ import { promisify } from 'util';
 import { getProjectRoot, getSrcPath, getApiPath, getConfigPath, getPath } from '../utils/PathHelper.js';
 import updateManager from '../utils/updateManager.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
 /**
- * Verifica la versión de Node.js
+ * Checks the Node.js version
  */
 async function checkNodeVersion() {
     const currentVersion = process.version;
@@ -36,7 +33,7 @@ async function checkNodeVersion() {
 }
 
 /**
- * Verifica la estructura de directorios
+ * Checks the directory structure
  */
 async function checkDirectoryStructure() {
     const srcPath = getSrcPath(import.meta.url);
@@ -64,7 +61,7 @@ async function checkDirectoryStructure() {
 }
 
 /**
- * Verifica sliceConfig.json
+ * Checks sliceConfig.json
  */
 async function checkConfig() {
     const configPath = getConfigPath(import.meta.url);
@@ -102,7 +99,7 @@ async function checkConfig() {
 }
 
 /**
- * Verifica disponibilidad del puerto
+ * Checks port availability
  */
 async function checkPort() {
     const configPath = getConfigPath(import.meta.url);
@@ -113,7 +110,7 @@ async function checkPort() {
             const config = await fs.readJson(configPath);
             port = config.server?.port || 3000;
         }
-    } catch { }
+    } catch { /* config missing or unreadable — use default port */ }
 
     return new Promise((resolve) => {
         const server = createServer();
@@ -146,11 +143,11 @@ async function checkPort() {
 }
 
 /**
- * Verifica dependencias en package.json
+ * Checks dependencies in package.json
  */
 async function checkDependencies() {
     const projectRoot = getProjectRoot(import.meta.url);
-    const packagePath = path.join(projectRoot, 'package.json');
+    const packagePath = getPath(import.meta.url, 'package.json');
 
     if (!await fs.pathExists(packagePath)) {
         return {
@@ -163,7 +160,7 @@ async function checkDependencies() {
     try {
         const pkg = await fs.readJson(packagePath);
         const hasFrameworkDep = pkg.dependencies?.['slicejs-web-framework'] || pkg.devDependencies?.['slicejs-web-framework'];
-        const frameworkNodePath = path.join(projectRoot, 'node_modules', 'slicejs-web-framework', 'package.json');
+        const frameworkNodePath = getPath(import.meta.url, 'node_modules', 'slicejs-web-framework', 'package.json');
         const hasFrameworkNode = await fs.pathExists(frameworkNodePath);
         const hasFramework = !!(hasFrameworkDep || hasFrameworkNode);
 
@@ -194,7 +191,7 @@ async function checkDependencies() {
 }
 
 /**
- * Verifica integridad de componentes
+ * Checks component integrity
  */
 async function checkComponents() {
     const configPath = getConfigPath(import.meta.url);
@@ -228,7 +225,7 @@ async function checkComponents() {
                     if (stat.isDirectory()) {
                         totalComponents++;
 
-                        // Verificar archivos JS
+                        // Check JS files
                         const jsFile = path.join(itemPath, `${item}.js`);
                         if (!await fs.pathExists(jsFile)) {
                             componentIssues++;
@@ -260,7 +257,7 @@ async function checkComponents() {
 }
 
 /**
- * Comando principal de diagnóstico
+ * Main diagnostic command
  */
 export default async function runDiagnostics() {
     Print.newLine();

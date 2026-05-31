@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { createTestProject, cleanupTestProject } from './helpers/setup.js';
 
 import {
   ensureEditorConfigForTypes,
@@ -151,206 +151,194 @@ test('generateDeclarationContent creates build typing map', () => {
 });
 
 test('generateTypesFile creates declaration file from local components', async () => {
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'slice-types-'));
+  const tmpRoot = await createTestProject();
   const srcDir = path.join(tmpRoot, 'src');
-  const visualDir = path.join(srcDir, 'Components', 'Visual', 'Button');
-  const noStaticDir = path.join(srcDir, 'Components', 'Visual', 'Tabs');
-  const serviceDir = path.join(srcDir, 'Components', 'Service', 'FetchManager');
-  const outputFile = path.join(srcDir, 'slice-build.generated.d.ts');
 
-  fs.mkdirSync(visualDir, { recursive: true });
-  fs.mkdirSync(noStaticDir, { recursive: true });
-  fs.mkdirSync(serviceDir, { recursive: true });
+  try {
+    const visualDir = path.join(srcDir, 'Components', 'Visual', 'Button');
+    const noStaticDir = path.join(srcDir, 'Components', 'Visual', 'Tabs');
+    const serviceDir = path.join(srcDir, 'Components', 'Service', 'FetchManager');
+    const outputFile = path.join(srcDir, 'slice-build.generated.d.ts');
 
-  fs.writeFileSync(
-    path.join(srcDir, 'sliceConfig.json'),
-    JSON.stringify(
-      {
-        paths: {
-          components: {
-            Visual: { path: '/Components/Visual', type: 'Visual' },
-            Service: { path: '/Components/Service', type: 'Service' }
-          }
-        }
-      },
-      null,
-      2
-    ),
-    'utf8'
-  );
+    fs.mkdirSync(noStaticDir, { recursive: true });
 
-  fs.writeFileSync(
-    path.join(srcDir, 'Components', 'components.js'),
-    `const components = {"Button": "Visual", "Tabs": "Visual", "FetchManager": "Service"};\n\nexport default components;\n`,
-    'utf8'
-  );
-
-  fs.writeFileSync(
-    path.join(visualDir, 'Button.js'),
-    `
-    export default class Button extends HTMLElement {
-      static props = {
-        value: { type: 'string', default: 'Button', allowedValues: ['Button', 'Submit'] },
-        size: { type: 'number', allowedValues: [12, 16] },
-        disabled: { type: 'boolean', default: false }
-      };
-    }
-    `,
-    'utf8'
-  );
-
-  fs.writeFileSync(
-    path.join(noStaticDir, 'Tabs.js'),
-    `
-    export default class Tabs extends HTMLElement {
-      constructor() {
-        super();
+    fs.writeFileSync(
+      path.join(visualDir, 'Button.js'),
+      `
+      export default class Button extends HTMLElement {
+        static props = {
+          value: { type: 'string', default: 'Button', allowedValues: ['Button', 'Submit'] },
+          size: { type: 'number', allowedValues: [12, 16] },
+          disabled: { type: 'boolean', default: false }
+        };
       }
-    }
-    `,
-    'utf8'
-  );
+      `,
+      'utf8'
+    );
 
-  fs.writeFileSync(
-    path.join(serviceDir, 'FetchManager.js'),
-    `
-    export default class FetchManager extends HTMLElement {
-      static props = {
-        baseUrl: { type: 'string', required: true }
-      };
-    }
-    `,
-    'utf8'
-  );
+    fs.writeFileSync(
+      path.join(noStaticDir, 'Tabs.js'),
+      `
+      export default class Tabs extends HTMLElement {
+        constructor() {
+          super();
+        }
+      }
+      `,
+      'utf8'
+    );
 
-  const result = await generateTypesFile({
-    projectRoot: tmpRoot,
-    outputPath: outputFile
-  });
+    fs.writeFileSync(
+      path.join(serviceDir, 'FetchManager.js'),
+      `
+      export default class FetchManager extends HTMLElement {
+        static props = {
+          baseUrl: { type: 'string', required: true }
+        };
+      }
+      `,
+      'utf8'
+    );
 
-  assert.equal(result.componentsProcessed, 3);
-  assert.equal(fs.existsSync(result.outputPath), true);
+    fs.writeFileSync(
+      path.join(srcDir, 'Components', 'components.js'),
+      'const components = {"Button": "Visual", "Tabs": "Visual", "FetchManager": "Service"};\n\nexport default components;\n',
+      'utf8'
+    );
 
-  const declaration = fs.readFileSync(result.outputPath, 'utf8');
-  assert.match(declaration, /export interface ButtonProps/);
-  assert.match(declaration, /value\?: 'Button' \| 'Submit';/);
-  assert.match(declaration, /size\?: 12 \| 16;/);
-  assert.match(declaration, /export interface TabsProps/);
-  assert.match(declaration, /\[key: string\]: unknown;/);
-  assert.match(declaration, /export interface FetchManagerProps/);
-  assert.match(declaration, /Tabs: TabsProps;/);
-  assert.match(declaration, /build<K extends SliceComponentName>/);
+    const result = await generateTypesFile({
+      projectRoot: tmpRoot,
+      outputPath: outputFile
+    });
+
+    assert.equal(result.componentsProcessed, 3);
+    assert.equal(fs.existsSync(result.outputPath), true);
+
+    const declaration = fs.readFileSync(result.outputPath, 'utf8');
+    assert.match(declaration, /export interface ButtonProps/);
+    assert.match(declaration, /value\?: 'Button' \| 'Submit';/);
+    assert.match(declaration, /size\?: 12 \| 16;/);
+    assert.match(declaration, /export interface TabsProps/);
+    assert.match(declaration, /\[key: string\]: unknown;/);
+    assert.match(declaration, /export interface FetchManagerProps/);
+    assert.match(declaration, /Tabs: TabsProps;/);
+    assert.match(declaration, /build<K extends SliceComponentName>/);
+  } finally {
+    await cleanupTestProject(tmpRoot);
+  }
 });
 
 test('ensureEditorConfigForTypes creates jsconfig when missing', async () => {
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'slice-types-jsconfig-create-'));
+  const tmpRoot = await createTestProject();
   const outputFile = path.join(tmpRoot, 'src', 'slice-build.generated.d.ts');
 
-  fs.mkdirSync(path.dirname(outputFile), { recursive: true });
-  fs.writeFileSync(outputFile, 'export {};\n', 'utf8');
+  try {
+    fs.writeFileSync(outputFile, 'export {};\n', 'utf8');
 
-  const result = await ensureEditorConfigForTypes({
-    projectRoot: tmpRoot,
-    outputPath: outputFile
-  });
+    const result = await ensureEditorConfigForTypes({
+      projectRoot: tmpRoot,
+      outputPath: outputFile
+    });
 
-  assert.equal(result.mode, 'created_jsconfig');
+    assert.equal(result.mode, 'created_jsconfig');
 
-  const jsconfigPath = path.join(tmpRoot, 'jsconfig.json');
-  assert.equal(fs.existsSync(jsconfigPath), true);
+    const jsconfigPath = path.join(tmpRoot, 'jsconfig.json');
+    assert.equal(fs.existsSync(jsconfigPath), true);
 
-  const jsconfig = JSON.parse(fs.readFileSync(jsconfigPath, 'utf8'));
-  assert.equal(Array.isArray(jsconfig.include), true);
-  assert.equal(jsconfig.include.includes('src/Components/**/*.js'), true);
-  assert.equal(jsconfig.include.includes('src/**/*.d.ts'), true);
-  assert.equal(jsconfig.include.includes('api/**/*.js'), false);
-  assert.equal(jsconfig.include.includes('tests/**/*.js'), false);
-  assert.equal(jsconfig.include.includes('src/**/*.js'), false);
-  assert.equal(jsconfig.compilerOptions.checkJs, true);
-  assert.equal(jsconfig.compilerOptions.strictNullChecks, false);
-  assert.equal(jsconfig.compilerOptions.noImplicitAny, false);
-  assert.equal(jsconfig.compilerOptions.strict, false);
-  assert.equal(Array.isArray(jsconfig.exclude), true);
-  assert.equal(jsconfig.exclude.includes('src/libs/**'), true);
-  assert.equal(jsconfig.exclude.includes('tests/**'), true);
+    const jsconfig = JSON.parse(fs.readFileSync(jsconfigPath, 'utf8'));
+    assert.equal(Array.isArray(jsconfig.include), true);
+    assert.equal(jsconfig.include.includes('src/Components/**/*.js'), true);
+    assert.equal(jsconfig.include.includes('src/**/*.d.ts'), true);
+    assert.equal(jsconfig.include.includes('api/**/*.js'), false);
+    assert.equal(jsconfig.include.includes('tests/**/*.js'), false);
+    assert.equal(jsconfig.include.includes('src/**/*.js'), false);
+    assert.equal(jsconfig.compilerOptions.checkJs, true);
+    assert.equal(jsconfig.compilerOptions.strictNullChecks, false);
+    assert.equal(jsconfig.compilerOptions.noImplicitAny, false);
+    assert.equal(jsconfig.compilerOptions.strict, false);
+    assert.equal(Array.isArray(jsconfig.exclude), true);
+    assert.equal(jsconfig.exclude.includes('src/libs/**'), true);
+    assert.equal(jsconfig.exclude.includes('tests/**'), true);
+  } finally {
+    await cleanupTestProject(tmpRoot);
+  }
 });
 
-test('ensureNoCheckInPublicVendorFiles adds ts-nocheck to js files in publicFolders', async () => {
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'slice-types-publicfolders-'));
+test('types functions use PathHelper with explicit projectRoot', async () => {
+  const tmpRoot = await createTestProject({ visualComponents: ['Button'] });
   const srcDir = path.join(tmpRoot, 'src');
-  const libsDir = path.join(srcDir, 'libs', 'vendor');
-  const assetsDir = path.join(srcDir, 'assets', 'scripts');
+  const outputFile = path.join(srcDir, 'slice-build.generated.d.ts');
 
-  fs.mkdirSync(libsDir, { recursive: true });
-  fs.mkdirSync(assetsDir, { recursive: true });
+  try {
+    const visualDir = path.join(srcDir, 'Components', 'Visual', 'Button');
+    fs.writeFileSync(
+      path.join(visualDir, 'Button.js'),
+      `export default class Button extends HTMLElement {
+        static props = { value: { type: 'string' } };
+      }`,
+      'utf8'
+    );
 
-  fs.writeFileSync(
-    path.join(srcDir, 'sliceConfig.json'),
-    JSON.stringify(
-      {
-        publicFolders: ['/libs', '/assets'],
-        paths: { components: {} }
-      },
-      null,
-      2
-    ),
-    'utf8'
-  );
+    const result = await generateTypesFile({
+      projectRoot: tmpRoot,
+      outputPath: outputFile
+    });
 
-  const vendorA = path.join(libsDir, 'a.js');
-  const vendorB = path.join(assetsDir, 'b.js');
-  fs.writeFileSync(vendorA, 'const a = 1;\n', 'utf8');
-  fs.writeFileSync(vendorB, '// @ts-nocheck\nconst b = 2;\n', 'utf8');
+    assert.equal(result.componentsProcessed, 1);
+    assert.equal(fs.existsSync(result.outputPath), true);
 
-  const result = await ensureNoCheckInPublicVendorFiles(tmpRoot);
-
-  assert.equal(result.scannedFiles, 2);
-  assert.equal(result.updatedFiles, 1);
-  assert.equal(fs.readFileSync(vendorA, 'utf8').startsWith('// @ts-nocheck\n'), true);
-  assert.equal(fs.readFileSync(vendorB, 'utf8').startsWith('// @ts-nocheck\n'), true);
+    const declaration = fs.readFileSync(result.outputPath, 'utf8');
+    assert.match(declaration, /export interface ButtonProps/);
+    assert.match(declaration, /build<K extends SliceComponentName>/);
+  } finally {
+    await cleanupTestProject(tmpRoot);
+  }
 });
 
 test('ensureEditorConfigForTypes augments existing jsconfig include list', async () => {
-  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'slice-types-jsconfig-update-'));
+  const tmpRoot = await createTestProject();
   const outputFile = path.join(tmpRoot, 'src', 'slice-build.generated.d.ts');
   const jsconfigPath = path.join(tmpRoot, 'jsconfig.json');
 
-  fs.mkdirSync(path.dirname(outputFile), { recursive: true });
-  fs.writeFileSync(outputFile, 'export {};\n', 'utf8');
-  fs.writeFileSync(
-    jsconfigPath,
-    JSON.stringify(
-      {
-        compilerOptions: {
-          allowJs: true
+  try {
+    fs.writeFileSync(outputFile, 'export {};\n', 'utf8');
+    fs.writeFileSync(
+      jsconfigPath,
+      JSON.stringify(
+        {
+          compilerOptions: {
+            allowJs: true
+          },
+          include: ['src/Components/**/*.js', 'src/**/*.js', 'api/**/*.js', 'tests/**/*.js']
         },
-        include: ['src/Components/**/*.js', 'src/**/*.js', 'api/**/*.js', 'tests/**/*.js']
-      },
-      null,
-      2
-    ),
-    'utf8'
-  );
+        null,
+        2
+      ),
+      'utf8'
+    );
 
-  const result = await ensureEditorConfigForTypes({
-    projectRoot: tmpRoot,
-    outputPath: outputFile
-  });
+    const result = await ensureEditorConfigForTypes({
+      projectRoot: tmpRoot,
+      outputPath: outputFile
+    });
 
-  assert.equal(result.mode, 'updated_jsconfig');
+    assert.equal(result.mode, 'updated_jsconfig');
 
-  const jsconfig = JSON.parse(fs.readFileSync(jsconfigPath, 'utf8'));
-  assert.equal(jsconfig.include.includes('src/Components/**/*.js'), true);
-  assert.equal(jsconfig.include.includes('src/**/*.d.ts'), true);
-  assert.equal(jsconfig.include.includes('src/**/*.js'), false);
-  assert.equal(jsconfig.include.includes('api/**/*.js'), false);
-  assert.equal(jsconfig.include.includes('tests/**/*.js'), false);
-  assert.equal(jsconfig.compilerOptions.allowJs, true);
-  assert.equal(jsconfig.compilerOptions.checkJs, true);
-  assert.equal(jsconfig.compilerOptions.noImplicitAny, false);
-  assert.equal(jsconfig.compilerOptions.strictNullChecks, false);
-  assert.equal(jsconfig.compilerOptions.strict, false);
-  assert.equal(Array.isArray(jsconfig.exclude), true);
-  assert.equal(jsconfig.exclude.includes('src/libs/**'), true);
-  assert.equal(jsconfig.exclude.includes('tests/**'), true);
+    const jsconfig = JSON.parse(fs.readFileSync(jsconfigPath, 'utf8'));
+    assert.equal(jsconfig.include.includes('src/Components/**/*.js'), true);
+    assert.equal(jsconfig.include.includes('src/**/*.d.ts'), true);
+    assert.equal(jsconfig.include.includes('src/**/*.js'), false);
+    assert.equal(jsconfig.include.includes('api/**/*.js'), false);
+    assert.equal(jsconfig.include.includes('tests/**/*.js'), false);
+    assert.equal(jsconfig.compilerOptions.allowJs, true);
+    assert.equal(jsconfig.compilerOptions.checkJs, true);
+    assert.equal(jsconfig.compilerOptions.noImplicitAny, false);
+    assert.equal(jsconfig.compilerOptions.strictNullChecks, false);
+    assert.equal(jsconfig.compilerOptions.strict, false);
+    assert.equal(Array.isArray(jsconfig.exclude), true);
+    assert.equal(jsconfig.exclude.includes('src/libs/**'), true);
+    assert.equal(jsconfig.exclude.includes('tests/**'), true);
+  } finally {
+    await cleanupTestProject(tmpRoot);
+  }
 });

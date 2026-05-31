@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { getProjectRoot } from './commands/utils/PathHelper.js';
+import { getProjectRoot, getPath } from './commands/utils/PathHelper.js';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -15,7 +15,7 @@ if (isGlobal) {
 }
 
 const projectRoot = getProjectRoot(import.meta.url);
-const pkgPath = path.join(projectRoot, 'package.json');
+const pkgPath = getPath(import.meta.url, 'package.json');
 
 const sliceScripts = {
     'slice:dev': 'slice dev',

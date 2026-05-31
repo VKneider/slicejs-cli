@@ -4,13 +4,14 @@ import fs from 'fs-extra';
 import DependencyAnalyzer from '../utils/bundling/DependencyAnalyzer.js';
 import BundleGenerator from '../utils/bundling/BundleGenerator.js';
 import Print from '..//Print.js';
+import { getProjectRoot, getSrcPath } from '../utils/PathHelper.js';
 
 /**
  * Main bundling command
  */
 export default async function bundle(options = {}) {
   const startTime = Date.now();
-  const projectRoot = process.cwd();
+  const projectRoot = getProjectRoot(import.meta.url);
 
   try {
     Print.title('📦 Slice.js Bundle Generator');
@@ -82,14 +83,14 @@ export default async function bundle(options = {}) {
  */
 async function validateProject(projectRoot) {
   const requiredPaths = [
-    'src/Components/components.js',
-    'src/routes.js'
+    getSrcPath(import.meta.url, 'Components', 'components.js'),
+    getSrcPath(import.meta.url, 'routes.js')
   ];
 
-  for (const reqPath of requiredPaths) {
-    const fullPath = path.join(projectRoot, reqPath);
+  for (const fullPath of requiredPaths) {
     if (!await fs.pathExists(fullPath)) {
-      throw new Error(`Required file not found: ${reqPath}`);
+      const relativePath = path.relative(projectRoot, fullPath);
+      throw new Error(`Required file not found: ${relativePath}`);
     }
   }
 }
@@ -146,8 +147,7 @@ function printSummary(result, startTime) {
  * Subcommand: Clean bundles
  */
 export async function cleanBundles() {
-  const projectRoot = process.cwd();
-  const srcPath = path.join(projectRoot, 'src');
+  const srcPath = getSrcPath(import.meta.url);
 
   try {
     Print.title('🧹 Cleaning bundles...');
@@ -166,7 +166,7 @@ export async function cleanBundles() {
     }
 
     // Remove config
-    const configPath = path.join(srcPath, 'bundle.config.json');
+    const configPath = getSrcPath(import.meta.url, 'bundle.config.json');
     if (await fs.pathExists(configPath)) {
       await fs.remove(configPath);
       console.log(`   ✓ Deleted: bundle.config.json`);
@@ -185,8 +185,7 @@ export async function cleanBundles() {
  * Subcommand: Bundle information
  */
 export async function bundleInfo() {
-  const projectRoot = process.cwd();
-  const configPath = path.join(projectRoot, 'src/bundle.config.json');
+  const configPath = getSrcPath(import.meta.url, 'bundle.config.json');
 
   try {
     if (!await fs.pathExists(configPath)) {

@@ -43,7 +43,7 @@ export default class Print {
         console.log(chalk.gray('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
     }
 
-    // Métodos para el contexto específico del CLI
+    // Methods for CLI-specific context
     static componentSuccess(componentName, action = 'processed') {
         console.log(chalk.green(`✅ ${componentName} ${action} successfully!`));
     }
@@ -56,12 +56,8 @@ export default class Print {
         console.log(chalk.cyan(`  📥 Downloading ${fileName}...`));
     }
 
-    static downloadSuccess(fileName) {
-        console.log(chalk.green(`  ✅ ${fileName}`));
-    }
-
-    static downloadError(fileName, error) {
-        console.error(chalk.red(`  ❌ Error downloading ${fileName}: ${error}`));
+    static downloadError(fileName) {
+        console.error(chalk.red(`  ❌ ${fileName}`));
     }
 
     static registryUpdate(message) {
@@ -93,7 +89,7 @@ export default class Print {
         Print.separator();
     }
 
-    // Método para mostrar resultados de minificación
+    // Method to show minification results
     static minificationResult(filename, originalSize, minifiedSize, savingsPercent) {
         const originalKB = (originalSize / 1024).toFixed(1);
         const minifiedKB = (minifiedSize / 1024).toFixed(1);
@@ -102,12 +98,12 @@ export default class Print {
         console.log(chalk.gray(`     ${originalKB}KB → ${minifiedKB}KB (${savingsPercent}% saved)`));
     }
 
-    // Método para mostrar progreso de build
+    // Method to show build progress
     static buildProgress(message) {
         console.log(chalk.cyan(`🔄 ${message}`));
     }
 
-    // Método para mostrar estadísticas de servidor
+    // Method to show server statistics
     static serverStats(mode, port, directory) {
         Print.newLine();
         console.log(chalk.magenta(`🌐 Server Configuration:`));
@@ -117,7 +113,7 @@ export default class Print {
         Print.newLine();
     }
 
-    // Método para mostrar que el servidor está listo con URL destacada
+    // Method to show the server is ready with highlighted URL
     static serverReady(port) {
         Print.newLine();
         console.log(chalk.bgGreen.black.bold(' ✓ SERVER READY '));
@@ -129,7 +125,7 @@ export default class Print {
         Print.newLine();
     }
 
-    // Método para mostrar el estado del servidor durante inicio
+    // Method to show server status during startup
     static serverStatus(status, message = '') {
         const icons = {
             checking: '🔍',
@@ -151,17 +147,17 @@ export default class Print {
         console.log(color(`${icon} ${displayMessage}`));
     }
 
-    // Método para mostrar que se está verificando el puerto
+    // Method to show port checking status
     static checkingPort(port) {
         console.log(chalk.cyan(`🔍 Checking port ${port}...`));
     }
 
-    // Nuevo: Método para debug
+    // New: Debug method
     static debug(message) {
         console.log(chalk.gray(`🐛 DEBUG: ${message}`));
     }
 
-    // Nuevo: Método para logs verbosos
+    // New: Verbose logging method
     static verbose(message) {
         console.log(chalk.gray(`📝 ${message}`));
     }

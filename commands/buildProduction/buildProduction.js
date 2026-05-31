@@ -1,18 +1,15 @@
-// commands/buildProduction/buildProduction.js - VERSIÓN LIMPIA
+// commands/buildProduction/buildProduction.js - CLEAN VERSION
 
 import fs from 'fs-extra';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { minify as terserMinify } from 'terser';
 import { minify } from 'html-minifier-terser';
 import CleanCSS from 'clean-css';
 import Print from '../Print.js';
 import { getSrcPath, getDistPath, getConfigPath } from '../utils/PathHelper.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
 /**
- * Carga la configuración desde sliceConfig.json
+ * Loads configuration from sliceConfig.json
  */
 const loadConfig = () => {
   try {
@@ -26,7 +23,7 @@ const loadConfig = () => {
 };
 
 /**
- * Verifica dependencias necesarias para el build
+ * Checks necessary build dependencies
  */
 async function checkBuildDependencies() {
   const srcDir = getSrcPath(import.meta.url);
@@ -50,7 +47,7 @@ async function checkBuildDependencies() {
 }
 
 /**
- * Verifica que existan los archivos críticos para Slice.js
+ * Verifies that critical Slice.js files exist
  */
 async function verifySliceFiles(srcDir) {
   Print.info('Verifying Slice.js critical files...');
@@ -72,7 +69,7 @@ async function verifySliceFiles(srcDir) {
 }
 
 /**
- * Verifica la integridad del build para Slice.js
+ * Verifies build integrity for Slice.js
  */
 async function verifyBuildIntegrity(distDir) {
   Print.info('Verifying build integrity for Slice.js...');
@@ -101,7 +98,7 @@ async function verifyBuildIntegrity(distDir) {
 }
 
 /**
- * Copia sliceConfig.json al directorio dist
+ * Copies sliceConfig.json to the dist directory
  */
 async function copySliceConfig() {
   const srcConfig = getConfigPath(import.meta.url);
@@ -114,7 +111,7 @@ async function copySliceConfig() {
 }
 
 /**
- * Procesa un directorio completo
+ * Processes a complete directory
  */
 async function processDirectory(srcPath, distPath, baseSrcPath, options) {
   const items = await fs.readdir(srcPath);
@@ -134,7 +131,7 @@ async function processDirectory(srcPath, distPath, baseSrcPath, options) {
 }
 
 /**
- * Procesa un archivo individual
+ * Processes an individual file
  */
 async function processFile(srcFilePath, distFilePath, options) {
   const ext = path.extname(srcFilePath).toLowerCase();
@@ -200,7 +197,7 @@ async function processFile(srcFilePath, distFilePath, options) {
 }
 
 /**
- * Procesa el archivo components.js de forma especial
+ * Processes the components.js file in a special way
  */
 async function processComponentsFile(srcPath, distPath) {
   const content = await fs.readFile(srcPath, 'utf8');
@@ -229,7 +226,7 @@ async function processComponentsFile(srcPath, distPath) {
 }
 
 /**
- * Minifica archivos JavaScript preservando la arquitectura de Slice.js
+ * Minifies JavaScript files preserving Slice.js architecture
  */
 async function minifyJavaScript(srcPath, distPath) {
   const content = await fs.readFile(srcPath, 'utf8');
@@ -250,9 +247,9 @@ async function minifyJavaScript(srcPath, distPath) {
       reserved: [
         // Core Slice
         'slice', 'Slice', 'SliceJS', 'window', 'document',
-        // Clases principales
+        // Main classes
         'Controller', 'StylesManager', 'Router', 'Logger', 'Debugger',
-        // Métodos de Slice
+        // Slice methods
         'getClass', 'isProduction', 'getComponent', 'build', 'setTheme', 'attachTemplate',
         // Controller
         'componentCategories', 'templates', 'classes', 'requestedStyles', 'activeComponents',
@@ -269,7 +266,7 @@ async function minifyJavaScript(srcPath, distPath) {
         'onClickCallback', 'props',
         // Custom Elements
         'customElements', 'define', 'HTMLElement',
-        // DOM APIs críticas
+        // Critical DOM APIs
         'addEventListener', 'removeEventListener', 'querySelector', 'querySelectorAll',
         'appendChild', 'removeChild', 'innerHTML', 'textContent', 'style', 'classList',
         // Lifecycle
@@ -308,7 +305,7 @@ async function minifyJavaScript(srcPath, distPath) {
 }
 
 /**
- * Minifica archivos CSS
+ * Minifies CSS files
  */
 async function minifyCSS(srcPath, distPath) {
   const content = await fs.readFile(srcPath, 'utf8');
@@ -334,7 +331,7 @@ async function minifyCSS(srcPath, distPath) {
 }
 
 /**
- * Minifica archivos HTML
+ * Minifies HTML files
  */
 async function minifyHTML(srcPath, distPath) {
   const content = await fs.readFile(srcPath, 'utf8');
@@ -367,7 +364,7 @@ async function minifyHTML(srcPath, distPath) {
 }
 
 /**
- * Crea un bundle optimizado del archivo principal
+ * Creates an optimized bundle of the main file
  */
 async function createOptimizedBundle() {
   Print.buildProgress('Creating optimized bundle...');
@@ -382,7 +379,7 @@ async function createOptimizedBundle() {
 }
 
 /**
- * Genera estadísticas del build
+ * Generates build statistics
  */
 async function generateBuildStats(srcDir, distDir) {
   Print.buildProgress('Generating build statistics...');
@@ -422,7 +419,7 @@ async function generateBuildStats(srcDir, distDir) {
 }
 
 /**
- * Analiza el build sin construir
+ * Analyzes the build without building
  */
 async function analyzeBuild() {
   const distDir = getDistPath(import.meta.url);
@@ -440,7 +437,7 @@ async function analyzeBuild() {
 }
 
 /**
- * FUNCIÓN PRINCIPAL DE BUILD
+ * MAIN BUILD FUNCTION
  */
 export default async function buildProduction(options = {}) {
   const startTime = Date.now();
@@ -458,7 +455,7 @@ export default async function buildProduction(options = {}) {
 
     await verifySliceFiles(srcDir);
 
-    // Limpiar directorio dist
+    // Clean dist directory
     if (await fs.pathExists(distDir)) {
       if (!options.skipClean) {
         Print.info('Cleaning previous build...');
@@ -470,7 +467,7 @@ export default async function buildProduction(options = {}) {
     await fs.ensureDir(distDir);
     await copySliceConfig();
 
-    // Procesar archivos
+    // Process files
     Print.info('Processing and optimizing source files for Slice.js...');
     await processDirectory(srcDir, distDir, srcDir, options);
     Print.success('All source files processed and optimized');
@@ -498,7 +495,7 @@ export default async function buildProduction(options = {}) {
 }
 
 /**
- * Servidor de preview para testing del build de producción
+ * Preview server for testing the production build
  */
 export async function serveProductionBuild(port) {
   try {
@@ -546,7 +543,7 @@ export async function serveProductionBuild(port) {
 }
 
 /**
- * Comando build con opciones
+ * Build command with options
  */
 export async function buildCommand(options = {}) {
   const config = loadConfig();

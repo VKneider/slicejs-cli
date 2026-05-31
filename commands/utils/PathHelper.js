@@ -59,10 +59,17 @@ export function getDistPath(moduleUrl, ...segments) {
   return joinProject(moduleUrl, 'dist', ...segments)
 }
 
-export function getConfigPath(moduleUrl) {
+export function getConfigPath(moduleUrl, root) {
+  if (root) return path.join(root, 'src', 'sliceConfig.json')
   return joinProject(moduleUrl, 'src', 'sliceConfig.json')
 }
 
-export function getComponentsJsPath(moduleUrl) {
+export function getComponentsJsPath(moduleUrl, root) {
+  if (root) return path.join(root, 'src', 'Components', 'components.js')
   return joinProject(moduleUrl, 'src', 'Components', 'components.js')
+}
+
+export function joinRoot(root, ...segments) {
+  const clean = segments.map(sanitize)
+  return path.join(root, ...clean)
 }

@@ -7,21 +7,21 @@ import { getSrcPath } from '../utils/PathHelper.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function deleteComponent(componentName, category) {
-    // Validación: Nombre de componente requerido
+    // Validation: Component name is required
     if (!componentName) {
         Print.error('Component name is required to delete');
         Print.commandExample("Delete a component", "slice component delete");
         return false;
     }
 
-    // Validación: Nombre de componente válido
+    // Validation: Valid component name
     if (!Validations.isValidComponentName(componentName)) {
         Print.error(`Invalid component name: '${componentName}'`);
         Print.info('Component name must start with a letter and contain only alphanumeric characters');
         return false;
     }
 
-    // Validación: Categoría válida
+    // Validation: Valid category
     let flagCategory = Validations.isValidCategory(category);
 
     if (!flagCategory.isValid) {
@@ -36,7 +36,7 @@ function deleteComponent(componentName, category) {
     const categoryPathClean = categoryPath ? categoryPath.replace(/^[/\\]+/, '') : '';
     const componentDir = getSrcPath(import.meta.url, categoryPathClean, componentName);
 
-    // Verificar si el directorio del componente existe
+    // Check if component directory exists
     if (!fs.existsSync(componentDir)) {
         Print.error(`Component '${componentName}' does not exist in category '${category}'`);
         Print.info('Make sure you selected the correct category');
@@ -44,7 +44,7 @@ function deleteComponent(componentName, category) {
         return false;
     }
 
-    // Verificar si es un directorio
+    // Verify it's a directory
     try {
         const stats = fs.statSync(componentDir);
         if (!stats.isDirectory()) {
@@ -58,7 +58,7 @@ function deleteComponent(componentName, category) {
         return false;
     }
 
-    // Intentar eliminar el directorio del componente y su contenido
+    // Try to delete the component directory and its contents
     try {
         const files = fs.readdirSync(componentDir);
         Print.info(`Deleting ${files.length} file(s) from component directory...`);

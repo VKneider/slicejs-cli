@@ -3,21 +3,13 @@ import fs from 'fs-extra';
 import path from 'path';
 import { parse } from '@babel/parser';
 import traverse from '@babel/traverse';
-import { getSrcPath, getComponentsJsPath, getProjectRoot, getConfigPath } from '../PathHelper.js';
+import { getSrcPath, getComponentsJsPath, getConfigPath, getPath } from '../PathHelper.js';
 
 export default class DependencyAnalyzer {
   constructor(moduleUrl) {
     this.moduleUrl = moduleUrl;
-    this.projectRoot = getProjectRoot(moduleUrl);
     this.componentsPath = path.dirname(getComponentsJsPath(moduleUrl));
-    this.frameworkComponentsPath = path.join(
-      this.projectRoot,
-      'node_modules',
-      'slicejs-web-framework',
-      'Slice',
-      'Components',
-      'Structural'
-    );
+    this.frameworkComponentsPath = getPath(moduleUrl, 'node_modules', 'slicejs-web-framework', 'Slice', 'Components', 'Structural');
     this.routesPath = getSrcPath(moduleUrl, 'routes.js');
 
     // Analysis storage
@@ -229,7 +221,7 @@ export default class DependencyAnalyzer {
     if (!await fs.pathExists(this.frameworkComponentsPath)) {
       return;
     }
-    const frameworkConfigPath = path.join(this.projectRoot, 'src', 'sliceConfig.json');
+    const frameworkConfigPath = getConfigPath(this.moduleUrl);
     let frameworkConfig = {};
     try {
       frameworkConfig = await fs.readJson(frameworkConfigPath);
@@ -723,7 +715,7 @@ export default class DependencyAnalyzer {
    */
   async analyzeRoutes() {
     if (!await fs.pathExists(this.routesPath)) {
-      throw new Error('routes.js no encontrado');
+      throw new Error(`routes.js not found at expected path: ${this.routesPath}. Ensure your routes.js file exists in the src directory.`);
     }
 
     const content = await fs.readFile(this.routesPath, 'utf-8');
@@ -735,11 +727,11 @@ export default class DependencyAnalyzer {
       });
 
       let currentRoute = null;
-      const self = this; // Guardar referencia a la instancia
+      const self = this; // Save reference to instance
 
       traverse.default(ast, {
         ObjectExpression(path) {
-          // Buscar objetos de ruta: { path: '/', component: 'HomePage' }
+          // Look for route objects: { path: '/', component: 'HomePage' }
           const properties = path.node.properties;
           const pathProp = properties.find(p => p.key?.name === 'path');
           const componentProp = properties.find(p => p.key?.name === 'component');
@@ -756,7 +748,7 @@ export default class DependencyAnalyzer {
 
             self.routes.set(routePath, currentRoute);
 
-            // Marcar el componente como usado por esta ruta
+            // Mark the component as used by this route
             if (self.components.has(componentName)) {
               self.components.get(componentName).routes.add(routePath);
             }
@@ -768,7 +760,7 @@ export default class DependencyAnalyzer {
       this.routeGroups = this.detectRouteGroups();
 
     } catch (error) {
-      console.warn(`⚠️  Error parseando rutas: ${error.message}`);
+      console.warn(`⚠️  Error parsing routes at ${this.routesPath}: ${error.message}`);
     }
   }
 

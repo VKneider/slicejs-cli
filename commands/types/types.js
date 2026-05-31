@@ -4,6 +4,7 @@ import { parse } from '@babel/parser';
 import traverse from '@babel/traverse';
 
 import Print from '../Print.js';
+import { getConfigPath, getComponentsJsPath, joinRoot } from '../utils/PathHelper.js';
 
 const TYPE_MAP = {
   string: 'string',
@@ -114,22 +115,29 @@ const sortKeys = (obj) => {
     }, {});
 };
 
-const parseComponentsRegistry = (content) => {
+const parseComponentsRegistry = (content, filePath) => {
   const match = content.match(/const components = ({[\s\S]*?});/);
   if (!match) {
-    throw new Error('Invalid components.js format. Expected: const components = { ... };');
+    throw new Error(`Invalid format in ${filePath}. Expected: const components = { ... };`);
   }
-  return JSON.parse(match[1]);
+  try {
+    return JSON.parse(match[1]);
+  } catch (parseError) {
+    throw new Error(`Failed to parse components registry in ${filePath}: ${parseError.message}`);
+  }
 };
 
-const extractStaticPropsFromSource = (source) => {
+const extractStaticPropsFromSource = (source, filePath) => {
   let ast;
   try {
     ast = parse(source, {
       sourceType: 'module',
       plugins: ['classProperties']
     });
-  } catch {
+  } catch (parseError) {
+    const sourceDesc = filePath || 'unknown file';
+    const loc = parseError.loc ? ` at line ${parseError.loc.line}, column ${parseError.loc.column}` : '';
+    Print.warning(`Parse error in ${sourceDesc}${loc}: ${parseError.message}`);
     return null;
   }
 
@@ -194,7 +202,7 @@ const DEFAULT_EDITOR_EXCLUDE = ['node_modules', 'dist', 'src/libs/**', 'tests/**
 const NOISY_INCLUDE_PATTERNS = new Set(['src/**/*.js', 'api/**/*.js', 'tests/**/*.js']);
 
 const readPublicFolderExcludes = async (projectRoot) => {
-  const configPath = path.join(projectRoot, 'src', 'sliceConfig.json');
+  const configPath = getConfigPath(import.meta.url, projectRoot);
   if (!(await fs.pathExists(configPath))) return [];
 
   try {
@@ -230,7 +238,7 @@ const collectJavaScriptFiles = async (dirPath) => {
 };
 
 const ensureNoCheckInPublicVendorFiles = async (projectRoot) => {
-  const configPath = path.join(projectRoot, 'src', 'sliceConfig.json');
+  const configPath = getConfigPath(import.meta.url, projectRoot);
   if (!(await fs.pathExists(configPath))) return { updatedFiles: 0, scannedFiles: 0 };
 
   let parsed;
@@ -245,7 +253,7 @@ const ensureNoCheckInPublicVendorFiles = async (projectRoot) => {
     .map((folder) => String(folder || '').trim())
     .filter(Boolean)
     .map((folder) => folder.replace(/^[/\\]+/, ''))
-    .map((folder) => path.join(projectRoot, 'src', folder));
+    .map((folder) => joinRoot(projectRoot, 'src', folder));
 
   const uniqueDirs = Array.from(new Set(candidateDirs));
   let scannedFiles = 0;
@@ -360,9 +368,11 @@ const readCategoryPathFromConfig = async (configPath, category) => {
 };
 
 const loadComponentStaticProps = async ({ projectRoot, registryMap }) => {
-  const configPath = path.join(projectRoot, 'src', 'sliceConfig.json');
+  const configPath = getConfigPath(import.meta.url, projectRoot);
   const categoryPathCache = new Map();
   const componentPropsMap = {};
+  let skippedCount = 0;
+  let processedCount = 0;
 
   for (const [componentName, category] of Object.entries(sortKeys(registryMap))) {
     if (!categoryPathCache.has(category)) {
@@ -372,26 +382,50 @@ const loadComponentStaticProps = async ({ projectRoot, registryMap }) => {
 
     const categoryPath = categoryPathCache.get(category);
     if (!categoryPath) {
+      skippedCount++;
       continue;
     }
 
-    const componentFile = path.join(projectRoot, 'src', categoryPath, componentName, `${componentName}.js`);
+    const componentFile = joinRoot(projectRoot, 'src', categoryPath, componentName, `${componentName}.js`);
     if (!(await fs.pathExists(componentFile))) {
+      skippedCount++;
       continue;
     }
 
-    const source = await fs.readFile(componentFile, 'utf8');
-    const props = extractStaticPropsFromSource(source);
-    componentPropsMap[componentName] = props || { [DYNAMIC_FALLBACK_PROP]: { type: 'any', required: false } };
+    let source;
+    try {
+      source = await fs.readFile(componentFile, 'utf8');
+    } catch (readError) {
+      Print.warning(`Cannot read ${componentFile}: ${readError.message}`);
+      skippedCount++;
+      continue;
+    }
+
+    const props = extractStaticPropsFromSource(source, componentFile);
+    if (props) {
+      componentPropsMap[componentName] = props;
+      processedCount++;
+    } else {
+      componentPropsMap[componentName] = { [DYNAMIC_FALLBACK_PROP]: { type: 'any', required: false } };
+    }
+  }
+
+  if (skippedCount > 0) {
+    Print.info(`Skipped ${skippedCount} component(s) with missing or unreadable files`);
   }
 
   return componentPropsMap;
 };
 
 const generateTypesFile = async ({ projectRoot, outputPath }) => {
-  const registryPath = path.join(projectRoot, 'src', 'Components', 'components.js');
-  const registryContent = await fs.readFile(registryPath, 'utf8');
-  const registryMap = parseComponentsRegistry(registryContent);
+  const registryPath = getComponentsJsPath(import.meta.url, projectRoot);
+  let registryContent;
+  try {
+    registryContent = await fs.readFile(registryPath, 'utf8');
+  } catch (readError) {
+    throw new Error(`Cannot read components registry at ${registryPath}: ${readError.message}`);
+  }
+  const registryMap = parseComponentsRegistry(registryContent, registryPath);
 
   const componentPropsMap = await loadComponentStaticProps({ projectRoot, registryMap });
 
@@ -412,12 +446,12 @@ const toPosixRelative = (projectRoot, targetPath) => {
 
 const ensureEditorConfigForTypes = async ({ projectRoot, outputPath }) => {
   try {
-    const tsconfigPath = path.join(projectRoot, 'tsconfig.json');
+    const tsconfigPath = joinRoot(projectRoot, 'tsconfig.json');
     if (await fs.pathExists(tsconfigPath)) {
       return { mode: 'tsconfig_exists', filePath: tsconfigPath, includeAdded: false };
     }
 
-    const jsconfigPath = path.join(projectRoot, 'jsconfig.json');
+    const jsconfigPath = joinRoot(projectRoot, 'jsconfig.json');
     const declarationGlob = (() => {
       const relative = toPosixRelative(projectRoot, outputPath);
       if (!relative) return 'src/**/*.d.ts';
@@ -541,5 +575,6 @@ export {
   extractStaticPropsFromSource,
   generateDeclarationContent,
   generateTypesFile,
+  parseComponentsRegistry,
   runGenerateTypes
 };

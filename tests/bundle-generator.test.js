@@ -4,6 +4,7 @@ import fs from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
 import BundleGenerator from '../commands/utils/bundling/BundleGenerator.js';
+import { withTestProject } from './helpers/setup.js';
 
 const createComponent = (name, deps = []) => ({
   name,
@@ -78,18 +79,7 @@ test('loading policy is enabled when sliceConfig loading.enabled is true', () =>
 });
 
 test('loading policy falls back to project sliceConfig when analysisData lacks sliceConfig', async () => {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'slice-bundle-test-'));
-  const srcDir = path.join(tempRoot, 'src');
-  const previousInitCwd = process.env.INIT_CWD;
-
-  await fs.ensureDir(srcDir);
-  await fs.writeJson(path.join(srcDir, 'sliceConfig.json'), {
-    loading: { enabled: true }
-  });
-
-  process.env.INIT_CWD = tempRoot;
-
-  try {
+  await withTestProject(async () => {
     const generator = new BundleGenerator(import.meta.url, {
       components: [],
       routes: [],
@@ -103,14 +93,7 @@ test('loading policy falls back to project sliceConfig when analysisData lacks s
 
     const config = generator.generateBundleConfig(null);
     assert.equal(config.loadingPolicy, 'enabled');
-  } finally {
-    if (previousInitCwd === undefined) {
-      delete process.env.INIT_CWD;
-    } else {
-      process.env.INIT_CWD = previousInitCwd;
-    }
-    await fs.remove(tempRoot);
-  }
+  });
 });
 
 test('loading enabled always includes Loading component in critical bundle', () => {

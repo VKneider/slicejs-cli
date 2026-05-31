@@ -1,9 +1,8 @@
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
-import { getConfigPath, getComponentsJsPath } from './utils/PathHelper.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import Print from './Print.js';
+import { getComponentsJsPath } from './utils/PathHelper.js';
+import { loadConfigSync } from './utils/loadConfig.js';
 
 class Validations {
     constructor() {
@@ -26,25 +25,13 @@ class Validations {
     }
 
     isValidComponentName(componentName) {
-        // Expresión regular para verificar si el nombre contiene caracteres especiales
+        // Regex to check if the name contains special characters
         const regex = /^[a-zA-Z][a-zA-Z0-9]*$/;
         return regex.test(componentName);
     }
 
     loadConfig() {
-        try {
-            const configPath = getConfigPath(import.meta.url);
-            if (!fs.existsSync(configPath)) {
-                // Return null silently - let commands handle missing config if needed
-                return null;
-            }
-            const rawData = fs.readFileSync(configPath, 'utf-8');
-
-            return JSON.parse(rawData);
-        } catch (error) {
-            console.error('\x1b[31m', `❌ Error loading configuration: ${error.message}`, '\x1b[0m');
-            return null;
-        }
+        return loadConfigSync(import.meta.url);
     }
 
     getCategories() {
@@ -80,19 +67,21 @@ class Validations {
             const componentFilePath = getComponentsJsPath(import.meta.url);
 
             if (!fs.existsSync(componentFilePath)) {
-                console.error('\x1b[31m', '❌ Error: components.js not found in expected path', '\x1b[0m');
-                console.log('\x1b[36m', 'ℹ️  Info: Run "slice component list" to generate components.js', '\x1b[0m');
+                Print.error('components.js not found in expected path');
+                Print.info('Run "slice component list" to generate components.js');
                 return false;
             }
 
             const fileContent = fs.readFileSync(componentFilePath, 'utf-8');
-            const components = eval(fileContent.replace('export default', '')); // Evalúa el contenido como objeto
+            const match = fileContent.match(/const components = ({[\s\S]*?});/);
+            if (!match) return false;
+            const components = JSON.parse(match[1]);
 
             return components.hasOwnProperty(componentName);
 
         } catch (error) {
-            console.error('\x1b[31m', `❌ Error checking component existence: ${error.message}`, '\x1b[0m');
-            console.log('\x1b[36m', 'ℹ️  Info: The components.js file may be corrupted', '\x1b[0m');
+            Print.error(`Error checking component existence: ${error.message}`);
+            Print.info('The components.js file may be corrupted');
             return false;
         }
     }

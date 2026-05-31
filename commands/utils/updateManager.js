@@ -6,7 +6,7 @@ import inquirer from "inquirer";
 import ora from "ora";
 import Print from "../Print.js";
 import versionChecker from "./VersionChecker.js";
-import { getProjectRoot } from "../utils/PathHelper.js";
+import { getProjectRoot, getApiPath, getPath } from "../utils/PathHelper.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs-extra";
@@ -401,9 +401,8 @@ export class UpdateManager {
 
     async updateApiIndexIfNeeded(options = {}) {
         try {
-            const projectRoot = getProjectRoot(import.meta.url);
-            const projectApiPath = path.join(projectRoot, 'api', 'index.js');
-            const frameworkApiPath = path.join(projectRoot, 'node_modules', 'slicejs-web-framework', 'api', 'index.js');
+            const projectApiPath = getApiPath(import.meta.url, 'index.js');
+            const frameworkApiPath = getPath(import.meta.url, 'node_modules', 'slicejs-web-framework', 'api', 'index.js');
 
             if (!await fs.pathExists(projectApiPath) || !await fs.pathExists(frameworkApiPath)) {
                 return;

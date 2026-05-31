@@ -2,87 +2,108 @@
 
 import fs from "fs-extra";
 import path from "path";
-import { fileURLToPath } from "url";
 import inquirer from "inquirer";
 import validations from "../Validations.js";
 import Print from "../Print.js";
-import { getConfigPath, getComponentsJsPath, getPath } from "../utils/PathHelper.js";
+import { getComponentsJsPath, getPath } from "../utils/PathHelper.js";
+import { loadConfig as sharedLoadConfig } from "../utils/loadConfig.js";
 import ora from "ora";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// Base URL del repositorio de documentación de Slice.js
+// Base URL of the Slice.js documentation repository
 const DOCS_REPO_BASE_URL = 'https://raw.githubusercontent.com/VKneider/slice.js_visual_library/master/src/Components';
 const COMPONENTS_REGISTRY_URL = 'https://raw.githubusercontent.com/VKneider/slice.js_visual_library/master/src/Components/components.js';
 
 /**
- * Carga la configuración desde sliceConfig.json
- * @returns {object} - Objeto de configuración
+ * Loads configuration from sliceConfig.json
+ * @returns {object} - Configuration object
  */
-const loadConfig = () => {
-  try {
-    const configPath = getConfigPath(import.meta.url);
-    if (!fs.existsSync(configPath)) {
-      throw new Error('sliceConfig.json not found in src folder');
+const loadConfig = () => sharedLoadConfig(import.meta.url);
+
+const fetchWithRetry = async (url, retries = 3, baseDelay = 500) => {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      return await response.text();
+    } catch (e) {
+      if (attempt === retries) throw e;
+      const delay = baseDelay * Math.pow(2, attempt);
+      await new Promise(r => setTimeout(r, delay));
     }
-    const rawData = fs.readFileSync(configPath, 'utf-8');
-    return JSON.parse(rawData);
-  } catch (error) {
-    console.error(`Error loading configuration: ${error.message}`);
-    return null;
   }
+};
+
+const runConcurrent = async (items, worker, concurrency = 3) => {
+  let index = 0;
+  const runners = Array(Math.min(concurrency, items.length)).fill(0).map(async () => {
+    while (true) {
+      const i = index++;
+      if (i >= items.length) break;
+      await worker(items[i]);
+    }
+  });
+  await Promise.all(runners);
 };
 
 class ComponentRegistry {
   constructor() {
     this.componentsRegistry = null;
-    this.config = loadConfig();
+    this.config = null;
+    this._configPromise = null;
+  }
+
+  async _ensureConfig() {
+    if (!this.config && !this._configPromise) {
+      this._configPromise = loadConfig();
+    }
+    if (this._configPromise) {
+      this.config = await this._configPromise;
+    }
   }
 
   async loadRegistry() {
-  Print.info('Loading component registry from official repository...');
-  
-  try {
-    const response = await fetch(COMPONENTS_REGISTRY_URL);
-    
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
+    await this._ensureConfig();
+    Print.info('Loading component registry from official repository...');
 
-    const content = await response.text();
-    
-    // Parse the components.js file content
-    const match = content.match(/const components = ({[\s\S]*?});/);
-    if (!match) {
-      throw new Error('Invalid components.js format from repository');
-    }
+    try {
+      const response = await fetch(COMPONENTS_REGISTRY_URL);
 
-    const allComponents = eval('(' + match[1] + ')');
-    
-    // ✅ NUEVO: FILTRAR solo componentes Visual y Service
-    this.componentsRegistry = this.filterOfficialComponents(allComponents);
-    
-    Print.success('Component registry loaded successfully');
-    
-  } catch (error) {
-    Print.error(`Loading component registry: ${error.message}`);
-    Print.info('Check your internet connection and repository accessibility');
-    throw error;
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const content = await response.text();
+
+      // Parse the components.js file content
+      const match = content.match(/const components = ({[\s\S]*?});/);
+      if (!match) {
+        throw new Error('Invalid components.js format from repository');
+      }
+
+      const allComponents = JSON.parse(match[1]);
+
+      // Filter only Visual and Service components
+      this.componentsRegistry = this.filterOfficialComponents(allComponents);
+
+      Print.success('Component registry loaded successfully');
+
+    } catch (error) {
+      throw error;
+    }
   }
-}
 
 /**
- * Filtra el registry para incluir SOLO componentes de categorías Visual y Service
- * Excluye AppComponents y cualquier otra categoría
- * @param {object} allComponents - Objeto con todos los componentes del registry
- * @returns {object} - Objeto filtrado solo con Visual y Service
+ * Filters the registry to include ONLY Visual and Service category components
+ * Excludes AppComponents and any other category
+ * @param {object} allComponents - Object with all registry components
+ * @returns {object} - Filtered object with only Visual and Service
  */
 filterOfficialComponents(allComponents) {
   const filtered = {};
   let excludedCount = 0;
   
   Object.entries(allComponents).forEach(([name, category]) => {
-    // Solo incluir componentes de categoría Visual o Service
+    // Only include Visual or Service category components
     if (category === 'Visual' || category === 'Service') {
       filtered[name] = category;
     } else {
@@ -112,14 +133,15 @@ filterOfficialComponents(allComponents) {
         return {};
       }
 
-      return eval('(' + match[1] + ')');
+      return JSON.parse(match[1]);
     } catch (error) {
-      Print.warning('⚠️  No se pudo leer el registro local de componentes');
+      Print.warning(`⚠️  Could not read the local component registry at: ${componentsPath}`);
       return {};
     }
   }
 
   async findUpdatableComponents() {
+    await this._ensureConfig();
     const localComponents = await this.getLocalComponents();
     const updatableComponents = [];
 
@@ -129,7 +151,7 @@ filterOfficialComponents(allComponents) {
         // Check if local component directory exists using dynamic paths
         const categoryPath = validations.getCategoryPath(category);
         
-        // ✅ CORREGIDO: Usar 4 niveles para compatibilidad con node_modules
+        // Use 4 levels for node_modules compatibility
         const isProduction = this.config?.production?.enabled === true;
         const folderSuffix = isProduction ? 'dist' : 'src';
         const componentPath = getPath(import.meta.url, folderSuffix, categoryPath, name);
@@ -153,18 +175,18 @@ filterOfficialComponents(allComponents) {
     const components = {};
     Object.entries(this.componentsRegistry).forEach(([name, componentCategory]) => {
       if (!category || componentCategory === category) {
-        // ✅ CORREGIDO: Componentes especiales que no necesitan todos los archivos
+        // Special components that don't need all files
         let files;
         if (componentCategory === 'Visual') {
-          // Componentes de routing lógico solo necesitan JS
-          if (['Route', 'MultiRoute', 'NotFound'].includes(name)) {
+          // Logical routing components only need JS
+          if (['Route', 'MultiRoute', 'Link'].includes(name)) {
             files = [`${name}.js`];
           } else {
-            // Componentes visuales normales necesitan JS, HTML, CSS
+            // Normal visual components need JS, HTML, CSS
             files = [`${name}.js`, `${name}.html`, `${name}.css`];
           }
         } else {
-          // Service components solo necesitan JS
+          // Service components only need JS
           files = [`${name}.js`];
         }
 
@@ -192,19 +214,6 @@ filterOfficialComponents(allComponents) {
     const total = component.files.length;
     let done = 0;
     const spinner = ora(`Downloading ${componentName} 0/${total}`).start();
-    const fetchWithRetry = async (url, retries = 3, baseDelay = 500) => {
-      for (let attempt = 0; attempt <= retries; attempt++) {
-        try {
-          const response = await fetch(url);
-          if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-          return await response.text();
-        } catch (e) {
-          if (attempt === retries) throw e;
-          const delay = baseDelay * Math.pow(2, attempt);
-          await new Promise(r => setTimeout(r, delay));
-        }
-      }
-    };
     const worker = async (fileName) => {
       const url = `${DOCS_REPO_BASE_URL}/${category}/${componentName}/${fileName}`;
       const localPath = path.join(targetPath, fileName);
@@ -212,37 +221,25 @@ filterOfficialComponents(allComponents) {
         const content = await fetchWithRetry(url);
         await fs.writeFile(localPath, content, 'utf8');
         downloadedFiles.push(fileName);
-        Print.downloadSuccess(fileName);
       } catch (error) {
-        Print.downloadError(fileName, error.message);
+        Print.downloadError(fileName);
         failedFiles.push(fileName);
       } finally {
         done += 1;
         spinner.text = `Downloading ${componentName} ${done}/${total}`;
       }
     };
-    const runConcurrent = async (items, concurrency = 3) => {
-      let index = 0;
-      const runners = Array(Math.min(concurrency, items.length)).fill(0).map(async () => {
-        while (true) {
-          const i = index++;
-          if (i >= items.length) break;
-          await worker(items[i]);
-        }
-      });
-      await Promise.all(runners);
-    };
-    await runConcurrent(component.files, 3);
+    await runConcurrent(component.files, worker, 3);
     spinner.stop();
 
-    // ✅ NUEVO: Solo lanzar error si NO se descargó el archivo principal (.js)
+    // Only throw error if main file (.js) was not downloaded
     const mainFileDownloaded = downloadedFiles.some(file => file.endsWith('.js'));
     
     if (!mainFileDownloaded) {
       throw new Error(`Failed to download main component file (${componentName}.js)`);
     }
 
-    // ✅ ADVERTENCIA: Informar sobre archivos que fallaron (pero no detener el proceso)
+    // Report files that failed (but don't stop the process)
     if (failedFiles.length > 0) {
       Print.warning(`Some files couldn't be downloaded: ${failedFiles.join(', ')}`);
       Print.info('Component installed with available files');
@@ -252,7 +249,7 @@ filterOfficialComponents(allComponents) {
   }
 
   async updateLocalRegistrySafe(componentName, category) {
-    const componentsPath = path.join(__dirname, '../../../../src/Components/components.js');
+    const componentsPath = getComponentsJsPath(import.meta.url);
     try {
       if (!await fs.pathExists(componentsPath)) {
         const dir = path.dirname(componentsPath);
@@ -263,7 +260,7 @@ filterOfficialComponents(allComponents) {
       const content = await fs.readFile(componentsPath, 'utf8');
       const match = content.match(/const components = ({[\s\S]*?});/);
       if (!match) throw new Error('Invalid components.js format in local project');
-      const componentsObj = eval('(' + match[1] + ')');
+      const componentsObj = JSON.parse(match[1]);
       if (!componentsObj[componentName]) {
         componentsObj[componentName] = category;
         const sorted = Object.keys(componentsObj)
@@ -276,65 +273,19 @@ filterOfficialComponents(allComponents) {
         Print.info(`${componentName} already exists in local registry`);
       }
     } catch (error) {
-      Print.error(`Updating local components.js: ${error.message}`);
-      throw error;
-    }
-  }
-
-  async updateLocalRegistry(componentName, category) {
-    // ✅ CORREGIDO: Usar 4 niveles para compatibilidad con node_modules
-    const componentsPath = path.join(__dirname, '../../../../src/Components/components.js');
-    
-    try {
-      let content = await fs.readFile(componentsPath, 'utf8');
-      
-      // Parse existing components
-      const componentsMatch = content.match(/const components = ({[\s\S]*?});/);
-      if (!componentsMatch) {
-        throw new Error('Invalid components.js format in local project');
-      }
-
-      const componentsObj = eval('(' + componentsMatch[1] + ')');
-      
-      // Add new component if it doesn't exist
-      if (!componentsObj[componentName]) {
-        componentsObj[componentName] = category;
-
-        // Generate new content
-        const sortedComponents = Object.keys(componentsObj)
-          .sort()
-          .reduce((obj, key) => {
-            obj[key] = componentsObj[key];
-            return obj;
-          }, {});
-
-        const newComponentsString = JSON.stringify(sortedComponents, null, 2)
-          .replace(/"/g, '"')
-          .replace(/: "/g, ': "')
-          .replace(/",\n/g, '",\n');
-
-        const newContent = `const components = ${newComponentsString}; export default components;`;
-        
-        await fs.writeFile(componentsPath, newContent, 'utf8');
-        Print.registryUpdate(`Registered ${componentName} in local components.js`);
-      } else {
-        Print.info(`${componentName} already exists in local registry`);
-      }
-      
-    } catch (error) {
-      Print.error(`Updating local components.js: ${error.message}`);
       throw error;
     }
   }
 
   async installComponent(componentName, category, force = false) {
+    await this._ensureConfig();
      const availableComponents = this.getAvailableComponents(category);
 
   if (!availableComponents[componentName]) {
     throw new Error(`Component '${componentName}' not found in category '${category}' in the official repository`);
   }
 
-  // ✅ MEJORADO: Detectar si validations tiene acceso a la configuración
+    // Detect if validations has access to configuration
   let categoryPath;
   const hasValidConfig = validations.config && 
                          validations.config.paths && 
@@ -394,16 +345,13 @@ filterOfficialComponents(allComponents) {
       return true;
 
     } catch (error) {
-      Print.error(`Error installing ${componentName}: ${error.message}`);
-      
-      // ✅ MEJORADO: Solo borrar si el archivo principal (.js) no existe
+      // Only clean up if main file (.js) does not exist
       const mainFilePath = path.join(targetPath, `${componentName}.js`);
       const mainFileExists = await fs.pathExists(mainFilePath);
       
       if (!mainFileExists && await fs.pathExists(targetPath)) {
-        // Solo limpiar si no se instaló el archivo principal
+        // Only clean up if main file was not installed
         await fs.remove(targetPath);
-        Print.info('Cleaned up failed installation');
       } else if (mainFileExists) {
         Print.warning('Component partially installed - main file exists');
       }
@@ -430,18 +378,7 @@ filterOfficialComponents(allComponents) {
         spinner.text = `Installing ${done}/${total}`;
       }
     };
-    const runConcurrent = async (items, concurrency = 3) => {
-      let index = 0;
-      const runners = Array(Math.min(concurrency, items.length)).fill(0).map(async () => {
-        while (true) {
-          const i = index++;
-          if (i >= items.length) break;
-          await worker(items[i]);
-        }
-      });
-      await Promise.all(runners);
-    };
-    await runConcurrent(componentNames, 3);
+    await runConcurrent(componentNames, worker, 3);
     spinner.stop();
 
     // Summary
@@ -459,7 +396,7 @@ filterOfficialComponents(allComponents) {
     
     const allUpdatableComponents = await this.findUpdatableComponents();
     
-    // ✅ NUEVO: Filtrar solo componentes Visual
+    // Filter only Visual components
     const updatableComponents = allUpdatableComponents.filter(comp => comp.category === 'Visual');
     
     if (updatableComponents.length === 0) {
@@ -468,7 +405,7 @@ filterOfficialComponents(allComponents) {
       return true;
     }
 
-    // Mostrar estadísticas si hay componentes Service que no se sincronizarán
+    // Show statistics if there are Service components that won't be synced
     const serviceComponents = allUpdatableComponents.filter(comp => comp.category === 'Service');
     if (serviceComponents.length > 0) {
       Print.info(`Found ${serviceComponents.length} Service components (skipped - sync only affects Visual components)`);
@@ -497,7 +434,7 @@ filterOfficialComponents(allComponents) {
       }
     }
 
-    // ✅ SIMPLIFICADO: Solo actualizar componentes Visual
+    // Only update Visual components
     const visualComponentNames = updatableComponents.map(c => c.name);
     
     Print.info(`Updating ${visualComponentNames.length} Visual components...`);
@@ -517,7 +454,7 @@ filterOfficialComponents(allComponents) {
       Print.success('All your Visual components are now updated to the latest official versions!');
     }
 
-    // Información adicional sobre Service components
+    // Additional information about Service components
     if (serviceComponents.length > 0) {
       Print.newLine();
       Print.info(`Note: ${serviceComponents.length} Service components were found but not updated`);
@@ -539,7 +476,7 @@ filterOfficialComponents(allComponents) {
     const visualComponents = this.getAvailableComponents('Visual');
     const serviceComponents = this.getAvailableComponents('Service');
 
-    // ✅ SIMPLIFICADO: Solo mostrar nombres sin descripciones
+    // Only show names without descriptions
     Print.info('🎨 Visual Components (UI):');
     Object.keys(visualComponents).forEach(name => {
       const files = visualComponents[name].files;
@@ -695,7 +632,7 @@ async function getComponents(componentNames = [], options = {}) {
       await registry.installComponent(componentInfo.name, actualCategory, options.force);
       return true;
     } catch (error) {
-      Print.error(`${error.message}`);
+      Print.error(`Error installing component: ${error.message}`);
       return false;
     }
   } else {
@@ -708,7 +645,7 @@ async function getComponents(componentNames = [], options = {}) {
       await registry.installMultipleComponents(normalizedComponents, category, options.force);
       return true;
     } catch (error) {
-      Print.error(`${error.message}`);
+      Print.error(`Error installing components: ${error.message}`);
       return false;
     }
   }
@@ -744,4 +681,4 @@ async function syncComponents(options = {}) {
 }
 
 export default getComponents;
-export { listComponents, syncComponents, ComponentRegistry };
+export { listComponents, syncComponents, ComponentRegistry, loadConfig, runConcurrent, fetchWithRetry };

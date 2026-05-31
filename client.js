@@ -13,9 +13,9 @@ import updateManager from "./commands/utils/updateManager.js";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
-import { getConfigPath, getProjectRoot } from "./commands/utils/PathHelper.js";
-import { exec, spawnSync } from "node:child_process";
-import { promisify } from "util";
+import { getProjectRoot, getSrcPath, getPath } from "./commands/utils/PathHelper.js";
+import { loadConfigSync as sharedLoadConfigSync } from "./commands/utils/loadConfig.js";
+import { spawnSync } from "node:child_process";
 import validations from "./commands/Validations.js";
 import Print from "./commands/Print.js";
 import build from './commands/build/build.js';
@@ -30,67 +30,14 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const loadConfig = () => {
-  try {
-    const configPath = getConfigPath(import.meta.url);
-    const rawData = fs.readFileSync(configPath, "utf-8");
-    return JSON.parse(rawData);
-  } catch {
-    return null;
-  }
-};
-
 const getCategories = () => {
-  const config = loadConfig();
+  const config = sharedLoadConfigSync(import.meta.url);
   return config && config.paths?.components ? Object.keys(config.paths.components) : [];
 };
 
 // Function to run version check for all commands
 async function runWithVersionCheck(commandFunction, ...args) {
   try {
-    const execAsync = promisify(exec);
-    await (async () => {
-      try {
-        const info = await updateManager.detectCliInstall();
-        if (info && info.type === 'global') {
-          const projectRoot = getProjectRoot(import.meta.url);
-          const pkgPath = path.join(projectRoot, 'package.json');
-          let hasPkg = fs.existsSync(pkgPath);
-          if (!hasPkg) {
-            const { confirmInit } = await inquirer.prompt([
-              {
-                type: 'confirm',
-                name: 'confirmInit',
-                message: 'No package.json found. Initialize npm in this project now?',
-                default: true
-              }
-            ]);
-            if (confirmInit) {
-              await execAsync('npm init -y', { cwd: projectRoot });
-              hasPkg = true;
-            }
-          }
-          if (hasPkg) {
-            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-            const hasFramework = pkg.dependencies?.['slicejs-web-framework'];
-            if (!hasFramework) {
-              const { confirm } = await inquirer.prompt([
-                {
-                  type: 'confirm',
-                  name: 'confirm',
-                  message: 'slicejs-web-framework is not installed in this project. Install it now?',
-                  default: true
-                }
-              ]);
-              if (confirm) {
-                await updateManager.updatePackage('slicejs-web-framework');
-              }
-            }
-          }
-        }
-      } catch {}
-    })();
-
     updateManager.notifyAvailableUpdates().catch(() => {});
 
     const result = await commandFunction(...args);
@@ -148,7 +95,59 @@ try {
 sliceClient
   .command("init")
   .description("Initialize a new Slice.js project")
-  .action(async () => {
+  .option("-y, --yes [name]", "Skip prompts and initialize with project name")
+  .action(async (options) => {
+    let projectName = 'my-slice-app';
+    if (options.yes) {
+      projectName = typeof options.yes === 'string' ? options.yes : projectName;
+    } else {
+      const answers = await inquirer.prompt([
+        {
+          type: 'input',
+          name: 'projectName',
+          message: 'What is the name of your project?',
+          default: projectName,
+          filter: (input) => input.trim()
+            .toLowerCase()
+            .replace(/\s+/g, '-')
+            .replace(/[^a-z0-9-]/g, '')
+            .replace(/-+/g, '-')
+            .replace(/^-|-$/g, ''),
+          validate: (input) => {
+            if (!input || !input.trim()) return 'Project name cannot be empty';
+            if (input.includes('/') || input.includes('\\')) return 'Use a simple name, not a path';
+            return true;
+          }
+        }
+      ]);
+      projectName = answers.projectName;
+    }
+
+    const projectDir = path.resolve(projectName);
+
+    if (fs.existsSync(projectDir)) {
+      const contents = fs.readdirSync(projectDir);
+      if (contents.length > 0) {
+        const { overwrite } = await inquirer.prompt([
+          {
+            type: 'confirm',
+            name: 'overwrite',
+            message: `Directory "${answers.projectName}" already exists and is not empty. Continue?`,
+            default: false
+          }
+        ]);
+        if (!overwrite) {
+          Print.info('Initialization cancelled.');
+          return;
+        }
+      }
+    } else {
+      fs.mkdirSync(projectDir, { recursive: true });
+    }
+
+    process.chdir(projectDir);
+    process.env.INIT_CWD = projectDir;
+
     await runWithVersionCheck(() => {
       initializeProject();
       return Promise.resolve();
@@ -206,7 +205,7 @@ buildCommand
 sliceClient
   .command("dev")
   .description("Start development server with hot reload enabled by default")
-  .option("-p, --port <port>", "Port for development server", 3000)
+  .option("-p, --port <port>", "Port for development server")
   .option("--no-hmr", "Disable hot module reload (enabled by default)")
   .action(async (options) => {
     const prevEnv = process.env.NODE_ENV;
@@ -215,7 +214,7 @@ sliceClient
       await runWithVersionCheck(async () => {
         await startServer({
           mode: 'development',
-          port: parseInt(options.port),
+          port: options.port ? parseInt(options.port) : undefined,
           watch: options.hmr
         });
       });
@@ -228,7 +227,7 @@ sliceClient
 sliceClient
   .command("start")
   .description("Serve production files from dist/ (requires prior slice build)")
-  .option("-p, --port <port>", "Port for server", 3000)
+  .option("-p, --port <port>", "Port for server")
   .action(async (options) => {
     const prevEnv = process.env.NODE_ENV;
     process.env.NODE_ENV = 'production';
@@ -236,7 +235,7 @@ sliceClient
       await runWithVersionCheck(async () => {
         await startServer({
           mode: 'production',
-          port: parseInt(options.port)
+          port: options.port ? parseInt(options.port) : undefined
         });
       });
     } finally {
@@ -367,7 +366,7 @@ componentCommand
         }
 
         const categoryPath = config.paths.components[category].path;
-        const fullPath = path.join(__dirname, "../../src", categoryPath);
+        const fullPath = getSrcPath(import.meta.url, categoryPath);
 
         if (!fs.existsSync(fullPath)) {
           Print.error(`Category path does not exist: ${categoryPath}`);
@@ -637,7 +636,7 @@ sliceClient
   });
 
 
-// Custom help - SIMPLIFICADO para development only
+// Custom help - SIMPLIFIED for development only
 sliceClient.addHelpText('after', `
 Common Usage Examples:
   slice init                     - Initialize new Slice.js project
