@@ -21,6 +21,15 @@ const STARTER_VISUAL_COMPONENTS = [
    'Route'
 ];
 
+// Service components are now also pulled from the registry on init (instead of
+// being vendored in the framework package), so Visual and Service share a single
+// source of truth. Newcomers add more on demand with `slice get <Name>`.
+const STARTER_SERVICE_COMPONENTS = [
+   'FetchManager',
+   'IndexedDbManager',
+   'LocalStorageManager'
+];
+
 export default async function initializeProject(projectType) {
     try {
         const projectRoot = getProjectRoot(import.meta.url);
@@ -101,7 +110,7 @@ export default async function initializeProject(projectType) {
 
                 if (stat.isDirectory()) {
                     if (item === 'Components') {
-                        // Create Components structure but without copying Visual
+                        // Create Components structure but without copying Visual or Service
                         await fs.ensureDir(destItemPath);
 
                         const componentItems = await fs.readdir(srcItemPath);
@@ -109,11 +118,11 @@ export default async function initializeProject(projectType) {
                             const componentItemPath = path.join(srcItemPath, componentItem);
                             const destComponentItemPath = path.join(destItemPath, componentItem);
 
-                            if (componentItem !== 'Visual') {
-                                // Copy Service and other component types
+                            if (componentItem !== 'Visual' && componentItem !== 'Service') {
+                                // Copy AppComponents and other template types from the framework
                                 await fs.copy(componentItemPath, destComponentItemPath, { recursive: true });
                             } else {
-                                // Only create empty Visual directory
+                                // Visual and Service are installed from the registry below
                                 await fs.ensureDir(destComponentItemPath);
                             }
                         }
@@ -173,6 +182,42 @@ export default async function initializeProject(projectType) {
             componentsSpinner.fail('Could not download Visual components from official repository');
             Print.error(`Repository error: ${error.message}`);
             Print.info('Project initialized without Visual components');
+            Print.info('You can add them later using "slice get <component-name>"');
+        }
+
+        // 3b. DOWNLOAD STARTER SERVICE COMPONENTS FROM OFFICIAL REPOSITORY
+        const serviceSpinner = ora('Installing starter Service components...').start();
+        try {
+            const registry = new ComponentRegistry();
+            await registry.loadRegistry();
+
+            if (STARTER_SERVICE_COMPONENTS.length > 0) {
+                Print.info(`Installing ${STARTER_SERVICE_COMPONENTS.length} starter Service components: ${STARTER_SERVICE_COMPONENTS.join(', ')}`);
+                serviceSpinner.text = `Installing ${STARTER_SERVICE_COMPONENTS.length} starter Service components...`;
+
+                const results = await registry.installMultipleComponents(
+                    STARTER_SERVICE_COMPONENTS,
+                    'Service',
+                    true // force = true for initial installation
+                );
+
+                const successful = results.filter(r => r.success).length;
+                const failed = results.filter(r => !r.success).length;
+
+                if (successful > 0 && failed === 0) {
+                    serviceSpinner.succeed(`All ${successful} Service components installed successfully`);
+                } else if (successful > 0) {
+                    serviceSpinner.warn(`${successful} Service components installed, ${failed} failed`);
+                    Print.info('You can install failed components later using "slice get <component-name>"');
+                } else {
+                    serviceSpinner.fail('Failed to install Service components');
+                }
+            } else {
+                serviceSpinner.succeed('No starter Service components to install');
+            }
+        } catch (error) {
+            serviceSpinner.fail('Could not download Service components from official repository');
+            Print.error(`Repository error: ${error.message}`);
             Print.info('You can add them later using "slice get <component-name>"');
         }
 
@@ -264,6 +309,8 @@ export default async function initializeProject(projectType) {
     }
 }
 
-// NOTE: `slice init` now installs only STARTER_VISUAL_COMPONENTS (see top of file).
+// NOTE: `slice init` installs only STARTER_VISUAL_COMPONENTS and
+// STARTER_SERVICE_COMPONENTS (see top of file); both Visual and Service are pulled
+// from the registry rather than vendored in the framework package.
 // To install every registry component instead, iterate
-// `Object.keys(registry.getAvailableComponents('Visual'))`.
+// `Object.keys(registry.getAvailableComponents('Visual'))` (and likewise 'Service').
