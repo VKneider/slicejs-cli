@@ -21,6 +21,10 @@ function deleteComponent(componentName, category) {
         return false;
     }
 
+    // Components follow a PascalCase convention: normalize the initial so the
+    // lookup matches the folder name created by `slice component create`.
+    componentName = componentName.charAt(0).toUpperCase() + componentName.slice(1);
+
     // Validation: Valid category
     let flagCategory = Validations.isValidCategory(category);
 

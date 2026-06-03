@@ -259,6 +259,15 @@ async function checkComponents() {
 /**
  * Main diagnostic command
  */
+export {
+    checkNodeVersion,
+    checkDirectoryStructure,
+    checkConfig,
+    checkPort,
+    checkDependencies,
+    checkComponents
+};
+
 export default async function runDiagnostics() {
     Print.newLine();
     Print.title('🔍 Running Slice.js Diagnostics...');

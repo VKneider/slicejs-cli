@@ -4,7 +4,12 @@ import os from 'os'
 import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const FW_DIR = path.resolve(__dirname, '../../../slice.js')
+// Prefer the sibling framework dev repo when present (local monorepo checkout);
+// otherwise fall back to the installed framework package (e.g. CI, where only
+// this repo is checked out). Both ship the same src/ + api/ starter structure.
+const SIBLING_FW = path.resolve(__dirname, '../../../slice.js')
+const PACKAGE_FW = path.resolve(__dirname, '../../node_modules/slicejs-web-framework')
+const FW_DIR = fs.pathExistsSync(SIBLING_FW) ? SIBLING_FW : PACKAGE_FW
 const FIXTURES_DIR = path.resolve(__dirname, '../fixtures')
 
 let counter = 0

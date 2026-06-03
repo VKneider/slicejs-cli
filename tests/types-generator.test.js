@@ -160,7 +160,9 @@ test('generateTypesFile creates declaration file from local components', async (
     const serviceDir = path.join(srcDir, 'Components', 'Service', 'FetchManager');
     const outputFile = path.join(srcDir, 'slice-build.generated.d.ts');
 
+    fs.mkdirSync(visualDir, { recursive: true });
     fs.mkdirSync(noStaticDir, { recursive: true });
+    fs.mkdirSync(serviceDir, { recursive: true });
 
     fs.writeFileSync(
       path.join(visualDir, 'Button.js'),

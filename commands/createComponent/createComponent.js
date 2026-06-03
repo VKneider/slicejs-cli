@@ -23,6 +23,10 @@ function createComponent(componentName, category) {
         return false;
     }
 
+    // Components follow a PascalCase convention: normalize the initial to
+    // uppercase so the folder name, registry entry and existence checks agree.
+    componentName = componentName.charAt(0).toUpperCase() + componentName.slice(1);
+
     // Validation: Component already exists
     if(Validations.componentExists(componentName)){
         Print.error(`Component '${componentName}' already exists in your project`);
@@ -42,8 +46,8 @@ function createComponent(componentName, category) {
     }
     category = flagCategory.category;
 
-    // Create class name and file name
-    const className = componentName.charAt(0).toUpperCase() + componentName.slice(1);
+    // Create class name and file name (componentName is already PascalCase).
+    const className = componentName;
     const fileName = `${className}.js`;
     let template;
 

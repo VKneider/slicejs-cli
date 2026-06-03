@@ -1,2 +1,9 @@
 node_modules
 .worktrees
+dist
+.tmp
+# Playwright E2E artifacts
+test-results
+playwright-report
+blob-report
+*.log

@@ -1249,7 +1249,11 @@ export default class BundleGenerator {
     const omittedDependencies = options.omittedDependencies instanceof Set
       ? options.omittedDependencies
       : new Set(options.omittedDependencies || []);
-    const filteredModules = modules.filter((module) => !omittedDependencies.has(module.name));
+    // Emit in topological order so a module is registered before any module
+    // that depends on it (its transitive imports resolve at IIFE-eval time).
+    const filteredModules = this.sortDependencyModulesTopologically(
+      modules.filter((module) => !omittedDependencies.has(module.name))
+    );
 
     const lines = [
       'const SLICE_BUNDLE_DEPENDENCIES = {};',
@@ -1260,32 +1264,88 @@ export default class BundleGenerator {
     }
     filteredModules.forEach((module, index) => {
       const exportVar = `__sliceDepExports${index}`;
-      const transformedContent = this.transformDependencyContent(module.content, exportVar, module.name);
-      lines.push(`const ${exportVar} = {};`);
-      lines.push(transformedContent.trim());
+      // Evaluate each dependency inside its own IIFE so its private,
+      // non-exported top-level bindings stay local and cannot collide with
+      // another dependency's (or the bundle's) identifiers. Only the exports
+      // object escapes the closure.
+      const transformedContent = this.transformDependencyContent(module.content, '__sliceExports', module.name);
+      // Bind this module's own (transitive) imports inside its IIFE — they were
+      // registered by earlier modules in the topological order.
+      const importBindings = this.buildDependencyBindings(
+        Object.fromEntries(
+          (module.moduleImports || [])
+            .filter((mi) => mi.bindings && mi.bindings.length)
+            .map((mi) => [mi.depName, { bindings: mi.bindings }])
+        ),
+        { preferShared: !!options.includeSharedResolver }
+      );
+      const body = transformedContent.trim();
+      lines.push(`const ${exportVar} = (() => {`);
+      lines.push('const __sliceExports = {};');
+      if (importBindings) lines.push(importBindings);
+      if (body) lines.push(body);
+      lines.push('return __sliceExports;');
+      lines.push('})();');
       lines.push(`SLICE_BUNDLE_DEPENDENCIES[${JSON.stringify(module.name)}] = ${exportVar};`);
     });
 
     return lines.join('\n');
   }
 
-  async buildDependencyContents(jsContent, componentPath) {
-    const dependencies = this.analyzeDependencies(jsContent, componentPath);
-    const dependencyContents = {};
+  sortDependencyModulesTopologically(modules = []) {
+    const byName = new Map(modules.map((module) => [module.name, module]));
+    const visited = new Set();
+    const ordered = [];
+    const visit = (module, stack) => {
+      if (visited.has(module.name) || stack.has(module.name)) return;
+      stack.add(module.name);
+      for (const imp of module.moduleImports || []) {
+        const dependency = byName.get(imp.depName);
+        if (dependency) visit(dependency, stack);
+      }
+      stack.delete(module.name);
+      visited.add(module.name);
+      ordered.push(module);
+    };
+    for (const module of modules) visit(module, new Set());
+    return ordered;
+  }
 
-    for (const dep of dependencies) {
-      const depPath = dep.path;
-      try {
-        const depContent = await fs.readFile(depPath, 'utf-8');
-        const depName = path
-          .relative(this.srcPath, depPath)
-          .replace(/\\/g, '/');
-        dependencyContents[depName] = {
-          content: depContent,
-          bindings: dep.bindings || []
-        };
-      } catch (error) {
-        console.warn(`Warning: Could not read dependency ${depPath}:`, error.message);
+  async buildDependencyContents(jsContent, componentPath) {
+    const dependencyContents = {};
+    const visited = new Set();
+
+    // Recursively resolve the relative-import graph rooted at `content`, so a
+    // dependency module's OWN (transitive) imports are inlined too. Returns the
+    // consumer's direct imports as [{ depName, bindings }].
+    const resolveModule = async (content, basePath) => {
+      const consumerImports = [];
+
+      for (const dep of this.analyzeDependencies(content, basePath)) {
+        const depName = path.relative(this.srcPath, dep.path).replace(/\\/g, '/');
+        consumerImports.push({ depName, bindings: dep.bindings || [] });
+
+        if (visited.has(depName)) continue;
+        visited.add(depName);
+
+        try {
+          const depContent = await fs.readFile(dep.path, 'utf-8');
+          // Resolve this module's own transitive imports first.
+          const moduleImports = await resolveModule(depContent, path.dirname(dep.path));
+          dependencyContents[depName] = { content: depContent, bindings: [], moduleImports };
+        } catch (error) {
+          console.warn(`Warning: Could not read dependency ${dep.path}:`, error.message);
+        }
+      }
+
+      return consumerImports;
+    };
+
+    const directImports = await resolveModule(jsContent, componentPath);
+    // The component's direct imports drive its class-factory bindings.
+    for (const { depName, bindings } of directImports) {
+      if (dependencyContents[depName]) {
+        dependencyContents[depName].bindings = bindings;
       }
     }
 
@@ -1428,10 +1488,17 @@ if (window.slice && window.slice.controller) {
 
     dependencyModules.forEach((module, index) => {
       const exportVar = `__sliceDepExports${index}`;
-      const content = this.transformDependencyContent(module.content, exportVar, module.name);
+      // Each dependency lives in its own IIFE scope (see
+      // buildV2DependencyModuleBlockFromModules) so private helpers cannot
+      // collide across modules.
+      const content = this.transformDependencyContent(module.content, '__sliceExports', module.name);
+      const body = content.trim();
       lines.push(`// Dependency: ${module.name}`);
-      lines.push(`const ${exportVar} = {};`);
-      lines.push(content.trim());
+      lines.push(`const ${exportVar} = (() => {`);
+      lines.push('const __sliceExports = {};');
+      if (body) lines.push(body);
+      lines.push('return __sliceExports;');
+      lines.push('})();');
       lines.push(`SLICE_BUNDLE_DEPENDENCIES[${JSON.stringify(module.name)}] = ${exportVar};`);
     });
 
@@ -1458,7 +1525,8 @@ if (window.slice && window.slice.controller) {
         if (modules.has(moduleName)) continue;
         const content = typeof entry === 'string' ? entry : entry?.content;
         if (!content) continue;
-        modules.set(moduleName, { name: moduleName, content });
+        const moduleImports = (entry && typeof entry === 'object' ? entry.moduleImports : null) || [];
+        modules.set(moduleName, { name: moduleName, content, moduleImports });
       }
     }
     return Array.from(modules.values());
@@ -1469,6 +1537,158 @@ if (window.slice && window.slice.controller) {
   }
 
   transformDependencyContent(content, exportVar, moduleName) {
+    let ast;
+    try {
+      ast = parse(content, { sourceType: 'module', plugins: ['jsx'] });
+    } catch (error) {
+      // Unparseable content (e.g. TS syntax): fall back to the regex transform
+      // so we never lose a dependency entirely.
+      return this.transformDependencyContentRegexFallback(content, exportVar, moduleName);
+    }
+
+    const fallbackKey = this.getDependencyDefaultFallbackKey(moduleName);
+    const statements = ast.program.body
+      .filter((node) => typeof node.start === 'number' && typeof node.end === 'number')
+      .sort((a, b) => a.start - b.start);
+
+    let cursor = 0;
+    let output = '';
+    for (const node of statements) {
+      output += content.slice(cursor, node.start);
+      output += this.transformDependencyStatement(node, content, exportVar, moduleName, fallbackKey);
+      cursor = node.end;
+    }
+    output += content.slice(cursor);
+    return output;
+  }
+
+  describeExportTarget(exportVar, name) {
+    return /^[A-Za-z_$][\w$]*$/.test(name)
+      ? `${exportVar}.${name}`
+      : `${exportVar}[${JSON.stringify(name)}]`;
+  }
+
+  collectPatternIdentifiers(node, acc = []) {
+    if (!node) return acc;
+    switch (node.type) {
+      case 'Identifier':
+        acc.push(node.name);
+        break;
+      case 'ObjectPattern':
+        for (const prop of node.properties) {
+          if (prop.type === 'RestElement') {
+            this.collectPatternIdentifiers(prop.argument, acc);
+          } else {
+            this.collectPatternIdentifiers(prop.value, acc);
+          }
+        }
+        break;
+      case 'ArrayPattern':
+        for (const element of node.elements) {
+          if (element) this.collectPatternIdentifiers(element, acc);
+        }
+        break;
+      case 'AssignmentPattern':
+        this.collectPatternIdentifiers(node.left, acc);
+        break;
+      case 'RestElement':
+        this.collectPatternIdentifiers(node.argument, acc);
+        break;
+      default:
+        break;
+    }
+    return acc;
+  }
+
+  transformExportedDeclaration(decl, content, exportVar) {
+    const sourceOf = (n) => content.slice(n.start, n.end);
+
+    if (decl.type === 'FunctionDeclaration' || decl.type === 'ClassDeclaration') {
+      const name = decl.id?.name;
+      if (!name) return sourceOf(decl);
+      // Keep the declaration so other code in the module can still reference the
+      // name (intra-module references), then mirror it onto the exports object.
+      // Each dependency is IIFE-scoped, so this local binding can't collide.
+      return `${sourceOf(decl)}\n${this.describeExportTarget(exportVar, name)} = ${name};`;
+    }
+
+    if (decl.type === 'VariableDeclaration') {
+      // Keep the declaration verbatim — preserving intra-module references and
+      // initializer evaluation — then export every bound name.
+      const names = [];
+      for (const declarator of decl.declarations) {
+        names.push(...this.collectPatternIdentifiers(declarator.id, []));
+      }
+      const assigns = names
+        .map((n) => `${this.describeExportTarget(exportVar, n)} = ${n};`)
+        .join('\n');
+      return `${sourceOf(decl)}\n${assigns}`;
+    }
+
+    return sourceOf(decl);
+  }
+
+  transformDependencyStatement(node, content, exportVar, moduleName, fallbackKey) {
+    const sourceOf = (n) => content.slice(n.start, n.end);
+
+    if (node.type === 'ImportDeclaration') {
+      // Transitive imports of a bundled dependency cannot be resolved at
+      // runtime; strip them so they never leak into the emitted bundle.
+      console.warn(this.buildImportWarningMessage(
+        `Warning: Stripping unsupported import inside bundled dependency: ${node.source?.value}`,
+        moduleName
+      ));
+      return '';
+    }
+
+    if (node.type === 'ExportAllDeclaration') {
+      console.warn(this.buildImportWarningMessage(
+        `Warning: Dropping unsupported 'export *' inside bundled dependency: ${node.source?.value}`,
+        moduleName
+      ));
+      return '';
+    }
+
+    if (node.type === 'ExportDefaultDeclaration') {
+      const declSource = sourceOf(node.declaration);
+      const lines = [`${exportVar}.default = (${declSource});`];
+      if (fallbackKey && fallbackKey !== 'default') {
+        // Preserve the historical `<basename>Data` key so existing default
+        // bindings (which pass it as the preferred key) keep resolving.
+        lines.push(`${this.describeExportTarget(exportVar, fallbackKey)} = ${exportVar}.default;`);
+      }
+      return lines.join('\n');
+    }
+
+    if (node.type === 'ExportNamedDeclaration') {
+      if (node.source) {
+        console.warn(this.buildImportWarningMessage(
+          `Warning: Dropping unsupported re-export inside bundled dependency: ${node.source.value}`,
+          moduleName
+        ));
+        return '';
+      }
+
+      if (node.declaration) {
+        return this.transformExportedDeclaration(node.declaration, content, exportVar);
+      }
+
+      // `export { local as exported, ... }` — key the exports object by the
+      // PUBLIC (exported) name, mapped to the local binding's value.
+      return node.specifiers
+        .map((spec) => {
+          const localName = spec.local.name;
+          const exportedName = spec.exported.name ?? spec.exported.value;
+          return `${this.describeExportTarget(exportVar, exportedName)} = ${localName};`;
+        })
+        .join('\n');
+    }
+
+    // Any other top-level statement is kept verbatim.
+    return sourceOf(node);
+  }
+
+  transformDependencyContentRegexFallback(content, exportVar, moduleName) {
     const dataName = this.getDependencyDefaultFallbackKey(moduleName);
     const exportPrefix = dataName ? `${exportVar}.${dataName} = ` : `${exportVar}.default = `;
 
@@ -1594,11 +1814,18 @@ if (window.slice && window.slice.controller) {
   }
 
   toSafeIdentifier(name) {
-    const cleaned = name.replace(/[^a-zA-Z0-9_]/g, '_');
-    if (/^\d/.test(cleaned)) {
-      return `SliceComponent_${cleaned}`;
-    }
-    return `SliceComponent_${cleaned}`;
+    // Injective encoding: every character outside [A-Za-z0-9] (including '_')
+    // is escaped to `_<hex>_`. This guarantees that two distinct component
+    // names can never collapse to the same identifier (e.g. "my-btn" and
+    // "my_btn" used to both yield "SliceComponent_my_btn", emitting duplicate
+    // `const` declarations and producing invalid bundle JS). The leading
+    // `SliceComponent_` prefix keeps the result a valid identifier even when
+    // the name starts with a digit.
+    const encoded = String(name).replace(
+      /[^a-zA-Z0-9]/g,
+      (char) => `_${char.charCodeAt(0).toString(16)}_`
+    );
+    return `SliceComponent_${encoded}`;
   }
 
   /**
@@ -1633,17 +1860,23 @@ if (window.slice && window.slice.controller) {
           integrity: null,
           components: []
         },
-        vendorShared: {
-          bundleKey: 'vendor-shared',
-          type: 'vendor-shared',
-          file: this.vendorShared.file,
-          size: this.vendorShared.bundle?.size || 0,
-          hash: this.vendorShared.bundle?.hash || null,
-          integrity: this.vendorShared.bundle?.integrity || null,
-          dependencies: Array.from(this.vendorShared.sharedDependencySet).sort((a, b) => a.localeCompare(b)),
-          dependencyCount: this.vendorShared.sharedDependencySet.size,
-          routes: Array.from(this.vendorShared.bundleKeysUsingSharedDependencies).sort((a, b) => a.localeCompare(b))
-        },
+        // Only advertise the vendor-shared bundle when it was actually emitted
+        // (i.e. there were shared dependencies). Otherwise the config would
+        // reference a file that does not exist on disk -> 404 for any runtime
+        // that resolves it.
+        vendorShared: this.vendorShared.bundle
+          ? {
+              bundleKey: 'vendor-shared',
+              type: 'vendor-shared',
+              file: this.vendorShared.file,
+              size: this.vendorShared.bundle?.size || 0,
+              hash: this.vendorShared.bundle?.hash || null,
+              integrity: this.vendorShared.bundle?.integrity || null,
+              dependencies: Array.from(this.vendorShared.sharedDependencySet).sort((a, b) => a.localeCompare(b)),
+              dependencyCount: this.vendorShared.sharedDependencySet.size,
+              routes: Array.from(this.vendorShared.bundleKeysUsingSharedDependencies).sort((a, b) => a.localeCompare(b))
+            }
+          : null,
         critical: {
           file: this.bundles.critical.file,
           size: this.bundles.critical.size,

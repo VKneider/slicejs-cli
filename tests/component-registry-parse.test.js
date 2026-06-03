@@ -30,5 +30,5 @@ test('Validations componentExists with JSON.parse (no eval)', async () => {
     const validations = (await import('../commands/Validations.js')).default;
     assert.equal(validations.componentExists('Button'), true);
     assert.equal(validations.componentExists('NonExistent'), false);
-  });
+  }, { visualComponents: ['Button'] });
 });
