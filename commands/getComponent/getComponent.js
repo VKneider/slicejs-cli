@@ -50,6 +50,10 @@ class ComponentRegistry {
     this.componentsRegistry = null;
     this.config = null;
     this._configPromise = null;
+    // Serializes read-modify-write cycles on components.js: installs run
+    // concurrently (runConcurrent), and parallel writers corrupt the file
+    // (partial reads) or silently drop registrations (lost updates).
+    this._registryLock = Promise.resolve();
   }
 
   async _ensureConfig() {
@@ -249,31 +253,35 @@ filterOfficialComponents(allComponents) {
   }
 
   async updateLocalRegistrySafe(componentName, category) {
+    // Queue behind any in-flight registry update; keep the chain alive even
+    // when an update throws so later updates still run.
+    const run = this._registryLock.then(() => this._updateLocalRegistry(componentName, category));
+    this._registryLock = run.catch(() => {});
+    return run;
+  }
+
+  async _updateLocalRegistry(componentName, category) {
     const componentsPath = getComponentsJsPath(import.meta.url);
-    try {
-      if (!await fs.pathExists(componentsPath)) {
-        const dir = path.dirname(componentsPath);
-        await fs.ensureDir(dir);
-        const initial = `const components = {};\n\nexport default components;\n`;
-        await fs.writeFile(componentsPath, initial, 'utf8');
-      }
-      const content = await fs.readFile(componentsPath, 'utf8');
-      const match = content.match(/const components = ({[\s\S]*?});/);
-      if (!match) throw new Error('Invalid components.js format in local project');
-      const componentsObj = JSON.parse(match[1]);
-      if (!componentsObj[componentName]) {
-        componentsObj[componentName] = category;
-        const sorted = Object.keys(componentsObj)
-          .sort()
-          .reduce((obj, key) => { obj[key] = componentsObj[key]; return obj; }, {});
-        const newContent = `const components = ${JSON.stringify(sorted, null, 2)};\n\nexport default components;\n`;
-        await fs.writeFile(componentsPath, newContent, 'utf8');
-        Print.registryUpdate(`Registered ${componentName} in local components.js`);
-      } else {
-        Print.info(`${componentName} already exists in local registry`);
-      }
-    } catch (error) {
-      throw error;
+    if (!await fs.pathExists(componentsPath)) {
+      const dir = path.dirname(componentsPath);
+      await fs.ensureDir(dir);
+      const initial = `const components = {};\n\nexport default components;\n`;
+      await fs.writeFile(componentsPath, initial, 'utf8');
+    }
+    const content = await fs.readFile(componentsPath, 'utf8');
+    const match = content.match(/const components = ({[\s\S]*?});/);
+    if (!match) throw new Error('Invalid components.js format in local project');
+    const componentsObj = JSON.parse(match[1]);
+    if (!componentsObj[componentName]) {
+      componentsObj[componentName] = category;
+      const sorted = Object.keys(componentsObj)
+        .sort()
+        .reduce((obj, key) => { obj[key] = componentsObj[key]; return obj; }, {});
+      const newContent = `const components = ${JSON.stringify(sorted, null, 2)};\n\nexport default components;\n`;
+      await fs.writeFile(componentsPath, newContent, 'utf8');
+      Print.registryUpdate(`Registered ${componentName} in local components.js`);
+    } else {
+      Print.info(`${componentName} already exists in local registry`);
     }
   }
 
@@ -339,7 +347,7 @@ filterOfficialComponents(allComponents) {
       await this.updateLocalRegistrySafe(componentName, category);
 
       Print.success(`${componentName} installed successfully from official repository!`);
-      console.log(`📁 Location: ${folderSuffix}/${categoryPath}/${componentName}/`);
+      console.log(`📁 Location: ${[folderSuffix, categoryPath, componentName].join('/').replace(/\/+/g, '/')}/`);
       console.log(`📄 Files: ${downloadedFiles.join(', ')}`);
 
       return true;

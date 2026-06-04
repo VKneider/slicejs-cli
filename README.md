@@ -28,9 +28,9 @@ This repository contains the Slice.js CLI (`slicejs-cli`), the command-line tool
    cd slicejs-cli
    ```
 
-2. **Install dependencies**
+2. **Install dependencies** (the repo pins pnpm via the `packageManager` field)
    ```bash
-   npm install
+   pnpm install --frozen-lockfile
    ```
 
 3. **Test changes locally**
@@ -50,17 +50,23 @@ This repository contains the Slice.js CLI (`slicejs-cli`), the command-line tool
 
 ## Installation (for users)
 
-### Local (Recommended)
+For a **new project** you don't install anything manually — `slice init` (see Quick
+start below) installs the CLI locally in the project it creates.
+
+### Local in an existing project (Recommended)
 
 ```bash
-npm install slicejs-cli --save-dev
+npm install slicejs-cli --save-dev    # or: pnpm add -D slicejs-cli
 ```
 
-### Global (Not recommended)
+### Global launcher (optional)
 
 ```bash
-npm install -g slicejs-cli
+npm install -g slicejs-cli            # or: pnpm add -g slicejs-cli
 ```
+
+The launcher delegates to the nearest project-local `node_modules/slicejs-cli`,
+so each project keeps its pinned CLI version.
 
 ## Main commands
 
@@ -106,20 +112,33 @@ npx slicejs-cli postinstall
 
 ## Quick start
 
+`slice init` creates the project folder itself — no `mkdir` or `npm init` needed.
+Everything (package.json, node_modules, lockfile, src/, api/) lives inside the new folder.
+
 ```bash
-# 1. Create project
-mkdir my-project && cd my-project
-npm init -y
-
-# 2. Install CLI
-npm install slicejs-cli --save-dev
-
-# 3. Initialize
+# With npm
 npx slicejs-cli init
-
-# 4. Development
-npx slicejs-cli dev
+cd my-app
+npm run dev
 ```
+
+```bash
+# With pnpm
+pnpm dlx slicejs-cli init
+cd my-app
+pnpm run dev
+```
+
+Non-interactive (for scripts/CI):
+
+```bash
+npx slicejs-cli init -y my-app --pm pnpm
+```
+
+init pins the chosen package manager in the `packageManager` field, installs
+`slicejs-web-framework` as a dependency and `slicejs-cli` as a devDependency of
+the new project. Versions are never hard-pinned at install time, so hardened pnpm
+setups (`minimumReleaseAge` quarantine, `ignore-scripts`) work out of the box.
 
 ## Tests
 

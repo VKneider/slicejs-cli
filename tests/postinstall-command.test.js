@@ -3,10 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { SLICE_SCRIPTS } from '../commands/utils/sliceScripts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const clientPath = path.join(__dirname, '..', 'client.js');
 const source = fs.readFileSync(clientPath, 'utf-8');
+const postSource = fs.readFileSync(path.join(__dirname, '..', 'post.js'), 'utf-8');
+const initSource = fs.readFileSync(path.join(__dirname, '..', 'commands', 'init', 'init.js'), 'utf-8');
 
 test('postinstall command is registered in client.js', () => {
   const hasSetupCommand = source.includes('.command("postinstall")');
@@ -44,20 +47,29 @@ test('postinstall command writes npm scripts to package.json via fs', () => {
   assert.ok(hasFsWrite, 'postinstall command must write scripts to package.json');
 });
 
-test('postinstall command writes slice:dev script to package.json', () => {
-  const hasDevScript = source.includes("'slice:dev': 'slice dev'");
-  assert.ok(hasDevScript, 'postinstall command must add "slice:dev" script to package.json');
+test('SLICE_SCRIPTS contains every slice:* command', () => {
+  const expected = [
+    'slice:init', 'slice:dev', 'slice:build', 'slice:start',
+    'slice:create', 'slice:list', 'slice:delete',
+    'slice:get', 'slice:browse', 'slice:sync',
+    'slice:version', 'slice:update', 'slice:types'
+  ];
+  for (const script of expected) {
+    assert.ok(SLICE_SCRIPTS[script], `SLICE_SCRIPTS must define ${script}`);
+    assert.ok(SLICE_SCRIPTS[script].startsWith('slice '), `${script} must run a slice command`);
+  }
+  assert.equal(Object.keys(SLICE_SCRIPTS).length, expected.length, 'no unexpected scripts in SLICE_SCRIPTS');
 });
 
-test('postinstall command writes all slice:* scripts to package.json', () => {
-  const scripts = [
-    'slice:dev', 'slice:start', 'slice:create', 'slice:list',
-    'slice:delete', 'slice:init', 'slice:get', 'slice:browse',
-    'slice:sync', 'slice:version', 'slice:update'
-  ];
-  for (const script of scripts) {
-    assert.ok(source.includes(script), `postinstall command must configure ${script} script`);
-  }
+test('postinstall command, post.js and slice init all use the shared SLICE_SCRIPTS', () => {
+  // Single source of truth: the three writers must import the shared module so
+  // they cannot drift apart (client.js used to miss slice:types, none had slice:build).
+  assert.ok(source.includes('SLICE_SCRIPTS'), 'client.js postinstall must use SLICE_SCRIPTS');
+  assert.ok(source.includes("from './commands/utils/sliceScripts.js'"), 'client.js must import sliceScripts.js');
+  assert.ok(postSource.includes('SLICE_SCRIPTS'), 'post.js must use SLICE_SCRIPTS');
+  assert.ok(postSource.includes("from './commands/utils/sliceScripts.js'"), 'post.js must import sliceScripts.js');
+  assert.ok(initSource.includes('Object.assign(pkg.scripts, SLICE_SCRIPTS)'), 'init.js must apply SLICE_SCRIPTS');
+  assert.ok(initSource.includes("from '../utils/sliceScripts.js'"), 'init.js must import sliceScripts.js');
 });
 
 test('postinstall command action is a function', () => {

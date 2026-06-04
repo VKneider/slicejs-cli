@@ -7,6 +7,7 @@ import ora from "ora";
 import Print from "../Print.js";
 import versionChecker from "./VersionChecker.js";
 import { getProjectRoot, getApiPath, getPath } from "../utils/PathHelper.js";
+import { resolvePackageManager, installCommand } from "../utils/PackageManager.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs-extra";
@@ -18,28 +19,45 @@ export class UpdateManager {
         this.packagesToUpdate = [];
     }
 
+    getPackageManager() {
+        if (!this._packageManager) {
+            this._packageManager = resolvePackageManager(getProjectRoot(import.meta.url)).name;
+        }
+        return this._packageManager;
+    }
+
     async detectCliInstall() {
         try {
             const moduleDir = path.dirname(fileURLToPath(import.meta.url));
             const cliRoot = path.join(moduleDir, '../../');
             const projectRoot = getProjectRoot(import.meta.url);
+            const packageManager = this.getPackageManager();
+            const localNodeModules = path.join(projectRoot, 'node_modules');
+
+            if (cliRoot.startsWith(localNodeModules)) {
+                return { type: 'local', cliRoot, projectRoot, packageManager };
+            }
+
+            // Global pnpm installs live under PNPM_HOME — `npm config get prefix`
+            // knows nothing about them (and npm may not even exist on the machine).
+            const pnpmHome = process.env.PNPM_HOME;
+            if (pnpmHome && cliRoot.startsWith(pnpmHome)) {
+                return { type: 'global', cliRoot, projectRoot, packageManager: 'pnpm' };
+            }
+
             let globalPrefix = '';
             try {
                 const { stdout } = await execAsync('npm config get prefix');
                 globalPrefix = stdout.toString().trim();
             } catch {}
-            const localNodeModules = path.join(projectRoot, 'node_modules');
             const globalNodeModules = globalPrefix ? path.join(globalPrefix, 'node_modules') : '';
-
-            if (cliRoot.startsWith(localNodeModules)) {
-                return { type: 'local', cliRoot, projectRoot, globalPrefix };
-            }
             if (globalNodeModules && cliRoot.startsWith(globalNodeModules)) {
-                return { type: 'global', cliRoot, projectRoot, globalPrefix };
+                return { type: 'global', cliRoot, projectRoot, packageManager: 'npm' };
             }
-            return { type: 'unknown', cliRoot, projectRoot, globalPrefix };
+
+            return { type: 'unknown', cliRoot, projectRoot, packageManager };
         } catch (error) {
-            return { type: 'unknown' };
+            return { type: 'unknown', packageManager: this.getPackageManager() };
         }
     }
 
@@ -180,17 +198,12 @@ export class UpdateManager {
     async buildUpdatePlan(packages) {
         const plan = [];
         const info = await this.detectCliInstall();
+        const pm = info.packageManager || this.getPackageManager();
         for (const pkg of packages) {
-            if (pkg === 'slicejs-cli') {
-                if (info.type === 'global') {
-                    plan.push({ package: pkg, target: 'global', command: 'npm install -g slicejs-cli@latest' });
-                } else {
-                    plan.push({ package: pkg, target: 'project', command: 'npm install slicejs-cli@latest' });
-                }
-            } else if (pkg === 'slicejs-web-framework') {
-                plan.push({ package: pkg, target: 'project', command: 'npm install slicejs-web-framework@latest' });
+            if (pkg === 'slicejs-cli' && info.type === 'global') {
+                plan.push({ package: pkg, target: 'global', command: installCommand(pm, 'slicejs-cli@latest', { global: true }) });
             } else {
-                plan.push({ package: pkg, target: 'project', command: `npm install ${pkg}@latest` });
+                plan.push({ package: pkg, target: 'project', command: installCommand(pm, `${pkg}@latest`) });
             }
         }
         return plan;
@@ -201,15 +214,15 @@ export class UpdateManager {
      */
     async updatePackage(packageName) {
         try {
-            let installCmd = `npm install ${packageName}@latest`;
-            let uninstallCmd = `npm uninstall ${packageName}`;
+            const pm = this.getPackageManager();
+            let installCmd = installCommand(pm, `${packageName}@latest`);
             let options = {};
 
             if (packageName === 'slicejs-cli') {
                 const info = await this.detectCliInstall();
                 if (info.type === 'global') {
-                    installCmd = `npm install -g slicejs-cli@latest`;
-                    uninstallCmd = `npm uninstall -g slicejs-cli`;
+                    const globalPm = info.packageManager || pm;
+                    installCmd = installCommand(globalPm, 'slicejs-cli@latest', { global: true });
                 } else {
                     options.cwd = info.projectRoot || getProjectRoot(import.meta.url);
                 }
@@ -217,11 +230,9 @@ export class UpdateManager {
                 options.cwd = getProjectRoot(import.meta.url);
             }
 
-            // Try uninstall first (ignore failure)
-            try {
-                await execAsync(uninstallCmd, options);
-            } catch {}
-
+            // Install directly — npm/pnpm upgrade in place. (We used to uninstall
+            // first, which left the project without the package whenever the
+            // subsequent install failed, e.g. offline or under a release-age policy.)
             const { stdout, stderr } = await execAsync(installCmd, options);
 
             return {
@@ -284,13 +295,12 @@ export class UpdateManager {
                 return false;
             }
 
-            if (updateInfo.allCurrent) {
+            if (updateInfo.allCurrent || !updateInfo.hasUpdates) {
                 Print.success('✅ All components are up to date!');
-                return true;
-            }
-
-            if (!updateInfo.hasUpdates) {
-                Print.success('✅ All components are up to date!');
+                // --update-api works even when no package update runs.
+                if (options.updateApi) {
+                    await this.updateApiIndexIfNeeded(options);
+                }
                 return true;
             }
 
@@ -341,7 +351,7 @@ export class UpdateManager {
                 }
             } else {
                 Print.warning('Global CLI detected. It is recommended to update slicejs-cli globally to keep aligned with the framework.');
-                console.log('   Suggestion: npm install -g slicejs-cli@latest');
+                console.log(`   Suggestion: ${installCommand(cliInfo.packageManager || this.getPackageManager(), 'slicejs-cli@latest', { global: true })}`);
                 console.log('');
             }
         }
@@ -386,7 +396,7 @@ export class UpdateManager {
             }
 
             const frameworkUpdated = results.find(r => r.packageName === 'slicejs-web-framework' && r.success);
-            if (frameworkUpdated) {
+            if (frameworkUpdated || options.updateApi) {
                 await this.updateApiIndexIfNeeded(options);
             }
 
@@ -417,7 +427,16 @@ export class UpdateManager {
 
             Print.warning('⚠️ Detected changes in framework api/index.js.');
 
-            let confirmUpdate = options.yes === true;
+            // Overwriting api/index.js is opt-in: `--update-api` is the only way
+            // to auto-confirm. `-y/--yes` deliberately does NOT imply it — the
+            // project file may carry local changes, so a blanket "yes to updates"
+            // must not silently replace it.
+            let confirmUpdate = options.updateApi === true;
+            if (!confirmUpdate && options.yes === true) {
+                Print.info('Skipping api/index.js update (not updated by default).');
+                Print.info('Run "slice update --update-api" to update it (a .bak backup is created).');
+                return;
+            }
             if (!confirmUpdate) {
                 const answers = await inquirer.prompt([
                     {

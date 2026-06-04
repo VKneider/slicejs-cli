@@ -2,35 +2,27 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { getProjectRoot, getPath } from './commands/utils/PathHelper.js';
+import { SLICE_SCRIPTS } from './commands/utils/sliceScripts.js';
 
 const __filename = fileURLToPath(import.meta.url);
 
-const isGlobal = process.env.npm_config_global === 'true';
+// npm sets npm_config_global; pnpm does not — for pnpm a global install lives
+// under PNPM_HOME, so detect it by where this script is running from.
+const pnpmHome = process.env.PNPM_HOME;
+const isGlobal = process.env.npm_config_global === 'true'
+    || (pnpmHome && __filename.startsWith(pnpmHome));
 
 if (isGlobal) {
     console.log('⚠️  Global installation of slicejs-cli detected.');
     console.log('   We strongly recommend using a local installation to avoid version mismatches.');
-    console.log('   Uninstall global: npm uninstall -g slicejs-cli');
+    console.log(`   Uninstall global: ${pnpmHome ? 'pnpm remove -g slicejs-cli' : 'npm uninstall -g slicejs-cli'}`);
     process.exit(0);
 }
 
 const projectRoot = getProjectRoot(import.meta.url);
 const pkgPath = getPath(import.meta.url, 'package.json');
 
-const sliceScripts = {
-    'slice:dev': 'slice dev',
-    'slice:start': 'slice start',
-    'slice:create': 'slice component create',
-    'slice:list': 'slice component list',
-    'slice:delete': 'slice component delete',
-    'slice:init': 'slice init',
-    'slice:get': 'slice get',
-    'slice:browse': 'slice browse',
-    'slice:sync': 'slice sync',
-    'slice:version': 'slice version',
-    'slice:update': 'slice update',
-    'slice:types': 'slice types generate',
-};
+const sliceScripts = SLICE_SCRIPTS;
 
 try {
     let pkg = {};

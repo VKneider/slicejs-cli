@@ -8,6 +8,7 @@ import inquirer from 'inquirer';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { getProjectRoot, getSrcPath, getApiPath, getConfigPath, getPath } from '../utils/PathHelper.js';
+import { resolvePackageManager, installCommand } from '../utils/PackageManager.js';
 import updateManager from '../utils/updateManager.js';
 
 /**
@@ -143,6 +144,69 @@ async function checkPort() {
 }
 
 /**
+ * Checks the package manager setup: mixed lockfiles, packageManager field
+ * consistency, and a project-local CLI install (required for local delegation).
+ * Exported for tests.
+ */
+export async function checkPackageManagerSetup(projectRoot = getProjectRoot(import.meta.url)) {
+    const issues = [];
+    const suggestions = [];
+
+    const LOCKFILE_PM = {
+        'package-lock.json': 'npm',
+        'pnpm-lock.yaml': 'pnpm',
+        'yarn.lock': 'yarn'
+    };
+    const lockfiles = [];
+    for (const lockfile of Object.keys(LOCKFILE_PM)) {
+        if (await fs.pathExists(path.join(projectRoot, lockfile))) {
+            lockfiles.push(lockfile);
+        }
+    }
+
+    let pkg = null;
+    const pkgPath = path.join(projectRoot, 'package.json');
+    if (await fs.pathExists(pkgPath)) {
+        try { pkg = await fs.readJson(pkgPath); } catch { /* reported by Dependencies check */ }
+    }
+    const pmField = typeof pkg?.packageManager === 'string' ? pkg.packageManager.split('@')[0] : null;
+    const pm = resolvePackageManager(projectRoot).name;
+
+    if (lockfiles.length > 1) {
+        issues.push(`Mixed lockfiles found: ${lockfiles.join(', ')}`);
+        const keep = pmField || pm;
+        const keepLockfile = Object.entries(LOCKFILE_PM).find(([, name]) => name === keep)?.[0];
+        suggestions.push(`Keep only ${keepLockfile ?? 'the lockfile of your package manager'} and delete the rest`);
+    }
+
+    if (pkg && !pmField) {
+        issues.push('No "packageManager" field in package.json');
+        suggestions.push(`Pin it (e.g. "packageManager": "${pm}@<version>") so every tool resolves the same package manager`);
+    } else if (pmField && lockfiles.length === 1 && LOCKFILE_PM[lockfiles[0]] !== pmField) {
+        issues.push(`packageManager is "${pmField}" but the lockfile is ${lockfiles[0]}`);
+        suggestions.push(`Reinstall with ${pmField} (or update the packageManager field) so they agree`);
+    }
+
+    const localCliPath = path.join(projectRoot, 'node_modules', 'slicejs-cli', 'package.json');
+    if (pkg && !(await fs.pathExists(localCliPath))) {
+        issues.push('slicejs-cli is not installed locally');
+        suggestions.push(`Run "${installCommand(pm, 'slicejs-cli', { dev: true })}" so the launcher delegates to a version pinned per project`);
+    }
+
+    if (issues.length === 0) {
+        return {
+            pass: true,
+            message: `Package manager setup is consistent (${pmField || pm})`
+        };
+    }
+    return {
+        warn: true,
+        message: issues.join(' | '),
+        suggestion: suggestions.join(' | ')
+    };
+}
+
+/**
  * Checks dependencies in package.json
  */
 async function checkDependencies() {
@@ -176,8 +240,8 @@ async function checkDependencies() {
                 warn: true,
                 message: `Missing dependencies: ${missing.join(', ')}`,
                 suggestion: missing.includes('slicejs-web-framework')
-                    ? 'Run "npm install slicejs-web-framework@latest" in your project'
-                    : 'Run "npm install -D slicejs-cli@latest" in your project',
+                    ? `Run "${installCommand(resolvePackageManager(getProjectRoot(import.meta.url)).name, 'slicejs-web-framework@latest')}" in your project`
+                    : `Run "${installCommand(resolvePackageManager(getProjectRoot(import.meta.url)).name, 'slicejs-cli@latest', { dev: true })}" in your project`,
                 missing
             };
         }
@@ -278,6 +342,7 @@ export default async function runDiagnostics() {
         { name: 'Project Structure', fn: checkDirectoryStructure },
         { name: 'Configuration', fn: checkConfig },
         { name: 'Port Availability', fn: checkPort },
+        { name: 'Package Manager', fn: checkPackageManagerSetup },
         { name: 'Dependencies', fn: checkDependencies },
         { name: 'Components', fn: checkComponents }
     ];
@@ -340,9 +405,10 @@ export default async function runDiagnostics() {
             }
         ]);
         if (confirmInstall) {
+            const pm = resolvePackageManager(projectRoot).name;
             for (const pkg of depsResult.missing) {
                 try {
-                    const cmd = 'npm install slicejs-web-framework@latest';
+                    const cmd = installCommand(pm, `${pkg}@latest`);
                     Print.info(`Installing ${pkg}...`);
                     await execAsync(cmd, { cwd: projectRoot });
                     Print.success(`${pkg} installed`);

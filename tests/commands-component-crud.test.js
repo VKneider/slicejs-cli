@@ -100,3 +100,29 @@ describe('component list (registry regeneration)', () => {
     });
   });
 });
+
+describe('slice component delete via CLI (full command path)', () => {
+  test('deletes a component non-interactively without crashing', async () => {
+    // Regression: client.js used to call an undefined loadConfig() in this
+    // path (ReferenceError), which unit tests of deleteComponent never hit.
+    const { createTestProject, cleanupTestProject } = await import('./helpers/setup.js');
+    const { spawnSync } = await import('node:child_process');
+    const { fileURLToPath } = await import('node:url');
+    const dir = await createTestProject({ visualComponents: ['Button'] });
+    try {
+      const client = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'client.js');
+      const result = spawnSync(process.execPath, [client, 'component', 'delete', 'Button', '--category', 'Visual', '--yes'], {
+        cwd: dir,
+        encoding: 'utf-8',
+        env: { ...process.env, INIT_CWD: dir, SLICE_NO_LOCAL_DELEGATION: '1' },
+        timeout: 60_000
+      });
+      const output = `${result.stdout}\n${result.stderr}`;
+      assert.equal(result.status, 0, `command must exit 0. Output:\n${output}`);
+      assert.ok(!output.includes('ReferenceError'), `must not crash:\n${output}`);
+      assert.ok(!(await fs.pathExists(path.join(dir, 'src', 'Components', 'Visual', 'Button'))), 'Button folder must be deleted');
+    } finally {
+      await cleanupTestProject(dir);
+    }
+  });
+});

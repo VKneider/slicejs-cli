@@ -27,6 +27,13 @@ import {
   resolveLocalCliCandidate,
   shouldDelegateToLocalCli
 } from './commands/utils/LocalCliDelegation.js';
+import {
+  detectPackageManager,
+  getAvailablePackageManagers,
+  isPackageManagerAvailable,
+  SUPPORTED_PACKAGE_MANAGERS
+} from './commands/utils/PackageManager.js';
+import { SLICE_SCRIPTS } from './commands/utils/sliceScripts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -96,6 +103,7 @@ sliceClient
   .command("init")
   .description("Initialize a new Slice.js project")
   .option("-y, --yes [name]", "Skip prompts and initialize with project name")
+  .option("--pm <packageManager>", "Package manager to use (npm, pnpm or yarn). Auto-detected when omitted")
   .action(async (options) => {
     let projectName = 'my-slice-app';
     if (options.yes) {
@@ -123,16 +131,62 @@ sliceClient
       projectName = answers.projectName;
     }
 
+    // Resolve the package manager: --pm flag → detection → interactive prompt.
+    // Detection here has no project root yet (the folder is new), so it relies on
+    // npm_config_user_agent (npx / pnpm dlx / PM scripts) or a single available binary.
+    let packageManager = options.pm;
+    if (packageManager && !SUPPORTED_PACKAGE_MANAGERS.includes(packageManager)) {
+      Print.error(`Unsupported package manager "${packageManager}". Use one of: ${SUPPORTED_PACKAGE_MANAGERS.join(', ')}`);
+      return;
+    }
+    if (packageManager && !isPackageManagerAvailable(packageManager)) {
+      Print.error(`Package manager "${packageManager}" is not available on this system`);
+      return;
+    }
+    if (!packageManager) {
+      const detected = detectPackageManager(null);
+      if (detected) {
+        packageManager = detected.name;
+      } else if (!options.yes) {
+        const available = getAvailablePackageManagers();
+        if (available.length === 0) {
+          Print.error('No package manager found (npm, pnpm or yarn). Install one and retry.');
+          return;
+        }
+        const { pm } = await inquirer.prompt([
+          {
+            type: 'list',
+            name: 'pm',
+            message: 'Which package manager do you want to use?',
+            choices: available,
+            default: available.includes('pnpm') ? 'pnpm' : available[0]
+          }
+        ]);
+        packageManager = pm;
+      } else {
+        const available = getAvailablePackageManagers();
+        packageManager = available.includes('npm') ? 'npm' : available[0];
+        if (!packageManager) {
+          Print.error('No package manager found (npm, pnpm or yarn). Install one and retry.');
+          return;
+        }
+      }
+    }
+
     const projectDir = path.resolve(projectName);
 
     if (fs.existsSync(projectDir)) {
       const contents = fs.readdirSync(projectDir);
       if (contents.length > 0) {
+        if (options.yes) {
+          Print.error(`Directory "${projectName}" already exists and is not empty. Aborting.`);
+          return;
+        }
         const { overwrite } = await inquirer.prompt([
           {
             type: 'confirm',
             name: 'overwrite',
-            message: `Directory "${answers.projectName}" already exists and is not empty. Continue?`,
+            message: `Directory "${projectName}" already exists and is not empty. Continue?`,
             default: false
           }
         ]);
@@ -148,9 +202,8 @@ sliceClient
     process.chdir(projectDir);
     process.env.INIT_CWD = projectDir;
 
-    await runWithVersionCheck(() => {
-      initializeProject();
-      return Promise.resolve();
+    await runWithVersionCheck(async () => {
+      await initializeProject({ packageManager });
     });
   });
 
@@ -353,7 +406,7 @@ componentCommand
           category = categoryAnswer.category;
         }
 
-        const config = loadConfig();
+        const config = sharedLoadConfigSync(import.meta.url);
         if (!config) {
           Print.error("Could not load configuration");
           return;
@@ -550,6 +603,7 @@ sliceClient
   .option("-y, --yes", "Skip confirmation and update all packages automatically")
   .option("--cli", "Update only the Slice.js CLI")
   .option("-f, --framework", "Update only the Slice.js Framework")
+  .option("--update-api", "Also overwrite api/index.js with the framework version (never done by default; creates a .bak backup)")
   .action(async (options) => {
     await updateManager.checkAndPromptUpdates(options);
   });
@@ -570,30 +624,23 @@ sliceClient
   .command("postinstall")
   .description("Configure npm scripts in package.json (alternative to postinstall for --ignore-scripts users)")
   .action(() => {
-    const isGlobal = process.env.npm_config_global === 'true';
+    // npm sets npm_config_global; pnpm global installs are detected via PNPM_HOME.
+    const pnpmHome = process.env.PNPM_HOME;
+    const cliEntryPath = fileURLToPath(import.meta.url);
+    const isGlobal = process.env.npm_config_global === 'true'
+      || (pnpmHome && cliEntryPath.startsWith(pnpmHome));
     if (isGlobal) {
       console.log('⚠️  Global installation of slicejs-cli detected.');
       console.log('   We strongly recommend using a local installation to avoid version mismatches.');
-      console.log('   Uninstall global: npm uninstall -g slicejs-cli');
+      console.log(`   Uninstall global: ${pnpmHome ? 'pnpm remove -g slicejs-cli' : 'npm uninstall -g slicejs-cli'}`);
       return;
     }
 
     const projectRoot = getProjectRoot(import.meta.url);
     const pkgPath = path.join(projectRoot, 'package.json');
 
-    const sliceScripts = {
-      'slice:dev': 'slice dev',
-      'slice:start': 'slice start',
-      'slice:create': 'slice component create',
-      'slice:list': 'slice component list',
-      'slice:delete': 'slice component delete',
-      'slice:init': 'slice init',
-      'slice:get': 'slice get',
-      'slice:browse': 'slice browse',
-      'slice:sync': 'slice sync',
-      'slice:version': 'slice version',
-      'slice:update': 'slice update',
-    };
+    // Shared with post.js and slice init — see commands/utils/sliceScripts.js
+    const sliceScripts = SLICE_SCRIPTS;
 
     try {
       let pkg = {};

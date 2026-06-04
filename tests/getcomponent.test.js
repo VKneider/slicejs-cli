@@ -405,3 +405,31 @@ describe('findUpdatableComponents', () => {
     }, { visualComponents: ['Button'] });
   });
 });
+
+describe('updateLocalRegistrySafe concurrency', () => {
+  let ComponentRegistry;
+
+  before(async () => {
+    ({ ComponentRegistry } = await import('../commands/getComponent/getComponent.js'));
+  });
+
+  test('concurrent registrations do not corrupt or drop entries in components.js', async () => {
+    await withTestProject(async (tmpDir) => {
+      const registry = new ComponentRegistry();
+      const names = ['Button', 'Link', 'Loading', 'MultiRoute', 'Navbar', 'NotFound', 'Route'];
+
+      // Fire all read-modify-write cycles at once — without the registry lock
+      // this loses updates (last-writer-wins) or reads a half-written file.
+      await Promise.all(names.map(n => registry.updateLocalRegistrySafe(n, 'Visual')));
+
+      const componentsPath = path.join(tmpDir, 'src', 'Components', 'components.js');
+      const content = await fs.readFile(componentsPath, 'utf8');
+      const match = content.match(/const components = ({[\s\S]*?});/);
+      assert.ok(match, 'components.js must stay parseable');
+      const parsed = JSON.parse(match[1]);
+      for (const n of names) {
+        assert.equal(parsed[n], 'Visual', `${n} must be registered`);
+      }
+    });
+  });
+});

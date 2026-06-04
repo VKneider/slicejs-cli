@@ -5,6 +5,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import Print from "../Print.js";
 import { getProjectRoot, getPath } from "../utils/PathHelper.js";
+import { resolvePackageManager } from "../utils/PackageManager.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -110,17 +111,18 @@ class VersionChecker {
       const frameworkStatus = this.compareVersions(current.framework, latest.framework);
 
       if (!silent && (cliStatus === 'outdated' || frameworkStatus === 'outdated')) {
+        const pm = resolvePackageManager(getProjectRoot(import.meta.url)).name;
         console.log(''); // Line break
         Print.warning('📦 Available Updates:');
-        
+
         if (cliStatus === 'outdated') {
           console.log(`   🔧 CLI: ${current.cli} → ${latest.cli}`);
-          console.log(`       npm update slicejs-cli`);
+          console.log(`       ${pm} update slicejs-cli`);
         }
-        
+
         if (frameworkStatus === 'outdated') {
           console.log(`   ⚡ Framework: ${current.framework} → ${latest.framework}`);
-          console.log(`       npm update slicejs-web-framework`);
+          console.log(`       ${pm} update slicejs-web-framework`);
         }
         
         console.log('   📚 Changelog: https://github.com/VKneider/slice.js/releases');

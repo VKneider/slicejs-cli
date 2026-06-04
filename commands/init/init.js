@@ -5,9 +5,61 @@ import ora from 'ora';
 import Print from '../Print.js';
 import { getProjectRoot, getApiPath, getSrcPath, getPath } from '../utils/PathHelper.js';
 import { execSync } from 'child_process';
+import {
+    resolvePackageManager,
+    getPackageManagerVersion,
+    installCommand
+} from '../utils/PackageManager.js';
+import { SLICE_SCRIPTS } from '../utils/sliceScripts.js';
 
 // Import ComponentRegistry class from getComponent
 import { ComponentRegistry } from '../getComponent/getComponent.js';
+
+// Fetch the latest published version straight from the npm registry. This is
+// informational only (we never pin installs to it): it avoids depending on
+// `npm view` (absent on pnpm-only machines) and plays nice with pnpm's
+// minimumReleaseAge quarantine, which may legitimately resolve an older version.
+async function fetchLatestVersion(packageName) {
+    try {
+        const response = await fetch(`https://registry.npmjs.org/${packageName}/latest`, {
+            headers: { 'Accept': 'application/json' }
+        });
+        if (!response.ok) return null;
+        const data = await response.json();
+        return data.version || null;
+    } catch {
+        return null;
+    }
+}
+
+// Create the project manifest BEFORE any install runs. Without a package.json in
+// the project folder, npm/pnpm walk up the directory tree looking for the nearest
+// manifest and anchor node_modules (and the dependency entry) OUTSIDE the project.
+// Exported for tests (init-project-isolation.test.js).
+export async function ensureProjectManifest(projectRoot, packageManager) {
+    const pkgPath = path.join(projectRoot, 'package.json');
+    if (await fs.pathExists(pkgPath)) return pkgPath;
+
+    const pkg = {
+        name: path.basename(projectRoot),
+        version: '1.0.0',
+        description: 'Slice.js project',
+        main: 'api/index.js',
+        type: 'module',
+        engines: { node: '>=20.0.0' },
+        scripts: {}
+    };
+
+    // Persist the chosen package manager (corepack convention) so every later
+    // command — slice update, slice doctor — detects it deterministically.
+    const pmVersion = getPackageManagerVersion(packageManager);
+    if (pmVersion) {
+        pkg.packageManager = `${packageManager}@${pmVersion}`;
+    }
+
+    await fs.writeFile(pkgPath, JSON.stringify(pkg, null, 2), 'utf8');
+    return pkgPath;
+}
 
 // Visual components used by the App Shell + MultiRoute starter project.
 // We install only these on init; newcomers add more on demand with `slice get <Name>`.
@@ -30,32 +82,52 @@ const STARTER_SERVICE_COMPONENTS = [
    'LocalStorageManager'
 ];
 
-export default async function initializeProject(projectType) {
+export default async function initializeProject(options = {}) {
     try {
         const projectRoot = getProjectRoot(import.meta.url);
         const destinationApi = getApiPath(import.meta.url);
         const destinationSrc = getSrcPath(import.meta.url);
 
+        // Resolve the package manager chosen in `slice init` (or detect it when
+        // initializeProject is invoked directly, e.g. inside an existing folder).
+        const packageManager = options.packageManager
+            || resolvePackageManager(projectRoot).name;
+
+        // 0. CREATE PROJECT MANIFEST FIRST — must exist before any install so the
+        // package manager anchors node_modules inside the project folder.
+        await ensureProjectManifest(projectRoot, packageManager);
+
         const fwSpinner = ora('Ensuring latest Slice framework...').start();
         let latestVersion = null;
+        let installedVersion = null;
         let sliceBaseDir;
         try {
-            const latest = execSync('npm view slicejs-web-framework version', { cwd: projectRoot }).toString().trim();
-            latestVersion = latest;
+            latestVersion = await fetchLatestVersion('slicejs-web-framework');
             const installedPkgPath = getPath(import.meta.url, 'node_modules', 'slicejs-web-framework', 'package.json');
             let installed = null;
             if (await fs.pathExists(installedPkgPath)) {
                 const pkg = await fs.readJson(installedPkgPath);
                 installed = pkg.version;
             }
-            if (installed !== latest) {
-                execSync(`npm install slicejs-web-framework@${latest} --save`, { cwd: projectRoot, stdio: 'inherit' });
+            if (!installed || (latestVersion && installed !== latestVersion)) {
+                // Install WITHOUT pinning an exact version: the package manager
+                // resolves it under its own policies (e.g. pnpm minimumReleaseAge
+                // quarantines versions younger than the configured age — pinning
+                // the registry's freshest version would make resolution fail).
+                execSync(installCommand(packageManager, 'slicejs-web-framework'), { cwd: projectRoot, stdio: 'inherit' });
+            }
+            if (await fs.pathExists(installedPkgPath)) {
+                const pkg = await fs.readJson(installedPkgPath);
+                installedVersion = pkg.version;
             }
             sliceBaseDir = getPath(import.meta.url, 'node_modules', 'slicejs-web-framework');
-            fwSpinner.succeed(`slicejs-web-framework@${latest} ready`);
+            fwSpinner.succeed(`slicejs-web-framework@${installedVersion || 'unknown'} ready`);
+            if (latestVersion && installedVersion && installedVersion !== latestVersion) {
+                Print.info(`Latest published is ${latestVersion}; your package manager resolved ${installedVersion} (release-age policy or cached registry).`);
+            }
         } catch (err) {
             // Fallback uses __dirname-style path because it looks for a local development copy,
-            // not a project-relative path — npm install failed, so we fall back to monorepo sibling.
+            // not a project-relative path — the install failed, so we fall back to monorepo sibling.
             const fallback = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../../slicejs-web-framework');
             if (await fs.pathExists(fallback)) {
                 sliceBaseDir = fallback;
@@ -65,6 +137,21 @@ export default async function initializeProject(projectType) {
                 Print.error(err.message);
                 return;
             }
+        }
+
+        // 0b. INSTALL THE CLI LOCALLY (devDependency) so the generated scripts
+        // (`npm run dev` → `slice dev`) resolve via local delegation to a version
+        // pinned per project, as the docs recommend.
+        const cliSpinner = ora('Installing slicejs-cli as devDependency...').start();
+        try {
+            const cliPkgPath = getPath(import.meta.url, 'node_modules', 'slicejs-cli', 'package.json');
+            if (!(await fs.pathExists(cliPkgPath))) {
+                execSync(installCommand(packageManager, 'slicejs-cli', { dev: true }), { cwd: projectRoot, stdio: 'inherit' });
+            }
+            cliSpinner.succeed('slicejs-cli installed locally');
+        } catch (err) {
+            cliSpinner.warn('Could not install slicejs-cli locally — scripts will use the global CLI');
+            Print.info(`You can add it later with: ${installCommand(packageManager, 'slicejs-cli', { dev: true })}`);
         }
 
         // These derive from sliceBaseDir (which comes from npm install or fallback),
@@ -245,6 +332,7 @@ export default async function initializeProject(projectType) {
 
             // Comandos principales
             pkg.scripts['dev'] = 'slice dev';
+            pkg.scripts['build'] = 'slice build';
             pkg.scripts['start'] = 'slice start';
 
             // Component management
@@ -257,39 +345,28 @@ export default async function initializeProject(projectType) {
             pkg.scripts['browse'] = 'slice browse';
             pkg.scripts['sync'] = 'slice sync';
 
-            // Utilidades
-            pkg.scripts['slice:version'] = 'slice version';
-            pkg.scripts['slice:update'] = 'slice update';
-            pkg.scripts['slice:types'] = 'slice types generate';
-
-            // Legacy (compatibility)
-            pkg.scripts['slice:init'] = 'slice init';
-            pkg.scripts['slice:start'] = 'slice start';
-            pkg.scripts['slice:dev'] = 'slice dev';
-            pkg.scripts['slice:create'] = 'slice component create';
-            pkg.scripts['slice:list'] = 'slice component list';
-            pkg.scripts['slice:delete'] = 'slice component delete';
-            pkg.scripts['slice:get'] = 'slice get';
-            pkg.scripts['slice:browse'] = 'slice browse';
-            pkg.scripts['slice:sync'] = 'slice sync';
+            // slice:* namespaced set — shared with post.js and `slice postinstall`
+            // (commands/utils/sliceScripts.js) so the three never drift apart.
+            Object.assign(pkg.scripts, SLICE_SCRIPTS);
             pkg.scripts['run'] = 'slice dev';
 
             // Module configuration
             pkg.type = 'module';
             pkg.engines = pkg.engines || { node: '>=20.0.0' };
 
-            // Ensure framework dependency is present
+            // Ensure framework dependency is present (the install above normally
+            // already wrote it; this is a fallback for the monorepo-sibling path).
             if (!pkg.dependencies['slicejs-web-framework']) {
-                pkg.dependencies['slicejs-web-framework'] = latestVersion ? latestVersion : 'latest';
+                pkg.dependencies['slicejs-web-framework'] = installedVersion ? `^${installedVersion}` : 'latest';
             }
 
             await fs.writeFile(pkgPath, JSON.stringify(pkg, null, 2), 'utf8');
-            pkgSpinner.succeed('npm scripts configured successfully');
+            pkgSpinner.succeed('Package scripts configured successfully');
 
             Print.title('New recommended commands:');
-            console.log('  npm run dev            - Start development server');
-            console.log('  npm run get            - Install components');
-            console.log('  npm run browse         - Browse components');
+            console.log(`  ${packageManager} run dev            - Start development server`);
+            console.log(`  ${packageManager} run get            - Install components`);
+            console.log(`  ${packageManager} run browse         - Browse components`);
         } catch (error) {
         pkgSpinner.fail('Failed to configure npm scripts');
         Print.error(error.message);
@@ -300,6 +377,7 @@ export default async function initializeProject(projectType) {
         Print.newLine();
         Print.title('Next steps:');
         console.log(`  cd ${projectName}`);
+        console.log(`  ${packageManager} run dev     - Start development server`);
         console.log('  slice browse          - View available components');
         console.log('  slice get Button      - Install specific components');
         console.log('  slice sync            - Update all components to latest versions');

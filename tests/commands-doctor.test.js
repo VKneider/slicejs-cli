@@ -3,11 +3,13 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import path from 'node:path';
 import { withTestProject } from './helpers/setup.js';
+import os from 'node:os';
 import {
   checkNodeVersion,
   checkDirectoryStructure,
   checkConfig,
   checkComponents,
+  checkPackageManagerSetup,
 } from '../commands/doctor/doctor.js';
 
 describe('doctor checks', () => {
@@ -76,5 +78,75 @@ describe('doctor checks', () => {
       assert.equal(r.warn, true);
       assert.match(r.message, /missing files/);
     });
+  });
+});
+
+describe('checkPackageManagerSetup', () => {
+  async function makeProject({ pkg, files = [] } = {}) {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'slice-doctor-pm-'));
+    if (pkg) await fs.writeJson(path.join(dir, 'package.json'), pkg);
+    for (const f of files) await fs.outputFile(path.join(dir, f), '');
+    return dir;
+  }
+
+  test('passes on a consistent pnpm project with local CLI', async () => {
+    const dir = await makeProject({
+      pkg: { name: 'x', packageManager: 'pnpm@11.0.0' },
+      files: ['pnpm-lock.yaml', 'node_modules/slicejs-cli/package.json']
+    });
+    try {
+      const r = await checkPackageManagerSetup(dir);
+      assert.equal(r.pass, true);
+    } finally { await fs.remove(dir); }
+  });
+
+  test('warns on mixed lockfiles', async () => {
+    const dir = await makeProject({
+      pkg: { name: 'x', packageManager: 'pnpm@11.0.0' },
+      files: ['pnpm-lock.yaml', 'package-lock.json', 'node_modules/slicejs-cli/package.json']
+    });
+    try {
+      const r = await checkPackageManagerSetup(dir);
+      assert.equal(r.warn, true);
+      assert.match(r.message, /Mixed lockfiles/);
+      assert.match(r.suggestion, /pnpm-lock\.yaml/);
+    } finally { await fs.remove(dir); }
+  });
+
+  test('warns when packageManager field is missing', async () => {
+    const dir = await makeProject({
+      pkg: { name: 'x' },
+      files: ['pnpm-lock.yaml', 'node_modules/slicejs-cli/package.json']
+    });
+    try {
+      const r = await checkPackageManagerSetup(dir);
+      assert.equal(r.warn, true);
+      assert.match(r.message, /packageManager/);
+    } finally { await fs.remove(dir); }
+  });
+
+  test('warns when packageManager field disagrees with the lockfile', async () => {
+    const dir = await makeProject({
+      pkg: { name: 'x', packageManager: 'pnpm@11.0.0' },
+      files: ['package-lock.json', 'node_modules/slicejs-cli/package.json']
+    });
+    try {
+      const r = await checkPackageManagerSetup(dir);
+      assert.equal(r.warn, true);
+      assert.match(r.message, /packageManager is "pnpm" but the lockfile is package-lock\.json/);
+    } finally { await fs.remove(dir); }
+  });
+
+  test('warns when slicejs-cli is not installed locally', async () => {
+    const dir = await makeProject({
+      pkg: { name: 'x', packageManager: 'pnpm@11.0.0' },
+      files: ['pnpm-lock.yaml']
+    });
+    try {
+      const r = await checkPackageManagerSetup(dir);
+      assert.equal(r.warn, true);
+      assert.match(r.message, /not installed locally/);
+      assert.match(r.suggestion, /-D slicejs-cli/);
+    } finally { await fs.remove(dir); }
   });
 });
