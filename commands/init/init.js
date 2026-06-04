@@ -32,6 +32,16 @@ async function fetchLatestVersion(packageName) {
     }
 }
 
+function getRunningCliVersion() {
+    try {
+        const cliRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+        const cliPkg = fs.readJsonSync(path.join(cliRoot, 'package.json'));
+        return typeof cliPkg.version === 'string' ? cliPkg.version : null;
+    } catch {
+        return null;
+    }
+}
+
 async function ensurePnpmAllowBuilds(projectRoot) {
     const workspacePath = path.join(projectRoot, 'pnpm-workspace.yaml');
     const allowBuildLine = '  slicejs-cli: true';
@@ -152,6 +162,9 @@ export default async function initializeProject(options = {}) {
         let sliceBaseDir;
         try {
             latestVersion = await fetchLatestVersion('slicejs-web-framework');
+            const frameworkPackage = latestVersion
+                ? `slicejs-web-framework@${latestVersion}`
+                : 'slicejs-web-framework';
             const installedPkgPath = getPath(import.meta.url, 'node_modules', 'slicejs-web-framework', 'package.json');
             let installed = null;
             if (await fs.pathExists(installedPkgPath)) {
@@ -159,11 +172,7 @@ export default async function initializeProject(options = {}) {
                 installed = pkg.version;
             }
             if (!installed || (latestVersion && installed !== latestVersion)) {
-                // Install WITHOUT pinning an exact version: the package manager
-                // resolves it under its own policies (e.g. pnpm minimumReleaseAge
-                // quarantines versions younger than the configured age — pinning
-                // the registry's freshest version would make resolution fail).
-                execSync(installCommand(packageManager, 'slicejs-web-framework'), { cwd: projectRoot, stdio: 'inherit' });
+                execSync(installCommand(packageManager, frameworkPackage), { cwd: projectRoot, stdio: 'inherit' });
             }
             if (await fs.pathExists(installedPkgPath)) {
                 const pkg = await fs.readJson(installedPkgPath);
@@ -194,13 +203,24 @@ export default async function initializeProject(options = {}) {
         const cliSpinner = ora('Installing slicejs-cli as devDependency...').start();
         try {
             const cliPkgPath = getPath(import.meta.url, 'node_modules', 'slicejs-cli', 'package.json');
-            if (!(await fs.pathExists(cliPkgPath))) {
-                execSync(installCommand(packageManager, 'slicejs-cli', { dev: true }), { cwd: projectRoot, stdio: 'inherit' });
+            const currentCliVersion = getRunningCliVersion();
+            const cliPackage = currentCliVersion
+                ? `slicejs-cli@${currentCliVersion}`
+                : 'slicejs-cli';
+
+            let installedCliVersion = null;
+            if (await fs.pathExists(cliPkgPath)) {
+                const pkg = await fs.readJson(cliPkgPath);
+                installedCliVersion = pkg.version;
+            }
+
+            if (!installedCliVersion || (currentCliVersion && installedCliVersion !== currentCliVersion)) {
+                execSync(installCommand(packageManager, cliPackage, { dev: true }), { cwd: projectRoot, stdio: 'inherit' });
             }
             cliSpinner.succeed('slicejs-cli installed locally');
         } catch (err) {
             cliSpinner.warn('Could not install slicejs-cli locally — scripts will use the global CLI');
-            Print.info(`You can add it later with: ${installCommand(packageManager, 'slicejs-cli', { dev: true })}`);
+            Print.info(`You can add it later with: ${installCommand(packageManager, `slicejs-cli@${getRunningCliVersion() || 'latest'}`, { dev: true })}`);
         }
 
         // These derive from sliceBaseDir (which comes from npm install or fallback),

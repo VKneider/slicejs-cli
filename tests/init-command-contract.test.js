@@ -70,15 +70,16 @@ test('initializeProject does not hardcode npm commands', () => {
   assert.ok(!initSource.includes('execSync(`npm '), 'init.js must not execSync hardcoded npm template commands');
 });
 
-test('initializeProject does not pin an exact registry version on install', () => {
-  // Pinning the freshest registry version breaks pnpm installs under
-  // minimumReleaseAge (release-age quarantine). Install unpinned instead.
-  assert.ok(!initSource.includes('@${latest}'), 'init.js must not pin the freshest registry version');
+test('initializeProject resolves and installs exact framework/cli versions', () => {
+  assert.ok(initSource.includes('fetchLatestVersion(\'slicejs-web-framework\')'), 'init.js must resolve latest framework version');
+  assert.ok(initSource.includes('slicejs-web-framework@${latestVersion}'), 'init.js must build exact framework package spec');
+  assert.ok(initSource.includes('getRunningCliVersion()'), 'init.js must resolve running CLI version');
+  assert.ok(initSource.includes('slicejs-cli@${currentCliVersion}'), 'init.js must build exact CLI package spec');
 });
 
 test('initializeProject installs slicejs-cli as devDependency', () => {
   assert.ok(
-    initSource.includes("installCommand(packageManager, 'slicejs-cli', { dev: true })"),
+    initSource.includes("installCommand(packageManager, cliPackage, { dev: true })"),
     'init.js must install slicejs-cli locally as a devDependency'
   );
 });
