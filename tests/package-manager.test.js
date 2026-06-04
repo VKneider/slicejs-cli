@@ -32,6 +32,7 @@ test('parseUserAgent detects npm', () => {
 test('parseUserAgent returns null for missing or unknown agent', () => {
   assert.equal(parseUserAgent(undefined), null);
   assert.equal(parseUserAgent('bun/1.1.0 node/v20.11.0'), null);
+  assert.equal(parseUserAgent('yarn/1.22.22 node/v20.11.0'), null);
 });
 
 test('fromPackageManagerField reads corepack-style field', () => {
@@ -60,8 +61,7 @@ test('fromPackageManagerField returns null without field or manifest', () => {
 test('fromLockfile detects each supported lockfile', () => {
   const cases = [
     ['pnpm-lock.yaml', 'pnpm'],
-    ['package-lock.json', 'npm'],
-    ['yarn.lock', 'yarn']
+    ['package-lock.json', 'npm']
   ];
   for (const [lockfile, expected] of cases) {
     const dir = makeTmpDir();
@@ -112,7 +112,6 @@ test('resolvePackageManager never returns null', () => {
 test('installCommand builds the right command per package manager', () => {
   assert.equal(installCommand('npm', 'slicejs-web-framework'), 'npm install slicejs-web-framework');
   assert.equal(installCommand('pnpm', 'slicejs-web-framework'), 'pnpm add slicejs-web-framework');
-  assert.equal(installCommand('yarn', 'slicejs-web-framework'), 'yarn add slicejs-web-framework');
   assert.equal(installCommand('npm', 'slicejs-cli', { dev: true }), 'npm install -D slicejs-cli');
   assert.equal(installCommand('pnpm', 'slicejs-cli', { dev: true }), 'pnpm add -D slicejs-cli');
   assert.equal(installCommand('npm', 'slicejs-cli@latest', { global: true }), 'npm install -g slicejs-cli@latest');

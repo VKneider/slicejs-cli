@@ -70,6 +70,38 @@ so each project keeps its pinned CLI version.
 
 ## Main commands
 
+Inside initialized projects, prefer package scripts (`pnpm run ...`, `npm run ...`)
+over direct binary calls.
+
+Common script workflow:
+
+```bash
+pnpm run dev
+pnpm run build
+pnpm run start
+pnpm run browse
+pnpm run get -- Button
+pnpm run sync
+```
+
+Alternative with local devDependency resolution:
+
+```bash
+pnpm exec slice dev
+```
+
+If `slicejs-cli` is installed globally, `slice` can be executed directly from PATH.
+
+For pnpm v10+, if build scripts are restricted, configure `allowBuilds` in
+`pnpm-workspace.yaml`:
+
+```yaml
+allowBuilds:
+  slicejs-cli: true
+```
+
+`slice init --pm pnpm` now writes this automatically.
+
 | Command | Description |
 |---------|-------------|
 | `slice init` | Initialize a Slice.js project |
@@ -89,17 +121,21 @@ When you install `slicejs-cli`, the `postinstall` script automatically configure
 ```json
 {
   "scripts": {
-    "slice:dev": "slice dev",
-    "slice:start": "slice start",
-    "slice:create": "slice component create",
-    "slice:list": "slice component list",
-    "slice:delete": "slice component delete",
-    "slice:init": "slice init",
-    "slice:get": "slice get",
-    "slice:browse": "slice browse",
-    "slice:sync": "slice sync",
-    "slice:version": "slice version",
-    "slice:update": "slice update"
+    "slice:init": "node ./node_modules/slicejs-cli/client.js init",
+    "slice:dev": "node ./node_modules/slicejs-cli/client.js dev",
+    "slice:build": "node ./node_modules/slicejs-cli/client.js build",
+    "slice:start": "node ./node_modules/slicejs-cli/client.js start",
+    "slice:create": "node ./node_modules/slicejs-cli/client.js component create",
+    "slice:list": "node ./node_modules/slicejs-cli/client.js component list",
+    "slice:delete": "node ./node_modules/slicejs-cli/client.js component delete",
+    "slice:get": "node ./node_modules/slicejs-cli/client.js get",
+    "slice:browse": "node ./node_modules/slicejs-cli/client.js browse",
+    "slice:sync": "node ./node_modules/slicejs-cli/client.js sync",
+    "slice:doctor": "node ./node_modules/slicejs-cli/client.js doctor",
+    "slice:version": "node ./node_modules/slicejs-cli/client.js version",
+    "slice:help": "node ./node_modules/slicejs-cli/client.js --help",
+    "slice:update": "node ./node_modules/slicejs-cli/client.js update",
+    "slice:types": "node ./node_modules/slicejs-cli/client.js types generate"
   }
 }
 ```

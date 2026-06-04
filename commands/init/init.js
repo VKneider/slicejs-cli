@@ -32,6 +32,51 @@ async function fetchLatestVersion(packageName) {
     }
 }
 
+async function ensurePnpmAllowBuilds(projectRoot) {
+    const workspacePath = path.join(projectRoot, 'pnpm-workspace.yaml');
+    const allowBuildLine = '  slicejs-cli: true';
+
+    if (!(await fs.pathExists(workspacePath))) {
+        await fs.writeFile(workspacePath, `allowBuilds:\n${allowBuildLine}\n`, 'utf8');
+        return;
+    }
+
+    const raw = await fs.readFile(workspacePath, 'utf8');
+    const lines = raw.split(/\r?\n/);
+    const allowIdx = lines.findIndex((line) => /^allowBuilds:\s*$/.test(line));
+
+    if (allowIdx === -1) {
+        const suffix = raw.endsWith('\n') ? '' : '\n';
+        await fs.writeFile(workspacePath, `${raw}${suffix}allowBuilds:\n${allowBuildLine}\n`, 'utf8');
+        return;
+    }
+
+    let blockEnd = lines.length;
+    for (let i = allowIdx + 1; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line.trim()) continue;
+        if (!/^\s/.test(line)) {
+            blockEnd = i;
+            break;
+        }
+    }
+
+    let found = false;
+    for (let i = allowIdx + 1; i < blockEnd; i++) {
+        if (/^\s+slicejs-cli\s*:/.test(lines[i])) {
+            lines[i] = allowBuildLine;
+            found = true;
+            break;
+        }
+    }
+
+    if (!found) {
+        lines.splice(blockEnd, 0, allowBuildLine);
+    }
+
+    await fs.writeFile(workspacePath, `${lines.join('\n').replace(/\n*$/, '\n')}`, 'utf8');
+}
+
 // Create the project manifest BEFORE any install runs. Without a package.json in
 // the project folder, npm/pnpm walk up the directory tree looking for the nearest
 // manifest and anchor node_modules (and the dependency entry) OUTSIDE the project.
@@ -92,6 +137,10 @@ export default async function initializeProject(options = {}) {
         // initializeProject is invoked directly, e.g. inside an existing folder).
         const packageManager = options.packageManager
             || resolvePackageManager(projectRoot).name;
+
+        if (packageManager === 'pnpm') {
+            await ensurePnpmAllowBuilds(projectRoot);
+        }
 
         // 0. CREATE PROJECT MANIFEST FIRST — must exist before any install so the
         // package manager anchors node_modules inside the project folder.
@@ -256,20 +305,20 @@ export default async function initializeProject(options = {}) {
                     componentsSpinner.succeed(`All ${successful} Visual components installed successfully`);
                 } else if (successful > 0) {
                 componentsSpinner.warn(`${successful} components installed, ${failed} failed`);
-                Print.info('You can install failed components later using "slice get <component-name>"');
+                Print.info(`You can install failed components later using "${packageManager} run get -- <component-name>"`);
             } else {
                 componentsSpinner.fail('Failed to install Visual components');
             }
         } else {
             componentsSpinner.warn('No Visual components found in registry');
-            Print.info('You can add components later using "slice get <component-name>"');
+            Print.info(`You can add components later using "${packageManager} run get -- <component-name>"`);
         }
 
         } catch (error) {
             componentsSpinner.fail('Could not download Visual components from official repository');
             Print.error(`Repository error: ${error.message}`);
             Print.info('Project initialized without Visual components');
-            Print.info('You can add them later using "slice get <component-name>"');
+            Print.info(`You can add them later using "${packageManager} run get -- <component-name>"`);
         }
 
         // 3b. DOWNLOAD STARTER SERVICE COMPONENTS FROM OFFICIAL REPOSITORY
@@ -295,7 +344,7 @@ export default async function initializeProject(options = {}) {
                     serviceSpinner.succeed(`All ${successful} Service components installed successfully`);
                 } else if (successful > 0) {
                     serviceSpinner.warn(`${successful} Service components installed, ${failed} failed`);
-                    Print.info('You can install failed components later using "slice get <component-name>"');
+                    Print.info(`You can install failed components later using "${packageManager} run get -- <component-name>"`);
                 } else {
                     serviceSpinner.fail('Failed to install Service components');
                 }
@@ -305,7 +354,7 @@ export default async function initializeProject(options = {}) {
         } catch (error) {
             serviceSpinner.fail('Could not download Service components from official repository');
             Print.error(`Repository error: ${error.message}`);
-            Print.info('You can add them later using "slice get <component-name>"');
+            Print.info(`You can add them later using "${packageManager} run get -- <component-name>"`);
         }
 
         // 4. CONFIGURE SCRIPTS IN PROJECT package.json
@@ -330,25 +379,25 @@ export default async function initializeProject(options = {}) {
             pkg.scripts = pkg.scripts || {};
             pkg.dependencies = pkg.dependencies || {};
 
-            // Comandos principales
-            pkg.scripts['dev'] = 'slice dev';
-            pkg.scripts['build'] = 'slice build';
-            pkg.scripts['start'] = 'slice start';
+            // Main scripts (local CLI path, no global launcher dependency)
+            pkg.scripts['dev'] = SLICE_SCRIPTS['slice:dev'];
+            pkg.scripts['build'] = SLICE_SCRIPTS['slice:build'];
+            pkg.scripts['start'] = SLICE_SCRIPTS['slice:start'];
 
             // Component management
-            pkg.scripts['component:create'] = 'slice component create';
-            pkg.scripts['component:list'] = 'slice component list';
-            pkg.scripts['component:delete'] = 'slice component delete';
+            pkg.scripts['component:create'] = SLICE_SCRIPTS['slice:create'];
+            pkg.scripts['component:list'] = SLICE_SCRIPTS['slice:list'];
+            pkg.scripts['component:delete'] = SLICE_SCRIPTS['slice:delete'];
 
-            // Atajos de repositorio
-            pkg.scripts['get'] = 'slice get';
-            pkg.scripts['browse'] = 'slice browse';
-            pkg.scripts['sync'] = 'slice sync';
+            // Registry shortcuts
+            pkg.scripts['get'] = SLICE_SCRIPTS['slice:get'];
+            pkg.scripts['browse'] = SLICE_SCRIPTS['slice:browse'];
+            pkg.scripts['sync'] = SLICE_SCRIPTS['slice:sync'];
 
             // slice:* namespaced set — shared with post.js and `slice postinstall`
             // (commands/utils/sliceScripts.js) so the three never drift apart.
             Object.assign(pkg.scripts, SLICE_SCRIPTS);
-            pkg.scripts['run'] = 'slice dev';
+            pkg.scripts['run'] = SLICE_SCRIPTS['slice:dev'];
 
             // Module configuration
             pkg.type = 'module';
@@ -378,9 +427,9 @@ export default async function initializeProject(options = {}) {
         Print.title('Next steps:');
         console.log(`  cd ${projectName}`);
         console.log(`  ${packageManager} run dev     - Start development server`);
-        console.log('  slice browse          - View available components');
-        console.log('  slice get Button      - Install specific components');
-        console.log('  slice sync            - Update all components to latest versions');
+        console.log(`  ${packageManager} run browse  - View available components`);
+        console.log(`  ${packageManager} run get -- Button - Install specific components`);
+        console.log(`  ${packageManager} run sync    - Update all components to latest versions`);
 
     } catch (error) {
         Print.error('Unexpected error initializing project:', error.message);

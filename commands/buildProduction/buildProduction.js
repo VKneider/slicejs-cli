@@ -6,7 +6,8 @@ import { minify as terserMinify } from 'terser';
 import { minify } from 'html-minifier-terser';
 import CleanCSS from 'clean-css';
 import Print from '../Print.js';
-import { getSrcPath, getDistPath, getConfigPath } from '../utils/PathHelper.js';
+import { getSrcPath, getDistPath, getConfigPath, getProjectRoot } from '../utils/PathHelper.js';
+import { resolvePackageManager, runScriptCommand } from '../utils/PackageManager.js';
 
 /**
  * Loads configuration from sliceConfig.json
@@ -441,6 +442,7 @@ async function analyzeBuild() {
  */
 export default async function buildProduction(options = {}) {
   const startTime = Date.now();
+  const packageManager = resolvePackageManager(getProjectRoot(import.meta.url)).name;
   
   try {
     Print.title('🔨 Building Slice.js project for production...');
@@ -483,7 +485,7 @@ export default async function buildProduction(options = {}) {
     Print.info('Your optimized project is ready in the /dist directory');
     Print.newLine();
     Print.info('Next steps:');
-    console.log('  • Use "npm run slice:start" to test the production build');
+    console.log(`  • Use "${runScriptCommand(packageManager, 'start')}" to test the production build`);
     console.log('  • All Slice.js components and architecture preserved');
     
     return true;
@@ -499,6 +501,7 @@ export default async function buildProduction(options = {}) {
  */
 export async function serveProductionBuild(port) {
   try {
+    const packageManager = resolvePackageManager(getProjectRoot(import.meta.url)).name;
     const config = loadConfig();
     const defaultPort = config?.server?.port || 3001;
     const finalPort = port || defaultPort;
@@ -533,7 +536,7 @@ export async function serveProductionBuild(port) {
       Print.success(`Production preview server running at http://localhost:${finalPort}`);
       Print.info('Press Ctrl+C to stop the server');
       Print.info('This server previews your production build from /dist');
-      Print.warning('This is a preview server - use "npm run slice:start" for the full production server');
+      Print.warning(`This is a preview server - use "${runScriptCommand(packageManager, 'start')}" for the full production server`);
     });
     
   } catch (error) {

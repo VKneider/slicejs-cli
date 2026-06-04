@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { getProjectRoot, getPath } from './commands/utils/PathHelper.js';
 import { SLICE_SCRIPTS } from './commands/utils/sliceScripts.js';
+import { resolvePackageManager, runScriptCommand } from './commands/utils/PackageManager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -21,6 +22,7 @@ if (isGlobal) {
 
 const projectRoot = getProjectRoot(import.meta.url);
 const pkgPath = getPath(import.meta.url, 'package.json');
+const packageManager = resolvePackageManager(projectRoot).name;
 
 const sliceScripts = SLICE_SCRIPTS;
 
@@ -47,12 +49,12 @@ try {
     }
 
     fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2), 'utf-8');
-    console.log(`✅  slicejs-cli installed successfully. Added ${addedCount} npm scripts to package.json.`);
-    console.log('   Run: npm run slice:dev');
+    console.log(`✅  slicejs-cli installed successfully. Added ${addedCount} package scripts to package.json.`);
+    console.log(`   Run: ${runScriptCommand(packageManager, 'slice:dev')}`);
 } catch (err) {
     console.log('✅  slicejs-cli installed successfully.');
     console.log('   Could not auto-configure scripts:', err.message);
-    console.log('   Run: npx slice dev');
+    console.log(`   Configure scripts manually and run: ${runScriptCommand(packageManager, 'slice:dev')}`);
 }
 
 process.exit(0);

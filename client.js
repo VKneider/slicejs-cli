@@ -31,6 +31,8 @@ import {
   detectPackageManager,
   getAvailablePackageManagers,
   isPackageManagerAvailable,
+  resolvePackageManager,
+  runScriptCommand,
   SUPPORTED_PACKAGE_MANAGERS
 } from './commands/utils/PackageManager.js';
 import { SLICE_SCRIPTS } from './commands/utils/sliceScripts.js';
@@ -103,7 +105,7 @@ sliceClient
   .command("init")
   .description("Initialize a new Slice.js project")
   .option("-y, --yes [name]", "Skip prompts and initialize with project name")
-  .option("--pm <packageManager>", "Package manager to use (npm, pnpm or yarn). Auto-detected when omitted")
+  .option("--pm <packageManager>", "Package manager to use (pnpm or npm). Auto-detected when omitted")
   .action(async (options) => {
     let projectName = 'my-slice-app';
     if (options.yes) {
@@ -150,7 +152,7 @@ sliceClient
       } else if (!options.yes) {
         const available = getAvailablePackageManagers();
         if (available.length === 0) {
-          Print.error('No package manager found (npm, pnpm or yarn). Install one and retry.');
+          Print.error('No package manager found (pnpm or npm). Install one and retry.');
           return;
         }
         const { pm } = await inquirer.prompt([
@@ -165,9 +167,9 @@ sliceClient
         packageManager = pm;
       } else {
         const available = getAvailablePackageManagers();
-        packageManager = available.includes('npm') ? 'npm' : available[0];
+        packageManager = available.includes('pnpm') ? 'pnpm' : available[0];
         if (!packageManager) {
-          Print.error('No package manager found (npm, pnpm or yarn). Install one and retry.');
+          Print.error('No package manager found (pnpm or npm). Install one and retry.');
           return;
         }
       }
@@ -638,6 +640,7 @@ sliceClient
 
     const projectRoot = getProjectRoot(import.meta.url);
     const pkgPath = path.join(projectRoot, 'package.json');
+    const packageManager = resolvePackageManager(projectRoot).name;
 
     // Shared with post.js and slice init — see commands/utils/sliceScripts.js
     const sliceScripts = SLICE_SCRIPTS;
@@ -665,12 +668,12 @@ sliceClient
       }
 
       fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2), 'utf-8');
-      console.log(`✅  slicejs-cli installed successfully. Added ${addedCount} npm scripts to package.json.`);
-      console.log('   Run: npm run slice:dev');
+      console.log(`✅  slicejs-cli installed successfully. Added ${addedCount} package scripts to package.json.`);
+      console.log(`   Run: ${runScriptCommand(packageManager, 'slice:dev')}`);
     } catch (err) {
       console.log('✅  slicejs-cli installed successfully.');
       console.log('   Could not auto-configure scripts:', err.message);
-      console.log('   Run: npx slice dev');
+      console.log(`   Configure scripts manually and run: ${runScriptCommand(packageManager, 'slice:dev')}`);
     }
   });
 

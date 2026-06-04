@@ -154,8 +154,7 @@ export async function checkPackageManagerSetup(projectRoot = getProjectRoot(impo
 
     const LOCKFILE_PM = {
         'package-lock.json': 'npm',
-        'pnpm-lock.yaml': 'pnpm',
-        'yarn.lock': 'yarn'
+        'pnpm-lock.yaml': 'pnpm'
     };
     const lockfiles = [];
     for (const lockfile of Object.keys(LOCKFILE_PM)) {

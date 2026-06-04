@@ -47,9 +47,9 @@ test('slice init -y creates a fully self-contained project (real run)', { skip: 
     assert.ok(pkg.packageManager?.startsWith(`${pm}@`), 'packageManager field must pin the chosen PM');
     assert.ok(pkg.dependencies?.['slicejs-web-framework'], 'framework must be a dependency');
     assert.ok(pkg.devDependencies?.['slicejs-cli'], 'CLI must be a devDependency');
-    assert.equal(pkg.scripts?.dev, 'slice dev');
-    assert.equal(pkg.scripts?.build, 'slice build');
-    assert.equal(pkg.scripts?.start, 'slice start');
+    assert.equal(pkg.scripts?.dev, SLICE_SCRIPTS['slice:dev']);
+    assert.equal(pkg.scripts?.build, SLICE_SCRIPTS['slice:build']);
+    assert.equal(pkg.scripts?.start, SLICE_SCRIPTS['slice:start']);
     for (const [script, command] of Object.entries(SLICE_SCRIPTS)) {
       assert.equal(pkg.scripts?.[script], command, `script ${script} must be configured`);
     }

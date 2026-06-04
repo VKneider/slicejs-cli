@@ -1,29 +1,28 @@
 // commands/utils/PackageManager.js
 //
-// Package manager detection and command building (npm / pnpm / yarn).
+// Package manager detection and command building (pnpm / npm).
 // Resolution priority for an existing project:
 //   1. "packageManager" field in the project package.json (corepack convention)
 //   2. Lockfile present at the project root
 //   3. npm_config_user_agent (set when the CLI runs via `npx` / `pnpm dlx` / a PM script)
 //   4. The only PM binary available on PATH (if exactly one)
 // When everything is ambiguous, detectPackageManager() returns null so callers
-// can prompt the user (interactive init) or fall back to npm (non-interactive).
+// can prompt the user (interactive init) or fall back to pnpm (non-interactive).
 
 import fs from 'fs-extra'
 import path from 'path'
 import { spawnSync } from 'node:child_process'
 
-export const SUPPORTED_PACKAGE_MANAGERS = ['npm', 'pnpm', 'yarn']
+export const SUPPORTED_PACKAGE_MANAGERS = ['pnpm', 'npm']
 
 const LOCKFILES = {
   'pnpm-lock.yaml': 'pnpm',
-  'package-lock.json': 'npm',
-  'yarn.lock': 'yarn'
+  'package-lock.json': 'npm'
 }
 
 export function parseUserAgent(userAgent = process.env.npm_config_user_agent) {
   if (!userAgent) return null
-  const match = userAgent.match(/^(npm|pnpm|yarn)\/(\S+)/)
+  const match = userAgent.match(/^(npm|pnpm)\/(\S+)/)
   if (!match) return null
   return { name: match[1], version: match[2], source: 'user-agent' }
 }
@@ -34,7 +33,7 @@ export function fromPackageManagerField(projectRoot) {
     if (!fs.pathExistsSync(pkgPath)) return null
     const pkg = fs.readJsonSync(pkgPath)
     if (typeof pkg.packageManager !== 'string') return null
-    const match = pkg.packageManager.match(/^(npm|pnpm|yarn)@(\S+)/)
+    const match = pkg.packageManager.match(/^(npm|pnpm)@(\S+)/)
     if (!match) return null
     return { name: match[1], version: match[2], source: 'package-manager-field' }
   } catch {
@@ -109,7 +108,7 @@ export function detectPackageManager(projectRoot, { userAgent = process.env.npm_
 }
 
 /**
- * Non-interactive resolution: detection first, then npm if available,
+ * Non-interactive resolution: detection first, then pnpm if available,
  * then whatever binary exists. Never returns null so update/doctor flows
  * always have a usable PM name (commands fail later with a clear error
  * if no PM is actually installed).
@@ -119,16 +118,17 @@ export function resolvePackageManager(projectRoot, options = {}) {
   if (detected) return detected
 
   const available = getAvailablePackageManagers()
+  if (available.includes('pnpm')) return { name: 'pnpm', version: null, source: 'fallback' }
   if (available.includes('npm')) return { name: 'npm', version: null, source: 'fallback' }
   if (available.length > 0) return { name: available[0], version: null, source: 'fallback' }
-  return { name: 'npm', version: null, source: 'fallback (none detected)' }
+  return { name: 'pnpm', version: null, source: 'fallback (none detected)' }
 }
 
 export function installCommand(pmName, packages, { dev = false, global: isGlobal = false } = {}) {
   const pkgs = Array.isArray(packages) ? packages.join(' ') : packages
   const flags = [isGlobal ? '-g' : '', dev ? '-D' : ''].filter(Boolean).join(' ')
   const flagSuffix = flags ? ` ${flags}` : ''
-  if (pmName === 'pnpm' || pmName === 'yarn') {
+  if (pmName === 'pnpm') {
     return `${pmName} add${flagSuffix} ${pkgs}`
   }
   return `npm install${flagSuffix} ${pkgs}`
@@ -137,7 +137,7 @@ export function installCommand(pmName, packages, { dev = false, global: isGlobal
 export function uninstallCommand(pmName, packages, { global: isGlobal = false } = {}) {
   const pkgs = Array.isArray(packages) ? packages.join(' ') : packages
   const flagSuffix = isGlobal ? ' -g' : ''
-  if (pmName === 'pnpm' || pmName === 'yarn') {
+  if (pmName === 'pnpm') {
     return `${pmName} remove${flagSuffix} ${pkgs}`
   }
   return `npm uninstall${flagSuffix} ${pkgs}`

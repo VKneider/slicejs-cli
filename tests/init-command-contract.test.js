@@ -86,3 +86,15 @@ test('initializeProject installs slicejs-cli as devDependency', () => {
 test('initializeProject persists the packageManager field', () => {
   assert.ok(initSource.includes('pkg.packageManager ='), 'init.js must persist the packageManager field in package.json');
 });
+
+test('initializeProject configures pnpm allowBuilds for slicejs-cli', () => {
+  assert.ok(
+    initSource.includes("if (packageManager === 'pnpm')")
+      && initSource.includes('ensurePnpmAllowBuilds(projectRoot)'),
+    'init.js must configure pnpm allowBuilds when pnpm is selected'
+  );
+  assert.ok(
+    initSource.includes("allowBuilds:") && initSource.includes("slicejs-cli: true"),
+    'init.js must write allowBuilds.slicejs-cli: true in pnpm-workspace.yaml'
+  );
+});

@@ -52,11 +52,11 @@ test('SLICE_SCRIPTS contains every slice:* command', () => {
     'slice:init', 'slice:dev', 'slice:build', 'slice:start',
     'slice:create', 'slice:list', 'slice:delete',
     'slice:get', 'slice:browse', 'slice:sync',
-    'slice:version', 'slice:update', 'slice:types'
+    'slice:doctor', 'slice:version', 'slice:help', 'slice:update', 'slice:types'
   ];
   for (const script of expected) {
     assert.ok(SLICE_SCRIPTS[script], `SLICE_SCRIPTS must define ${script}`);
-    assert.ok(SLICE_SCRIPTS[script].startsWith('slice '), `${script} must run a slice command`);
+    assert.ok(SLICE_SCRIPTS[script].includes('slicejs-cli/client.js'), `${script} must run the local slicejs-cli client`);
   }
   assert.equal(Object.keys(SLICE_SCRIPTS).length, expected.length, 'no unexpected scripts in SLICE_SCRIPTS');
 });
