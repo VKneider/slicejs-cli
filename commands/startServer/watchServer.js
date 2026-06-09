@@ -11,7 +11,7 @@ export default function setupWatcher(serverProcess, onRestart) {
     Print.info('Watch mode enabled - monitoring file changes...');
     Print.newLine();
 
-    const watcher = chokidar.watch(['src/**/*', 'api/**/*'], {
+    const watcher = chokidar.watch(['api/**/*'], {
         ignored: [
             /(^|[\/\\])\../,  // hidden files
             '**/node_modules/**',
@@ -29,33 +29,20 @@ export default function setupWatcher(serverProcess, onRestart) {
 
     let reloadTimeout;
 
+    const handleChange = (changedPath) => {
+        clearTimeout(reloadTimeout);
+        reloadTimeout = setTimeout(() => {
+            if (onRestart) {
+                console.log(chalk.yellow('🔄 API change detected, restarting server...'));
+                onRestart(changedPath);
+            }
+        }, 500);
+    };
+
     watcher
-        .on('change', (path) => {
-            // Debounce to avoid multiple reloads
-            clearTimeout(reloadTimeout);
-            reloadTimeout = setTimeout(() => {
-                if(onRestart) {
-                    console.log(chalk.yellow('🔄 Changes detected, restarting server...'));
-                    onRestart(path);
-                } else {
-                    console.log(chalk.yellow('🔄 Changes detected, server will reload automatically... (No handler)'));
-                }
-            }, 500);
-        })
-        .on('add', (path) => {
-             // console.log(chalk.green(`➕ New file added: ${path}`));
-             clearTimeout(reloadTimeout);
-             reloadTimeout = setTimeout(() => {
-                 if (onRestart) onRestart(path);
-             }, 500);
-        })
-        .on('unlink', (path) => {
-             // console.log(chalk.red(`➖ File removed: ${path}`));
-             clearTimeout(reloadTimeout);
-             reloadTimeout = setTimeout(() => {
-                 if (onRestart) onRestart(path);
-             }, 500);
-        })
+        .on('change', handleChange)
+        .on('add', handleChange)
+        .on('unlink', handleChange)
         .on('error', (error) => {
             Print.error(`Watcher error: ${error.message}`);
         })

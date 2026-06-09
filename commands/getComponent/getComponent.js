@@ -19,12 +19,12 @@ const COMPONENTS_REGISTRY_URL = 'https://raw.githubusercontent.com/VKneider/slic
  */
 const loadConfig = () => sharedLoadConfig(import.meta.url);
 
-const fetchWithRetry = async (url, retries = 3, baseDelay = 500) => {
+const fetchWithRetry = async (url, retries = 3, baseDelay = 500, binary = false) => {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const response = await fetch(url);
       if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      return await response.text();
+      return binary ? await response.arrayBuffer() : await response.text();
     } catch (e) {
       if (attempt === retries) throw e;
       const delay = baseDelay * Math.pow(2, attempt);
@@ -185,6 +185,9 @@ filterOfficialComponents(allComponents) {
           // Logical routing components only need JS
           if (['Route', 'MultiRoute', 'Link'].includes(name)) {
             files = [`${name}.js`];
+          } else if (name === 'Icon') {
+            // Icon component needs font files to render glyphs
+            files = [`${name}.js`, `${name}.html`, `${name}.css`, 'slc.eot', 'slc.woff2', 'slc.woff', 'slc.ttf', 'slc.svg'];
           } else {
             // Normal visual components need JS, HTML, CSS
             files = [`${name}.js`, `${name}.html`, `${name}.css`];
@@ -218,12 +221,18 @@ filterOfficialComponents(allComponents) {
     const total = component.files.length;
     let done = 0;
     const spinner = ora(`Downloading ${componentName} 0/${total}`).start();
+    const BINARY_EXTENSIONS = ['.eot', '.woff2', '.woff', '.ttf'];
     const worker = async (fileName) => {
       const url = `${DOCS_REPO_BASE_URL}/${category}/${componentName}/${fileName}`;
       const localPath = path.join(targetPath, fileName);
+      const isBinary = BINARY_EXTENSIONS.some(ext => fileName.endsWith(ext));
       try {
-        const content = await fetchWithRetry(url);
-        await fs.writeFile(localPath, content, 'utf8');
+        const content = await fetchWithRetry(url, 3, 500, isBinary);
+        if (isBinary) {
+          await fs.writeFile(localPath, Buffer.from(content));
+        } else {
+          await fs.writeFile(localPath, content, 'utf8');
+        }
         downloadedFiles.push(fileName);
       } catch (error) {
         Print.downloadError(fileName);

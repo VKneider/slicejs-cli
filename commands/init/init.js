@@ -300,6 +300,7 @@ export default async function initializeProject(options = {}) {
         }
 
         // 3. DOWNLOAD ALL VISUAL COMPONENTS FROM OFFICIAL REPOSITORY
+        let visualResults = [];
         const componentsSpinner = ora('Loading component registry...').start();
         try {
             const registry = new ComponentRegistry();
@@ -307,25 +308,23 @@ export default async function initializeProject(options = {}) {
 
             // Install only the Visual components the starter project uses.
             const allVisualComponents = STARTER_VISUAL_COMPONENTS;
-            Print.info(`Installing ${allVisualComponents.length} starter Visual components: ${allVisualComponents.join(', ')}`);
 
             if (allVisualComponents.length > 0) {
                 componentsSpinner.text = `Installing ${allVisualComponents.length} starter Visual components...`;
 
-                const results = await registry.installMultipleComponents(
+                visualResults = await registry.installMultipleComponents(
                     allVisualComponents,
                     'Visual',
                     true // force = true for initial installation
                 );
 
-                const successful = results.filter(r => r.success).length;
-                const failed = results.filter(r => !r.success).length;
+                const successful = visualResults.filter(r => r.success).length;
+                const failed = visualResults.filter(r => !r.success).length;
 
                 if (successful > 0 && failed === 0) {
                     componentsSpinner.succeed(`All ${successful} Visual components installed successfully`);
                 } else if (successful > 0) {
                 componentsSpinner.warn(`${successful} components installed, ${failed} failed`);
-                Print.info(`You can install failed components later using "${packageManager} run get -- <component-name>"`);
             } else {
                 componentsSpinner.fail('Failed to install Visual components');
             }
@@ -342,29 +341,28 @@ export default async function initializeProject(options = {}) {
         }
 
         // 3b. DOWNLOAD STARTER SERVICE COMPONENTS FROM OFFICIAL REPOSITORY
+        let serviceResults = [];
         const serviceSpinner = ora('Installing starter Service components...').start();
         try {
             const registry = new ComponentRegistry();
             await registry.loadRegistry();
 
             if (STARTER_SERVICE_COMPONENTS.length > 0) {
-                Print.info(`Installing ${STARTER_SERVICE_COMPONENTS.length} starter Service components: ${STARTER_SERVICE_COMPONENTS.join(', ')}`);
                 serviceSpinner.text = `Installing ${STARTER_SERVICE_COMPONENTS.length} starter Service components...`;
 
-                const results = await registry.installMultipleComponents(
+                serviceResults = await registry.installMultipleComponents(
                     STARTER_SERVICE_COMPONENTS,
                     'Service',
                     true // force = true for initial installation
                 );
 
-                const successful = results.filter(r => r.success).length;
-                const failed = results.filter(r => !r.success).length;
+                const successful = serviceResults.filter(r => r.success).length;
+                const failed = serviceResults.filter(r => !r.success).length;
 
                 if (successful > 0 && failed === 0) {
                     serviceSpinner.succeed(`All ${successful} Service components installed successfully`);
                 } else if (successful > 0) {
                     serviceSpinner.warn(`${successful} Service components installed, ${failed} failed`);
-                    Print.info(`You can install failed components later using "${packageManager} run get -- <component-name>"`);
                 } else {
                     serviceSpinner.fail('Failed to install Service components');
                 }
@@ -442,6 +440,12 @@ export default async function initializeProject(options = {}) {
         }
 
         const projectName = path.basename(process.cwd());
+
+        const failedCount = [...visualResults, ...serviceResults].filter(r => !r.success).length;
+        if (failedCount > 0) {
+            Print.warning(`${failedCount} component(s) failed to install — run "${packageManager} run get -- <name>" to retry`);
+        }
+
         Print.success(`Project initialized successfully in "${projectName}/"`);
         Print.newLine();
         Print.title('Next steps:');
