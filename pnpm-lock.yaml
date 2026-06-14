@@ -43,7 +43,7 @@ importers:
         version: 8.2.0
       slicejs-web-framework:
         specifier: latest
-        version: 3.3.1
+        version: 3.3.5
       terser:
         specifier: ^5.43.1
         version: 5.48.0
@@ -754,16 +754,16 @@ packages:
     resolution: {integrity: sha512-WPS/HvHQTYnHisLo9McqBHOJk2FkHO/tlpvldyrnem4aeQp4hai3gythswg6p01oSoTl58rcpiFAjF2br2Ak2A==}
     engines: {node: '>= 0.4'}
 
-  side-channel@1.1.0:
-    resolution: {integrity: sha512-ZX99e6tRweoUXqR+VBrslhda51Nh5MTQwou5tnUDgbtyM0dBgmhEDtWGP/xbKn6hqfPRHujUNwz5fy/wbbhnpw==}
+  side-channel@1.1.1:
+    resolution: {integrity: sha512-6x6dK6zJdpTzF4sQeNYxwtvBzf6Eg4GtlesS94HOvTudUeyK2WXAaIfmDgsyslYrRBeFIlsi54AYsFGUuhmvrQ==}
     engines: {node: '>= 0.4'}
 
   signal-exit@4.1.0:
     resolution: {integrity: sha512-bzyZ1e88w9O1iNJbKnOlvYTrWPDl46O1bG0D3XInv+9tkPrxrN8jUUTiFlDkkmKWgn1M6CfIA13SuGqOa9Korw==}
     engines: {node: '>=14'}
 
-  slicejs-web-framework@3.3.1:
-    resolution: {integrity: sha512-QNQxKt6jbRcYrVDTUyvpdHks8p7Nwp+9VlAU/5+zZWQslWKCArS4xH6gGVQReiQSbxERyzb5ZivkECIZs442UQ==}
+  slicejs-web-framework@3.3.5:
+    resolution: {integrity: sha512-swLF4Ix+0b4/p3py1xXE1kq/UKOCFT9xHv8bi4U0I+7swnnCDl1sY0dzxumanJfxZXsUvPcdX0xKQ+oSBWIFSA==}
     engines: {node: '>=20'}
 
   source-map-support@0.5.21:
@@ -1449,7 +1449,7 @@ snapshots:
 
   qs@6.15.2:
     dependencies:
-      side-channel: 1.1.0
+      side-channel: 1.1.1
 
   range-parser@1.2.1: {}
 
@@ -1530,7 +1530,7 @@ snapshots:
       object-inspect: 1.13.4
       side-channel-map: 1.0.1
 
-  side-channel@1.1.0:
+  side-channel@1.1.1:
     dependencies:
       es-errors: 1.3.0
       object-inspect: 1.13.4
@@ -1540,7 +1540,7 @@ snapshots:
 
   signal-exit@4.1.0: {}
 
-  slicejs-web-framework@3.3.1:
+  slicejs-web-framework@3.3.5:
     dependencies:
       express: 4.22.2
     transitivePeerDependencies:
@@ -1626,5 +1626,4 @@ time:
   html-minifier-terser@7.2.0: '2023-04-11T05:32:18.898Z'
   inquirer@12.11.1: '2025-11-12T21:41:13.082Z'
   ora@8.2.0: '2025-02-02T07:26:16.712Z'
-  slicejs-web-framework@3.3.1: '2026-06-01T03:21:11.189Z'
   terser@5.48.0: '2026-05-21T18:18:56.338Z'

@@ -281,9 +281,7 @@ async function minifyJavaScript(srcPath, distPath) {
         'Button', 'Grid', 'Layout', 'HomePage', 'NotFound', 'Loading', 'TreeView', 'Link',
         'FetchManager'
       ],
-      properties: {
-        regex: /^(slice|_|\$|on[A-Z]|get|set|has|is)/
-      }
+      properties: { regex: /^_/ }
     },
     format: {
       comments: false,
