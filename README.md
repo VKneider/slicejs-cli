@@ -134,7 +134,6 @@ When you install `slicejs-cli`, the `postinstall` script automatically configure
     "slice:doctor": "node ./node_modules/slicejs-cli/client.js doctor",
     "slice:version": "node ./node_modules/slicejs-cli/client.js version",
     "slice:help": "node ./node_modules/slicejs-cli/client.js --help",
-    "slice:update": "node ./node_modules/slicejs-cli/client.js update",
     "slice:types": "node ./node_modules/slicejs-cli/client.js types generate"
   }
 }

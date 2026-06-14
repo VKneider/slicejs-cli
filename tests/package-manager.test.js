@@ -30,7 +30,7 @@ test('parseUserAgent detects npm', () => {
 });
 
 test('parseUserAgent returns null for missing or unknown agent', () => {
-  assert.equal(parseUserAgent(undefined), null);
+  assert.equal(parseUserAgent(null), null);
   assert.equal(parseUserAgent('bun/1.1.0 node/v20.11.0'), null);
   assert.equal(parseUserAgent('yarn/1.22.22 node/v20.11.0'), null);
 });

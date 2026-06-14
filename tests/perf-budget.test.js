@@ -26,9 +26,7 @@ async function assembleAndBuild() {
   const app = await createTestProject();
 
   await fs.ensureDir(path.join(app, 'node_modules'));
-  await fs
-    .ensureSymlink(FW_PKG, path.join(app, 'node_modules', 'slicejs-web-framework'), 'dir')
-    .catch(() => fs.copy(FW_PKG, path.join(app, 'node_modules', 'slicejs-web-framework')));
+  await fs.copy(FW_PKG, path.join(app, 'node_modules', 'slicejs-web-framework'), { dereference: true });
 
   await fs.copy(path.join(FIXTURES, 'Visual'), path.join(app, 'src', 'Components', 'Visual'));
   await fs.copy(path.join(FIXTURES, 'Service'), path.join(app, 'src', 'Components', 'Service'));

@@ -245,3 +245,24 @@ sliceClient
 - File list is determined by hardcoded rules, NOT by checking the remote server
 - If `.js` download fails → component install fails (fatal)
 - If `.html`/`.css` fails → component install succeeds with warning
+
+## Changelog & Versioning
+
+Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+### Changelog format
+- Single `CHANGELOG.md` at project root
+- `[Unreleased]` section at top for in-progress changes
+- Categories: `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, `Security`
+- Entries describe user-facing impact, not internal implementation details
+- Each version linkable to GitHub compare/release URL at bottom of file
+
+### Release process
+1. Bump version in `package.json` (semver: major.minor.patch)
+2. Move `[Unreleased]` content into a new `[X.Y.Z] - YYYY-MM-DD` section below
+3. Add compare link at bottom: `[X.Y.Z]: https://github.com/VKneider/slicejs-cli/releases/tag/vX.Y.Z`
+4. Update `[Unreleased]` compare link: `[Unreleased]: https://github.com/VKneider/slicejs-cli/compare/vX.Y.Z...HEAD`
+5. Commit: `git commit -m "chore: bump vX.Y.Z"`
+6. Tag: `git tag vX.Y.Z`
+7. Push: `git push && git push --tags`
+8. GitHub Release: `gh release create vX.Y.Z --title "vX.Y.Z" --notes-file CHANGELOG.md`

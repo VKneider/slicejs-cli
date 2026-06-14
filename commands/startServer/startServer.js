@@ -6,22 +6,9 @@ import { spawn } from 'child_process';
 import { createServer } from 'net';
 import setupWatcher, { stopWatcher } from './watchServer.js';
 import Print from '../Print.js';
-import { getConfigPath, getApiPath, getSrcPath, getDistPath, getPath } from '../utils/PathHelper.js';
+import { getApiPath, getSrcPath, getDistPath, getPath } from '../utils/PathHelper.js';
+import { loadConfigSync } from '../utils/loadConfig.js';
 import build from '../build/build.js';
-
-/**
- * Loads configuration from sliceConfig.json
- */
-const loadConfig = () => {
-  try {
-    const configPath = getConfigPath(import.meta.url);
-    const rawData = fs.readFileSync(configPath, 'utf-8');
-    return JSON.parse(rawData);
-  } catch (error) {
-    Print.error(`Loading configuration: ${error.message}`);
-    return null;
-  }
-};
 
 /**
  * Checks if a port is available
@@ -144,20 +131,6 @@ function startNodeServer(port, mode) {
       }
     });
 
-    // Manejar Ctrl+C
-    process.on('SIGINT', () => {
-      Print.newLine();
-      Print.info('Shutting down server...');
-      serverProcess.kill('SIGINT');
-      setTimeout(() => {
-        process.exit(0);
-      }, 100);
-    });
-
-    process.on('SIGTERM', () => {
-      serverProcess.kill('SIGTERM');
-    });
-
     // If after 3 seconds we haven't detected startup, assume it's ready
     setTimeout(() => {
       if (!serverStarted) {
@@ -169,11 +142,25 @@ function startNodeServer(port, mode) {
   });
 }
 
+let currentServerProcess = null;
+let currentWatcher = null;
+
+process.on('SIGINT', () => shutdown());
+process.on('SIGTERM', () => shutdown());
+
+function shutdown() {
+  Print.newLine();
+  Print.info('Shutting down server...');
+  if (currentWatcher) stopWatcher(currentWatcher);
+  if (currentServerProcess) currentServerProcess.kill('SIGINT');
+  setTimeout(() => process.exit(0), 100);
+}
+
 /**
  * Main function to start the server
  */
 export default async function startServer(options = {}) {
-  const config = loadConfig();
+  const config = loadConfigSync(import.meta.url);
   const defaultPort = config?.server?.port || 3000;
 
   const { mode = 'development', port = defaultPort, watch = false } = options;
@@ -217,14 +204,14 @@ export default async function startServer(options = {}) {
     Print.newLine();
 
     // Start the server with arguments
-    let serverProcess = await startNodeServer(actualPort, mode);
+    currentServerProcess = await startNodeServer(actualPort, mode);
 
     // Configure watch mode if enabled
     if (watch) {
       Print.newLine();
-      const watcher = setupWatcher(serverProcess, async (changedPath) => {
-        if (serverProcess) {
-             serverProcess.kill();
+      currentWatcher = setupWatcher(currentServerProcess, async (changedPath) => {
+        if (currentServerProcess) {
+             currentServerProcess.kill();
         }
         
         // Short delay to ensure port is freed
@@ -233,19 +220,11 @@ export default async function startServer(options = {}) {
         try {
         Print.info('🔄 File changed. Restarting server...');
 
-          serverProcess = await startNodeServer(actualPort, mode);
+          currentServerProcess = await startNodeServer(actualPort, mode);
         } catch (e) {
           Print.error(`Failed to restart server: ${e.message}`);
         }
       });
-
-      // Cleanup en exit
-      const cleanup = () => {
-        stopWatcher(watcher);
-      };
-
-      process.on('SIGINT', cleanup);
-      process.on('SIGTERM', cleanup);
     }
 
   } catch (error) {

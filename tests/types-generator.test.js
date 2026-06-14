@@ -135,8 +135,10 @@ test('generateDeclarationContent creates build typing map', () => {
   assert.match(content, /interface SliceApi \{/);
   assert.match(content, /export type SliceDynamicElement = HTMLElement & Record<string, any>;/);
   assert.match(content, /build<K extends SliceComponentName>/);
+  assert.match(content, /getComponent<K extends SliceComponentName>\(/);
+  assert.match(content, /componentSliceId: K \|/);
+  assert.match(content, /SliceDynamicElement \| undefined;/);
   assert.match(content, /getComponent<T extends SliceDynamicElement = SliceDynamicElement>\(/);
-  assert.match(content, /componentSliceId: string/);
   assert.match(content, /\): T \| undefined;/);
   assert.match(content, /interface Element \{/);
   assert.match(content, /querySelector<E extends Element = HTMLElement>\(selectors: string\): E \| null;/);

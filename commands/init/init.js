@@ -193,6 +193,7 @@ export default async function initializeProject(options = {}) {
             } else {
                 fwSpinner.fail('Failed to ensure latest slicejs-web-framework');
                 Print.error(err.message);
+                console.error(err.stack);
                 return;
             }
         }
@@ -233,6 +234,7 @@ export default async function initializeProject(options = {}) {
             if (fs.existsSync(destinationSrc)) throw new Error(`The "src" directory already exists: ${destinationSrc}`);
         } catch (error) {
             Print.error('Validating destination directories:', error.message);
+            console.error(error.stack);
             return;
         }
 
@@ -245,6 +247,7 @@ export default async function initializeProject(options = {}) {
         } catch (error) {
             apiSpinner.fail('Error copying API structure');
             Print.error(error.message);
+            console.error(error.stack);
             return;
         }
 
@@ -296,6 +299,7 @@ export default async function initializeProject(options = {}) {
         } catch (error) {
             srcSpinner.fail('Error creating source structure');
             Print.error(error.message);
+            console.error(error.stack);
             return;
         }
 
@@ -412,7 +416,7 @@ export default async function initializeProject(options = {}) {
             pkg.scripts['browse'] = SLICE_SCRIPTS['slice:browse'];
             pkg.scripts['sync'] = SLICE_SCRIPTS['slice:sync'];
 
-            // slice:* namespaced set — shared with post.js and `slice postinstall`
+            // slice:* namespaced set — shared with `slice postinstall`
             // (commands/utils/sliceScripts.js) so the three never drift apart.
             Object.assign(pkg.scripts, SLICE_SCRIPTS);
             pkg.scripts['run'] = SLICE_SCRIPTS['slice:dev'];
@@ -437,6 +441,7 @@ export default async function initializeProject(options = {}) {
         } catch (error) {
         pkgSpinner.fail('Failed to configure npm scripts');
         Print.error(error.message);
+        console.error(error.stack);
         }
 
         const projectName = path.basename(process.cwd());
@@ -457,6 +462,7 @@ export default async function initializeProject(options = {}) {
 
     } catch (error) {
         Print.error('Unexpected error initializing project:', error.message);
+        console.error(error.stack);
     }
 }
 

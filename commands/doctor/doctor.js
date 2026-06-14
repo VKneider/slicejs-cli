@@ -4,12 +4,10 @@ import { createServer } from 'net';
 import chalk from 'chalk';
 import Table from 'cli-table3';
 import Print from '../Print.js';
-import inquirer from 'inquirer';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-import { getProjectRoot, getSrcPath, getApiPath, getConfigPath, getPath } from '../utils/PathHelper.js';
+import { getProjectRoot, getSrcPath, getApiPath, getConfigPath, getPath, getComponentsJsPath } from '../utils/PathHelper.js';
 import { resolvePackageManager, installCommand } from '../utils/PackageManager.js';
 import updateManager from '../utils/updateManager.js';
+import { parseComponentsRegistry, extractStaticPropsFromSource } from '../types/types.js';
 
 /**
  * Checks the Node.js version
@@ -320,6 +318,100 @@ async function checkComponents() {
 }
 
 /**
+ * Lints component static props for common issues.
+ * Uses the same Babel parsing as slice types generate.
+ */
+async function checkComponentProps() {
+  const issues = [];
+  const registryPath = getComponentsJsPath(import.meta.url);
+  const configPath = getConfigPath(import.meta.url);
+
+  if (!await fs.pathExists(registryPath)) {
+    return { pass: true, message: 'No components to check' };
+  }
+
+  try {
+    const content = await fs.readFile(registryPath, 'utf-8');
+    const registryMap = parseComponentsRegistry(content, registryPath);
+    const entries = Object.entries(registryMap);
+
+    if (entries.length === 0) {
+      return { pass: true, message: 'No components registered' };
+    }
+
+    // Build a category-to-path map from sliceConfig.json
+    const categoryPathCache = new Map();
+    if (await fs.pathExists(configPath)) {
+      try {
+        const config = await fs.readJson(configPath);
+        if (config.paths?.components) {
+          for (const [cat, catMeta] of Object.entries(config.paths.components)) {
+            categoryPathCache.set(cat, catMeta.path?.replace(/^[/\\]+/, '') || '');
+          }
+        }
+      } catch {}
+    }
+
+    const VALID_TYPES = new Set(['string', 'number', 'boolean', 'object', 'array', 'function', 'any']);
+    const checked = [];
+
+    for (const [compName, meta] of entries) {
+      const category = typeof meta === 'string' ? meta : (meta.category || '');
+      const relPath = categoryPathCache.get(category);
+      if (!relPath) continue;
+      const jsPath = getSrcPath(import.meta.url, relPath, compName, `${compName}.js`);
+
+      if (!await fs.pathExists(jsPath)) {
+        continue;
+      }
+
+      const source = await fs.readFile(jsPath, 'utf-8');
+      const props = extractStaticPropsFromSource(source, jsPath);
+      if (!props) continue;
+
+      checked.push(compName);
+
+      for (const [propName, propMeta] of Object.entries(props)) {
+        if (propMeta.type === 'any') {
+          issues.push({ component: compName, prop: propName, message: `"${propName}" uses type "any" — specify a concrete type` });
+        }
+        if (propMeta.required && propMeta.type !== 'boolean') {
+          issues.push({ component: compName, prop: propName, message: `"${propName}" is required but has no default value` });
+        }
+        if (propMeta.schema && propMeta.type !== 'object') {
+          issues.push({ component: compName, prop: propName, message: `"${propName}" has "schema" but type is "${propMeta.type}" (should be "object")` });
+        }
+        if (propMeta.items && propMeta.type !== 'array') {
+          issues.push({ component: compName, prop: propName, message: `"${propName}" has "items" but type is "${propMeta.type}" (should be "array")` });
+        }
+        if (!VALID_TYPES.has(propMeta.type)) {
+          issues.push({ component: compName, prop: propName, message: `"${propName}" has unknown type "${propMeta.type}"` });
+        }
+        if (Array.isArray(propMeta.allowedValues) && propMeta.allowedValues.length > 0) {
+          const typeMismatch = propMeta.allowedValues.some(v => typeof v !== propMeta.type);
+          if (typeMismatch && propMeta.type !== 'any') {
+            issues.push({ component: compName, prop: propName, message: `"${propName}" allowedValues type mismatch (expected ${propMeta.type})` });
+          }
+        }
+      }
+    }
+
+    if (issues.length === 0) {
+      return { pass: true, message: `${checked.length} components checked, props look good` };
+    }
+
+    return {
+      warn: true,
+      message: `${issues.length} prop issue(s) across ${new Set(issues.map(i => i.component)).size} component(s)`,
+      suggestion: issues.map(i => `  ${i.component}.${i.prop}: ${i.message}`).join('\n'),
+      issues
+    };
+  } catch (error) {
+    return { warn: true, message: `Cannot check props: ${error.message}` };
+  }
+}
+
+/**
  * Main diagnostic command
  */
 export {
@@ -328,7 +420,8 @@ export {
     checkConfig,
     checkPort,
     checkDependencies,
-    checkComponents
+    checkComponents,
+    checkComponentProps
 };
 
 export default async function runDiagnostics() {
@@ -343,7 +436,8 @@ export default async function runDiagnostics() {
         { name: 'Port Availability', fn: checkPort },
         { name: 'Package Manager', fn: checkPackageManagerSetup },
         { name: 'Dependencies', fn: checkDependencies },
-        { name: 'Components', fn: checkComponents }
+        { name: 'Components', fn: checkComponents },
+        { name: 'Component Props', fn: checkComponentProps }
     ];
 
     const results = [];
@@ -394,27 +488,9 @@ export default async function runDiagnostics() {
     const depsResult = results.find(r => r.name === 'Dependencies');
     if (depsResult && depsResult.warn && Array.isArray(depsResult.missing) && depsResult.missing.length > 0) {
         const projectRoot = getProjectRoot(import.meta.url);
-        const execAsync = promisify(exec);
-        const { confirmInstall } = await inquirer.prompt([
-            {
-                type: 'confirm',
-                name: 'confirmInstall',
-                message: `Install missing dependencies in this project now? (${depsResult.missing.join(', ')})`,
-                default: true
-            }
-        ]);
-        if (confirmInstall) {
-            const pm = resolvePackageManager(projectRoot).name;
-            for (const pkg of depsResult.missing) {
-                try {
-                    const cmd = installCommand(pm, `${pkg}@latest`);
-                    Print.info(`Installing ${pkg}...`);
-                    await execAsync(cmd, { cwd: projectRoot });
-                    Print.success(`${pkg} installed`);
-                } catch (e) {
-                    Print.error(`Installing ${pkg}: ${e.message}`);
-                }
-            }
+        const pm = resolvePackageManager(projectRoot).name;
+        for (const pkg of depsResult.missing) {
+            Print.info(`Missing: ${pkg}. Install with: ${installCommand(pm, `${pkg}@latest`)}`);
         }
     }
 

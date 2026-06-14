@@ -262,10 +262,8 @@ filterOfficialComponents(allComponents) {
   }
 
   async updateLocalRegistrySafe(componentName, category) {
-    // Queue behind any in-flight registry update; keep the chain alive even
-    // when an update throws so later updates still run.
     const run = this._registryLock.then(() => this._updateLocalRegistry(componentName, category));
-    this._registryLock = run.catch(() => {});
+    this._registryLock = run.catch(() => { /* non-critical: registry update failure is handled by caller */ });
     return run;
   }
 
@@ -611,12 +609,12 @@ filterOfficialComponents(allComponents) {
   }
 }
 
+const sharedRegistry = new ComponentRegistry();
+
 // Main get function
 async function getComponents(componentNames = [], options = {}) {
-  const registry = new ComponentRegistry();
-  
   try {
-    await registry.loadRegistry();
+    await sharedRegistry.loadRegistry();
   } catch (error) {
     Print.error('Could not load component registry from official repository');
     Print.info('Check your internet connection and try again');
@@ -625,7 +623,7 @@ async function getComponents(componentNames = [], options = {}) {
 
   // Interactive mode if no components specified
   if (!componentNames || componentNames.length === 0) {
-    await registry.interactiveInstall();
+    await sharedRegistry.interactiveInstall();
     return true;
   }
 
@@ -634,7 +632,7 @@ async function getComponents(componentNames = [], options = {}) {
 
   if (componentNames.length === 1) {
     // Single component install
-    const componentInfo = registry.findComponentInRegistry(componentNames[0]);
+    const componentInfo = sharedRegistry.findComponentInRegistry(componentNames[0]);
     
     if (!componentInfo) {
       Print.error(`Component '${componentNames[0]}' not found in official repository`);
@@ -646,7 +644,7 @@ async function getComponents(componentNames = [], options = {}) {
     const actualCategory = options.service ? 'Service' : componentInfo.category;
 
     try {
-      await registry.installComponent(componentInfo.name, actualCategory, options.force);
+      await sharedRegistry.installComponent(componentInfo.name, actualCategory, options.force);
       return true;
     } catch (error) {
       Print.error(`Error installing component: ${error.message}`);
@@ -659,7 +657,7 @@ async function getComponents(componentNames = [], options = {}) {
     );
 
     try {
-      await registry.installMultipleComponents(normalizedComponents, category, options.force);
+      await sharedRegistry.installMultipleComponents(normalizedComponents, category, options.force);
       return true;
     } catch (error) {
       Print.error(`Error installing components: ${error.message}`);
@@ -670,11 +668,9 @@ async function getComponents(componentNames = [], options = {}) {
 
 // List components function
 async function listComponents() {
-  const registry = new ComponentRegistry();
-  
   try {
-    await registry.loadRegistry();
-    registry.displayAvailableComponents();
+    await sharedRegistry.loadRegistry();
+    sharedRegistry.displayAvailableComponents();
     return true;
   } catch (error) {
     Print.error('Could not load component registry from official repository');
@@ -685,11 +681,9 @@ async function listComponents() {
 
 // Sync components function
 async function syncComponents(options = {}) {
-  const registry = new ComponentRegistry();
-  
   try {
-    await registry.loadRegistry();
-    return await registry.updateAllComponents(options.force);
+    await sharedRegistry.loadRegistry();
+    return await sharedRegistry.updateAllComponents(options.force);
   } catch (error) {
     Print.error('Could not load component registry from official repository');
     Print.info('Check your internet connection and try again');

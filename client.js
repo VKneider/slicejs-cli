@@ -35,7 +35,7 @@ import {
   runScriptCommand,
   SUPPORTED_PACKAGE_MANAGERS
 } from './commands/utils/PackageManager.js';
-import { SLICE_SCRIPTS } from './commands/utils/sliceScripts.js';
+import { SLICE_SCRIPTS, verifySliceScriptsInPackageJson } from './commands/utils/sliceScripts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -44,20 +44,50 @@ const getCategories = () => {
   return config && config.paths?.components ? Object.keys(config.paths.components) : [];
 };
 
+// Helper to validate port number
+function parsePort(value) {
+  if (!value) return undefined;
+  const port = parseInt(value, 10);
+  if (isNaN(port) || port < 1 || port > 65535) {
+    Print.error(`Invalid port: "${value}". Must be a number between 1 and 65535.`);
+    process.exit(1);
+  }
+  return port;
+}
+
+async function withNodeEnv(env, fn) {
+  const prevEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = env;
+  listComponents();
+  try {
+    return await fn();
+  } finally {
+    process.env.NODE_ENV = prevEnv;
+  }
+}
+
 // Function to run version check for all commands
 async function runWithVersionCheck(commandFunction, ...args) {
   try {
-    updateManager.notifyAvailableUpdates().catch(() => {});
+    const globalOpts = program.opts();
+    const skipVersionCheck = globalOpts.noVersionCheck === false;
+
+    if (!skipVersionCheck) {
+      updateManager.notifyAvailableUpdates().catch(() => {});
+    }
 
     const result = await commandFunction(...args);
 
-    setTimeout(() => {
-      versionChecker.checkForUpdates(false);
-    }, 100);
+    if (!skipVersionCheck) {
+      setTimeout(() => {
+        versionChecker.checkForUpdates(false);
+      }, 100);
+    }
 
     return result;
   } catch (error) {
     Print.error(`Command execution: ${error.message}`);
+    console.error(error.stack);
     return false;
   }
 }
@@ -80,7 +110,7 @@ function maybeDelegateToLocalCli() {
     {
       stdio: 'inherit',
       cwd: process.cwd(),
-      env: process.env
+      env: { ...process.env, SLICE_NO_LOCAL_DELEGATION: '1' }
     }
   );
 
@@ -104,13 +134,12 @@ try {
 sliceClient
   .command("init")
   .description("Initialize a new Slice.js project")
-  .option("-y, --yes [name]", "Skip prompts and initialize with project name")
+  .argument("[name]", "Project name (defaults to my-slice-app)")
+  .option("-y, --yes", "Skip prompts")
   .option("--pm <packageManager>", "Package manager to use (pnpm or npm). Auto-detected when omitted")
-  .action(async (options) => {
-    let projectName = 'my-slice-app';
-    if (options.yes) {
-      projectName = typeof options.yes === 'string' ? options.yes : projectName;
-    } else {
+  .action(async (name, options) => {
+    let projectName = name ? name.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '').replace(/-+/g, '-').replace(/^-|-$/g, '') : 'my-slice-app';
+    if (!options.yes) {
       const answers = await inquirer.prompt([
         {
           type: 'input',
@@ -222,15 +251,9 @@ sliceClient
 const buildCommand = sliceClient.command("build")
   .description("Build Slice.js project for production")
   .action(async (options) => {
-    const prevEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = 'production';
-    try {
-      await runWithVersionCheck(async () => {
-        await build(options);
-      });
-    } finally {
-      process.env.NODE_ENV = prevEnv;
-    }
+    await withNodeEnv('production', () => runWithVersionCheck(async () => {
+      await build(options);
+    }));
   });
 
 buildCommand
@@ -263,19 +286,13 @@ sliceClient
   .option("-p, --port <port>", "Port for development server")
   .option("--no-hmr", "Disable hot module reload (enabled by default)")
   .action(async (options) => {
-    const prevEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = 'development';
-    try {
-      await runWithVersionCheck(async () => {
-        await startServer({
-          mode: 'development',
-          port: options.port ? parseInt(options.port) : undefined,
-          watch: options.hmr
-        });
+    await withNodeEnv('development', () => runWithVersionCheck(async () => {
+      await startServer({
+        mode: 'development',
+        port: parsePort(options.port),
+        watch: options.hmr
       });
-    } finally {
-      process.env.NODE_ENV = prevEnv;
-    }
+    }));
   });
 
 // START COMMAND - PRODUCTION MODE
@@ -284,18 +301,12 @@ sliceClient
   .description("Serve production files from dist/ (requires prior slice build)")
   .option("-p, --port <port>", "Port for server")
   .action(async (options) => {
-    const prevEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = 'production';
-    try {
-      await runWithVersionCheck(async () => {
-        await startServer({
-          mode: 'production',
-          port: options.port ? parseInt(options.port) : undefined
-        });
+    await withNodeEnv('production', () => runWithVersionCheck(async () => {
+      await startServer({
+        mode: 'production',
+        port: parsePort(options.port)
       });
-    } finally {
-      process.env.NODE_ENV = prevEnv;
-    }
+    }));
   });
 
 // COMPONENT COMMAND GROUP - For local component management
@@ -597,19 +608,6 @@ sliceClient
     });
   });
 
-// UPDATE COMMAND
-sliceClient
-  .command("update")
-  .alias("upgrade")
-  .description("Update CLI and framework to latest versions")
-  .option("-y, --yes", "Skip confirmation and update all packages automatically")
-  .option("--cli", "Update only the Slice.js CLI")
-  .option("-f, --framework", "Update only the Slice.js Framework")
-  .option("--update-api", "Also overwrite api/index.js with the framework version (never done by default; creates a .bak backup)")
-  .action(async (options) => {
-    await updateManager.checkAndPromptUpdates(options);
-  });
-
 // DOCTOR COMMAND - Diagnose project issues
 sliceClient
   .command("doctor")
@@ -621,12 +619,11 @@ sliceClient
     });
   });
 
-// POSTINSTALL COMMAND - Manual alternative to postinstall
+// POSTINSTALL COMMAND - Configure npm scripts in existing project
 sliceClient
   .command("postinstall")
-  .description("Configure npm scripts in package.json (alternative to postinstall for --ignore-scripts users)")
+  .description("Configure npm scripts in package.json (useful when adding slicejs-cli to an existing project)")
   .action(() => {
-    // npm sets npm_config_global; pnpm global installs are detected via PNPM_HOME.
     const pnpmHome = process.env.PNPM_HOME;
     const cliEntryPath = fileURLToPath(import.meta.url);
     const isGlobal = process.env.npm_config_global === 'true'
@@ -642,7 +639,6 @@ sliceClient
     const pkgPath = path.join(projectRoot, 'package.json');
     const packageManager = resolvePackageManager(projectRoot).name;
 
-    // Shared with post.js and slice init — see commands/utils/sliceScripts.js
     const sliceScripts = SLICE_SCRIPTS;
 
     try {
@@ -701,7 +697,7 @@ Common Usage Examples:
   slice list                     - List all local components
   slice doctor                   - Run project diagnostics
   slice types generate           - Generate TypeScript typings for slice.build
-  slice postinstall              - Show post-install setup guide
+  slice postinstall              - Configure npm scripts in package.json
 
 Command Categories:
   • init, dev, start             - Project lifecycle (development only)
@@ -709,7 +705,7 @@ Command Categories:
   • component <cmd>              - Local component management
   • registry <cmd>               - Official repository operations
   • types generate               - Type declarations from static props
-  • version, update, doctor, setup - Maintenance commands
+  • version, doctor, setup - Maintenance commands
 
 Development Workflow:
   • slice init          - Initialize project

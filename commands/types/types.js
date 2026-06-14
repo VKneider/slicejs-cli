@@ -345,6 +345,9 @@ const generateDeclarationContent = (componentPropsMap) => {
   lines.push('      name: K,');
   lines.push('      props?: SliceComponentPropsMap[K]');
   lines.push('    ): Promise<SliceDynamicElement | null>;');
+  lines.push('    getComponent<K extends SliceComponentName>(');
+  lines.push('      componentSliceId: K | `${K}-${string}`');
+  lines.push('    ): SliceDynamicElement | undefined;');
   lines.push('    getComponent<T extends SliceDynamicElement = SliceDynamicElement>(');
   lines.push('      componentSliceId: string');
   lines.push('    ): T | undefined;');

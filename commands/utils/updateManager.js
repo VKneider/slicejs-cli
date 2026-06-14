@@ -117,7 +117,7 @@ export class UpdateManager {
         }
 
         this.displayUpdates(updateInfo);
-        Print.info("Run 'slice update' to install updates when convenient.");
+        Print.info("Use your package manager to install updates: npm/pnpm update slicejs-cli slicejs-web-framework");
         return true;
     }
 
@@ -434,7 +434,7 @@ export class UpdateManager {
             let confirmUpdate = options.updateApi === true;
             if (!confirmUpdate && options.yes === true) {
                 Print.info('Skipping api/index.js update (not updated by default).');
-                Print.info('Run "slice update --update-api" to update it (a .bak backup is created).');
+                Print.info('Use --update-api to overwrite api/index.js from the framework template.');
                 return;
             }
             if (!confirmUpdate) {

@@ -1,6 +1,6 @@
 {
   "name": "slicejs-cli",
-  "version": "3.6.4",
+  "version": "3.6.5",
   "description": "Command client for developing web applications with Slice.js framework",
   "main": "client.js",
   "bin": {
@@ -11,7 +11,6 @@
   },
   "files": [
     "client.js",
-    "post.js",
     "commands",
     "assets"
   ],
@@ -21,7 +20,6 @@
   },
   "scripts": {
     "test": "node --test",
-    "postinstall": "node post.js",
     "slice:dev": "slice dev",
     "slice:build": "slice build",
     "slice:start": "slice start",
@@ -33,7 +31,6 @@
     "slice:browse": "slice browse",
     "slice:sync": "slice sync",
     "slice:version": "slice version",
-    "slice:update": "slice update",
     "slice:types": "slice types generate",
     "slice:doctor": "node ./node_modules/slicejs-cli/client.js doctor",
     "slice:help": "node ./node_modules/slicejs-cli/client.js --help"

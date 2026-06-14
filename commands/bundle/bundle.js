@@ -74,7 +74,7 @@ export default async function bundle(options = {}) {
       console.error('\n📍 Error code:', error.code);
     }
 
-    process.exit(1);
+    throw error;
   }
 }
 
@@ -177,7 +177,8 @@ export async function cleanBundles() {
 
   } catch (error) {
     Print.error('Error cleaning bundles:', error.message);
-    process.exit(1);
+    console.error(error.stack);
+    throw error;
   }
 }
 
@@ -229,6 +230,7 @@ export async function bundleInfo() {
 
   } catch (error) {
     Print.error('Error reading information:', error.message);
-    process.exit(1);
+    console.error(error.stack);
+    throw error;
   }
 }
