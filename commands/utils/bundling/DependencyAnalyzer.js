@@ -268,6 +268,10 @@ export default class DependencyAnalyzer {
     if (enabledStructural.has('ThemeManager')) {
       this.addFrameworkFileComponent('ThemeManager', path.join('StylesManager', 'ThemeManager'));
     }
+
+    if (enabledStructural.has('LogViewer')) {
+      this.addFrameworkFileComponent('LogViewer', path.join('Logger', 'LogViewer'));
+    }
   }
 
   addFrameworkFileComponent(componentName, folderName) {
@@ -295,6 +299,10 @@ export default class DependencyAnalyzer {
 
     if (config?.logger?.enabled) {
       enabled.add('Logger');
+    }
+
+    if (config?.logger?.ui?.enabled) {
+      enabled.add('LogViewer');
     }
 
     if (config?.debugger?.enabled) {
