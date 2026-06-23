@@ -106,6 +106,286 @@ const extractStaticPropsFromObjectExpression = (objectExpressionNode) => {
   return Object.keys(props).length > 0 ? props : null;
 };
 
+// ============================================================
+// Event registry scanning (slice.events.register(...) call sites)
+// ============================================================
+
+const PAYLOAD_TYPE_MAP = {
+  string: 'string',
+  number: 'number',
+  boolean: 'boolean',
+  object: 'Record<string, unknown>',
+  array: 'unknown[]',
+  function: '(...args: unknown[]) => unknown',
+  any: 'unknown'
+};
+
+// Translate a payload mini-schema into a TS type.
+//  - null/undefined        => 'void'
+//  - 'string' (a scalar)   => 'string'
+//  - { id: 'number', ... } => '{ id: number; ... }'
+//  - field value may also be { type: 'number' } (long form)
+const payloadToTs = (payload) => {
+  if (payload === null || payload === undefined) return 'void';
+  if (typeof payload === 'string') return PAYLOAD_TYPE_MAP[payload.toLowerCase()] || 'unknown';
+  if (typeof payload === 'object' && !Array.isArray(payload)) {
+    const inner = Object.entries(payload)
+      .map(([key, value]) => {
+        let tsType = 'unknown';
+        if (typeof value === 'string') {
+          tsType = PAYLOAD_TYPE_MAP[value.toLowerCase()] || 'unknown';
+        } else if (value && typeof value === 'object' && typeof value.type === 'string') {
+          tsType = PAYLOAD_TYPE_MAP[value.type.toLowerCase()] || 'unknown';
+        }
+        return `${key}: ${tsType}`;
+      })
+      .join('; ');
+    return inner.length > 0 ? `{ ${inner} }` : 'Record<string, unknown>';
+  }
+  return 'unknown';
+};
+
+const parseModule = (source, filePath) => {
+  try {
+    return parse(source, { sourceType: 'module', plugins: ['classProperties'] });
+  } catch (parseError) {
+    const loc = parseError.loc ? ` at line ${parseError.loc.line}, column ${parseError.loc.column}` : '';
+    Print.warning(`Parse error in ${filePath || 'unknown file'}${loc}: ${parseError.message}`);
+    return null;
+  }
+};
+
+// Matches `<x>.events.register(...)` — covers slice.events, this.events (bind), window.slice.events.
+const isEventsRegisterCallee = (callee) => {
+  return (
+    callee &&
+    callee.type === 'MemberExpression' &&
+    keyNameFromAst(callee.property) === 'register' &&
+    callee.object &&
+    callee.object.type === 'MemberExpression' &&
+    keyNameFromAst(callee.object.property) === 'events'
+  );
+};
+
+// Resolve an exported object literal from a module file (export const NAME = {...} / export default {...}).
+const resolveExportedObject = async (modulePath, exportName) => {
+  if (!(await fs.pathExists(modulePath))) return null;
+  let source;
+  try {
+    source = await fs.readFile(modulePath, 'utf8');
+  } catch {
+    return null;
+  }
+  const ast = parseModule(source, modulePath);
+  if (!ast) return null;
+
+  let found = null;
+  traverse.default(ast, {
+    ExportDefaultDeclaration(pathRef) {
+      if (exportName !== 'default') return;
+      const decl = pathRef.node.declaration;
+      if (decl && decl.type === 'ObjectExpression') found = decl;
+    },
+    ExportNamedDeclaration(pathRef) {
+      const decl = pathRef.node.declaration;
+      if (decl && decl.type === 'VariableDeclaration') {
+        for (const d of decl.declarations) {
+          if (keyNameFromAst(d.id) === exportName && d.init && d.init.type === 'ObjectExpression') {
+            found = d.init;
+          }
+        }
+      }
+    }
+  });
+
+  return found ? astNodeToValue(found) : null;
+};
+
+// Resolve a relative import specifier to an absolute .js file path.
+const resolveRelativeModule = async (fromFile, specifier) => {
+  if (!specifier.startsWith('.')) return null; // bare imports are not followed
+  const base = path.resolve(path.dirname(fromFile), specifier);
+  const candidates = [base, `${base}.js`, path.join(base, 'index.js')];
+  for (const candidate of candidates) {
+    if (await fs.pathExists(candidate) && (await fs.stat(candidate)).isFile()) return candidate;
+  }
+  return null;
+};
+
+const mergeCatalog = (registry, catalog, prefix = '') => {
+  if (!catalog || typeof catalog !== 'object' || Array.isArray(catalog)) return;
+  for (const [key, definition] of Object.entries(catalog)) {
+    const eventName = `${prefix}${key}`;
+    const payload =
+      definition && typeof definition === 'object' && !Array.isArray(definition)
+        ? definition.payload ?? null
+        : null;
+    registry[eventName] = { payload };
+  }
+};
+
+// Scan src/**/*.js for slice.events.register(<catalog>) calls and build the event registry.
+const collectEventRegistry = async ({ projectRoot }) => {
+  const srcDir = joinRoot(projectRoot, 'src');
+  const files = await collectJavaScriptFiles(srcDir);
+  const registry = {};
+
+  for (const file of files) {
+    let source;
+    try {
+      source = await fs.readFile(file, 'utf8');
+    } catch {
+      continue;
+    }
+    if (!source.includes('.events.register(')) continue; // cheap prefilter
+
+    const ast = parseModule(source, file);
+    if (!ast) continue;
+
+    // Collect local object-literal consts and import bindings up front.
+    const localObjects = new Map(); // name -> ObjectExpression node
+    const imports = new Map(); // localName -> { source, imported }
+    traverse.default(ast, {
+      VariableDeclarator(pathRef) {
+        const node = pathRef.node;
+        if (node.id?.type === 'Identifier' && node.init?.type === 'ObjectExpression') {
+          localObjects.set(node.id.name, node.init);
+        }
+      },
+      ImportDeclaration(pathRef) {
+        const src = pathRef.node.source?.value;
+        for (const spec of pathRef.node.specifiers || []) {
+          if (spec.type === 'ImportDefaultSpecifier') {
+            imports.set(spec.local.name, { source: src, imported: 'default' });
+          } else if (spec.type === 'ImportSpecifier') {
+            imports.set(spec.local.name, { source: src, imported: keyNameFromAst(spec.imported) });
+          }
+        }
+      }
+    });
+
+    // Find the register() call sites and capture their arguments. Supports both
+    // register(catalog) and register('namespace', catalog).
+    const pendingCalls = [];
+    traverse.default(ast, {
+      CallExpression(pathRef) {
+        if (!isEventsRegisterCallee(pathRef.node.callee)) return;
+        pendingCalls.push(pathRef.node.arguments);
+      }
+    });
+
+    // Resolve a catalog arg node to a plain object (inline literal, local const, or import).
+    const resolveCatalogArg = async (arg) => {
+      if (!arg) return null;
+      if (arg.type === 'ObjectExpression') return astNodeToValue(arg);
+      if (arg.type === 'Identifier') {
+        if (localObjects.has(arg.name)) return astNodeToValue(localObjects.get(arg.name));
+        if (imports.has(arg.name)) {
+          const { source: importSource, imported } = imports.get(arg.name);
+          const modulePath = await resolveRelativeModule(file, importSource);
+          if (modulePath) return resolveExportedObject(modulePath, imported);
+          Print.warning(`Could not resolve event catalog import "${arg.name}" from "${importSource}" in ${file}`);
+          return null;
+        }
+        Print.warning(`slice.events.register(${arg.name}) in ${file}: argument is not a literal/imported object — skipped for typing.`);
+        return null;
+      }
+      Print.warning(`slice.events.register(...) in ${file}: argument is not an object literal — skipped for typing.`);
+      return null;
+    };
+
+    for (const args of pendingCalls) {
+      let prefix = '';
+      let catalogArg = args[0];
+      // register('namespace', catalog) — first arg is a string literal.
+      if (args[0] && args[0].type === 'StringLiteral') {
+        const ns = String(args[0].value).trim();
+        prefix = ns.endsWith(':') ? ns : `${ns}:`;
+        catalogArg = args[1];
+      }
+      const catalog = await resolveCatalogArg(catalogArg);
+      mergeCatalog(registry, catalog, prefix);
+    }
+  }
+
+  return registry;
+};
+
+// Matches `<x>.events.<method>(...)` — covers slice.events / this.events (bind) / window.slice.events.
+const isEventsMethodCallee = (callee, methods) => {
+  return (
+    callee &&
+    callee.type === 'MemberExpression' &&
+    methods.includes(keyNameFromAst(callee.property)) &&
+    callee.object &&
+    callee.object.type === 'MemberExpression' &&
+    keyNameFromAst(callee.object.property) === 'events'
+  );
+};
+
+// Nearest enclosing class name for a call site (the component/service that emits/listens).
+const enclosingClassName = (pathRef) => {
+  const classPath = pathRef.findParent((p) => p.isClassDeclaration() || p.isClassExpression());
+  return classPath?.node?.id?.name || null;
+};
+
+// Static pub/sub graph: scan emit()/subscribe() call sites so emitters/listeners are
+// documented WITHOUT executing the code (complements the observational runtime tracing).
+// Returns { events: { name: { emitters:[], listeners:[] } }, dynamic: { emitters:[], listeners:[] } }.
+const collectEventGraph = async ({ projectRoot }) => {
+  const srcDir = joinRoot(projectRoot, 'src');
+  const files = await collectJavaScriptFiles(srcDir);
+  const events = {};
+  const dynamic = { emitters: [], listeners: [] };
+
+  const bucketFor = (eventName, kind) => {
+    if (!events[eventName]) events[eventName] = { emitters: [], listeners: [] };
+    return events[eventName][kind];
+  };
+
+  for (const file of files) {
+    let source;
+    try {
+      source = await fs.readFile(file, 'utf8');
+    } catch {
+      continue;
+    }
+    if (!source.includes('.events.emit(') && !source.includes('.events.subscribe(') && !source.includes('.events.subscribeOnce(')) {
+      continue; // cheap prefilter
+    }
+
+    const ast = parseModule(source, file);
+    if (!ast) continue;
+
+    const relFile = path.relative(projectRoot, file).replace(/\\/g, '/');
+
+    traverse.default(ast, {
+      CallExpression(pathRef) {
+        const callee = pathRef.node.callee;
+        let kind = null;
+        if (isEventsMethodCallee(callee, ['emit'])) kind = 'emitters';
+        else if (isEventsMethodCallee(callee, ['subscribe', 'subscribeOnce'])) kind = 'listeners';
+        if (!kind) return;
+
+        const site = {
+          file: relFile,
+          line: pathRef.node.loc?.start?.line || 0,
+          component: enclosingClassName(pathRef)
+        };
+
+        const nameArg = pathRef.node.arguments[0];
+        if (nameArg && nameArg.type === 'StringLiteral') {
+          bucketFor(nameArg.value, kind).push(site);
+        } else {
+          dynamic[kind].push(site); // computed event name — can't be resolved statically
+        }
+      }
+    });
+  }
+
+  return { events, dynamic };
+};
+
 const sortKeys = (obj) => {
   return Object.keys(obj)
     .sort((a, b) => a.localeCompare(b))
@@ -276,8 +556,60 @@ const ensureNoCheckInPublicVendorFiles = async (projectRoot) => {
   return { updatedFiles, scannedFiles };
 };
 
-const generateDeclarationContent = (componentPropsMap) => {
+const generateEventRegistryLines = (eventRegistry) => {
+  const events = sortKeys(eventRegistry || {});
+  const names = Object.keys(events);
+  if (names.length === 0) return [];
+
+  const lines = [];
+  lines.push('export interface SliceEventRegistry {');
+  for (const name of names) {
+    lines.push(`  '${name}': ${payloadToTs(events[name].payload)};`);
+  }
+  lines.push('}');
+  lines.push('');
+  lines.push('type SliceEventCatalog = Record<string, { description?: string; payload?: unknown }>;');
+  lines.push('');
+  // Single conditional-type signatures (not overload pairs): for a KNOWN event');
+  lines.push('// name the payload is enforced; for any other (unknown / framework / dynamic');
+  lines.push('// context:* events) it stays permissive. A plain string-fallback overload');
+  lines.push('// would swallow wrong-payload calls and defeat the whole point.');
+  lines.push('type SliceEventData<K extends string> = K extends keyof SliceEventRegistry ? SliceEventRegistry[K] : unknown;');
+  lines.push('type SliceEventArgs<K extends string> = K extends keyof SliceEventRegistry');
+  lines.push('  ? (SliceEventRegistry[K] extends void ? [] : [SliceEventRegistry[K]])');
+  lines.push('  : unknown[];');
+  lines.push('');
+  lines.push('export interface SliceTypedEventBinding {');
+  lines.push('  subscribe<K extends string>(eventName: K, callback: (data: SliceEventData<K>) => void): string | null;');
+  lines.push('  subscribeOnce<K extends string>(eventName: K, callback: (data: SliceEventData<K>) => void): string | null;');
+  lines.push('  emit<K extends string>(eventName: K, ...data: SliceEventArgs<K>): void;');
+  lines.push('  register(namespace: string, catalog: SliceEventCatalog): unknown;');
+  lines.push('  register(catalog: SliceEventCatalog): unknown;');
+  lines.push('}');
+  lines.push('');
+  lines.push('export interface SliceTypedEventManager {');
+  lines.push('  init(): boolean;');
+  lines.push('  subscribe<K extends string>(eventName: K, callback: (data: SliceEventData<K>) => void, options?: { component?: HTMLElement }): string | null;');
+  lines.push('  subscribeOnce<K extends string>(eventName: K, callback: (data: SliceEventData<K>) => void, options?: { component?: HTMLElement }): string | null;');
+  lines.push('  unsubscribe(eventName: string, subscriptionId: string): boolean;');
+  lines.push('  emit<K extends string>(eventName: K, ...data: SliceEventArgs<K>): void;');
+  lines.push('  bind(component: HTMLElement): SliceTypedEventBinding | null;');
+  lines.push('  cleanupComponent(sliceId: string): number;');
+  lines.push('  hasSubscribers(eventName: string): boolean;');
+  lines.push('  subscriberCount(eventName: string): number;');
+  lines.push('  isDeclared(eventName: string): boolean;');
+  lines.push('  namespaceOf(eventName: string): string | null;');
+  lines.push('  register(namespace: string, catalog: SliceEventCatalog): SliceTypedEventManager;');
+  lines.push('  register(catalog: SliceEventCatalog): SliceTypedEventManager;');
+  lines.push('  clear(): void;');
+  lines.push('}');
+  lines.push('');
+  return lines;
+};
+
+const generateDeclarationContent = (componentPropsMap, eventRegistry = {}) => {
   const componentsSorted = sortKeys(componentPropsMap);
+  const hasEvents = Object.keys(eventRegistry || {}).length > 0;
   const lines = [];
 
   lines.push('/* Auto-generated by slice types generate. Do not edit manually. */');
@@ -307,8 +639,15 @@ const generateDeclarationContent = (componentPropsMap) => {
   lines.push('export type SliceComponentName = keyof SliceComponentPropsMap;');
   lines.push('export type SliceDynamicElement = HTMLElement & Record<string, any>;');
   lines.push('');
+  if (hasEvents) {
+    lines.push(...generateEventRegistryLines(eventRegistry));
+  }
   lines.push('declare global {');
-  lines.push('  const slice: SliceBuildApi & Record<string, any>;');
+  // When typed events exist we declare slice with an index-signature interface so
+  // that explicit members (build, events) keep their precise type while dynamic
+  // access (slice.anything) stays `any` — `& Record<string, any>` would otherwise
+  // collapse slice.events to `any`.
+  lines.push(`  const slice: SliceBuildApi${hasEvents ? '' : ' & Record<string, any>'};`);
   lines.push('');
   lines.push('  interface Event {');
   lines.push('    detail: any;');
@@ -332,10 +671,16 @@ const generateDeclarationContent = (componentPropsMap) => {
   lines.push('  }');
   lines.push('');
   lines.push('  interface SliceBuildApi {');
+  if (hasEvents) {
+    lines.push('    [key: string]: any;');
+  }
   lines.push('    build<K extends SliceComponentName>(');
   lines.push('      name: K,');
   lines.push('      props?: SliceComponentPropsMap[K]');
   lines.push('    ): Promise<SliceDynamicElement | null>;');
+  if (hasEvents) {
+    lines.push('    events: SliceTypedEventManager;');
+  }
   lines.push('  }');
   lines.push('}');
   lines.push('');
@@ -351,6 +696,9 @@ const generateDeclarationContent = (componentPropsMap) => {
   lines.push('    getComponent<T extends SliceDynamicElement = SliceDynamicElement>(');
   lines.push('      componentSliceId: string');
   lines.push('    ): T | undefined;');
+  if (hasEvents) {
+    lines.push('    events: SliceTypedEventManager;');
+  }
   lines.push('  }');
   lines.push('}');
   lines.push('');
@@ -431,15 +779,48 @@ const generateTypesFile = async ({ projectRoot, outputPath }) => {
   const registryMap = parseComponentsRegistry(registryContent, registryPath);
 
   const componentPropsMap = await loadComponentStaticProps({ projectRoot, registryMap });
+  const eventRegistry = await collectEventRegistry({ projectRoot });
 
-  const declaration = generateDeclarationContent(componentPropsMap);
+  const declaration = generateDeclarationContent(componentPropsMap, eventRegistry);
   await fs.ensureDir(path.dirname(outputPath));
   await fs.writeFile(outputPath, declaration, 'utf8');
 
+  // Static pub/sub graph manifest (documentation): emitters/listeners by call site.
+  const eventGraph = await collectEventGraph({ projectRoot });
+  const manifest = buildEventManifest(eventRegistry, eventGraph);
+  const manifestPath = path.join(path.dirname(outputPath), 'slice-events.generated.js');
+  await fs.writeFile(manifestPath, generateEventManifestContent(manifest), 'utf8');
+
+  const siteCount = Object.values(eventGraph.events).reduce(
+    (sum, e) => sum + e.emitters.length + e.listeners.length,
+    0
+  );
+
   return {
     outputPath,
-    componentsProcessed: Object.keys(componentPropsMap).length
+    manifestPath,
+    componentsProcessed: Object.keys(componentPropsMap).length,
+    eventsProcessed: Object.keys(eventRegistry).length,
+    graphSites: siteCount
   };
+};
+
+// Merge the declared registry (payloads) with the static graph (call sites) into one manifest.
+const buildEventManifest = (registry, graph) => {
+  const names = new Set([...Object.keys(registry), ...Object.keys(graph.events)]);
+  const events = {};
+  for (const name of Array.from(names).sort((a, b) => a.localeCompare(b))) {
+    events[name] = {
+      payload: registry[name]?.payload ?? null,
+      emitters: graph.events[name]?.emitters || [],
+      listeners: graph.events[name]?.listeners || []
+    };
+  }
+  return { events, dynamic: graph.dynamic };
+};
+
+const generateEventManifestContent = (manifest) => {
+  return `/* Auto-generated by slice types generate. Do not edit manually. */\nexport default ${JSON.stringify(manifest, null, 2)};\n`;
 };
 
 const toPosixRelative = (projectRoot, targetPath) => {
@@ -551,6 +932,12 @@ const runGenerateTypes = async ({ projectRoot, outputPath }) => {
   const publicVendorSuppression = await ensureNoCheckInPublicVendorFiles(projectRoot);
   Print.success(`Generated TypeScript declarations at ${result.outputPath}`);
   Print.info(`Components with static props: ${result.componentsProcessed}`);
+  if (typeof result.eventsProcessed === 'number') {
+    Print.info(`Registered events typed: ${result.eventsProcessed}`);
+  }
+  if (result.manifestPath) {
+    Print.info(`Event graph manifest: ${toPosixRelative(projectRoot, result.manifestPath)} (${result.graphSites} call site(s))`);
+  }
   if (editorConfig.mode === 'created_jsconfig') {
     Print.info(`Created jsconfig.json and included declaration glob for editor IntelliSense.`);
   } else if (editorConfig.mode === 'updated_jsconfig') {
@@ -579,5 +966,9 @@ export {
   generateDeclarationContent,
   generateTypesFile,
   parseComponentsRegistry,
+  collectEventRegistry,
+  collectEventGraph,
+  buildEventManifest,
+  payloadToTs,
   runGenerateTypes
 };

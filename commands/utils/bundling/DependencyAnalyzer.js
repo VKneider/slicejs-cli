@@ -272,6 +272,10 @@ export default class DependencyAnalyzer {
     if (enabledStructural.has('LogViewer')) {
       this.addFrameworkFileComponent('LogViewer', path.join('Logger', 'LogViewer'));
     }
+
+    if (enabledStructural.has('LeakInspector')) {
+      this.addFrameworkFileComponent('LeakInspector', 'LeakInspector');
+    }
   }
 
   addFrameworkFileComponent(componentName, folderName) {
@@ -327,6 +331,10 @@ export default class DependencyAnalyzer {
 
     if (config?.themeManager?.enabled) {
       enabled.add('ThemeManager');
+    }
+
+    if (config?.debugger?.leakInspector?.enabled) {
+      enabled.add('LeakInspector');
     }
 
     return enabled;

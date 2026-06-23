@@ -1,6 +1,6 @@
 {
   "name": "slicejs-cli",
-  "version": "3.6.6",
+  "version": "3.7.0",
   "description": "Command client for developing web applications with Slice.js framework",
   "main": "client.js",
   "bin": {
@@ -62,7 +62,7 @@
     "html-minifier-terser": "^7.2.0",
     "inquirer": "^12.4.2",
     "ora": "^8.2.0",
-    "slicejs-web-framework": "latest",
+    "slicejs-web-framework": "^3.5.0",
     "terser": "^5.43.1"
   },
   "devDependencies": {
