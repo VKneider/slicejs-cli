@@ -87,8 +87,7 @@ async function createMinimalScaffold(dir) {
   await fs.ensureDir(path.join(srcDir, 'Components', 'Visual'))
   await fs.ensureDir(path.join(srcDir, 'Styles'))
   await fs.ensureDir(path.join(srcDir, 'Themes'))
-  await fs.ensureDir(path.join(dir, 'api', 'middleware'))
-  await fs.ensureDir(path.join(dir, 'api', 'utils'))
+  await fs.ensureDir(path.join(dir, 'api', 'framework'))
 
   const fixtureConfig = path.join(FIXTURES_DIR, 'sliceConfig.json')
   if (await fs.pathExists(fixtureConfig)) {

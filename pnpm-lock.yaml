@@ -42,8 +42,8 @@ importers:
         specifier: ^8.2.0
         version: 8.2.0
       slicejs-web-framework:
-        specifier: latest
-        version: 3.3.5
+        specifier: ^3.5.0
+        version: 3.5.0
       terser:
         specifier: ^5.43.1
         version: 5.48.0
@@ -762,8 +762,8 @@ packages:
     resolution: {integrity: sha512-bzyZ1e88w9O1iNJbKnOlvYTrWPDl46O1bG0D3XInv+9tkPrxrN8jUUTiFlDkkmKWgn1M6CfIA13SuGqOa9Korw==}
     engines: {node: '>=14'}
 
-  slicejs-web-framework@3.3.5:
-    resolution: {integrity: sha512-swLF4Ix+0b4/p3py1xXE1kq/UKOCFT9xHv8bi4U0I+7swnnCDl1sY0dzxumanJfxZXsUvPcdX0xKQ+oSBWIFSA==}
+  slicejs-web-framework@3.5.0:
+    resolution: {integrity: sha512-6Zp+EBLAnr2Cm3Tb0XsboDCia2CBY/V1yFBcyQTSEe/CncRmFTJi9gPxcCen4gAY2E56K2bSkuV1/RXbaBsOug==}
     engines: {node: '>=20'}
 
   source-map-support@0.5.21:
@@ -1540,7 +1540,7 @@ snapshots:
 
   signal-exit@4.1.0: {}
 
-  slicejs-web-framework@3.3.5:
+  slicejs-web-framework@3.5.0:
     dependencies:
       express: 4.22.2
     transitivePeerDependencies:

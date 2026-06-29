@@ -230,7 +230,7 @@ export default async function initializeProject(options = {}) {
         const srcDir = path.join(sliceBaseDir, 'src');
 
         try {
-            if (fs.existsSync(destinationApi)) throw new Error(`The "api" directory already exists: ${destinationApi}`);
+            if (fs.existsSync(path.join(destinationApi, 'index.js'))) throw new Error(`api/index.js already exists: ${path.join(destinationApi, 'index.js')}`);
             if (fs.existsSync(destinationSrc)) throw new Error(`The "src" directory already exists: ${destinationSrc}`);
         } catch (error) {
             Print.error('Validating destination directories:', error.message);
@@ -238,14 +238,16 @@ export default async function initializeProject(options = {}) {
             return;
         }
 
-        // 1. COPY API FOLDER (keep original logic)
-        const apiSpinner = ora('Copying API structure...').start();
+        // 1. COPY ONLY api/index.js — el resto se importa desde el paquete
+        const apiSpinner = ora('Creating api/index.js...').start();
         try {
-            if (!fs.existsSync(apiDir)) throw new Error(`API folder not found: ${apiDir}`);
-            await fs.copy(apiDir, destinationApi, { recursive: true });
-            apiSpinner.succeed('API structure created successfully');
+            const srcIndex = path.join(apiDir, 'index.js');
+            if (!fs.existsSync(srcIndex)) throw new Error(`api/index.js not found: ${srcIndex}`);
+            await fs.ensureDir(destinationApi);
+            await fs.copy(srcIndex, path.join(destinationApi, 'index.js'));
+            apiSpinner.succeed('api/index.js created successfully');
         } catch (error) {
-            apiSpinner.fail('Error copying API structure');
+            apiSpinner.fail('Error creating api/index.js');
             Print.error(error.message);
             console.error(error.stack);
             return;
