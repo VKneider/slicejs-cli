@@ -1,6 +1,6 @@
 {
   "name": "slicejs-cli",
-  "version": "3.7.1",
+  "version": "3.7.2",
   "description": "Command client for developing web applications with Slice.js framework",
   "main": "client.js",
   "bin": {

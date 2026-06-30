@@ -963,7 +963,7 @@ export default class BundleGenerator {
         passes: 1
       } : false,
       mangle: this.options.obfuscate ? {
-        properties: { regex: /^_/ }
+        properties: false
       } : false,
       keep_fnames: true,
       keep_classnames: true,
