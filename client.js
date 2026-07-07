@@ -520,11 +520,13 @@ registryCommand
   .description("Download and install components from official repository")
   .option("-f, --force", "Force overwrite existing components")
   .option("-s, --service", "Install Service components instead of Visual")
+  .option("--no-deps", "Do not resolve and install component dependencies")
   .action(async (components, options) => {
     await runWithVersionCheck(async () => {
       await getComponent(components, {
         force: options.force,
-        service: options.service
+        service: options.service,
+        deps: options.deps
       });
     });
   });
@@ -559,6 +561,7 @@ sliceClient
   .description("Quick install components from registry")
   .option("-f, --force", "Force overwrite existing components")
   .option("-s, --service", "Install Service components instead of Visual")
+  .option("--no-deps", "Do not resolve and install component dependencies")
   .action(async (components, options) => {
     await runWithVersionCheck(async () => {
       if (!components || components.length === 0) {
@@ -571,7 +574,8 @@ sliceClient
 
       await getComponent(components, {
         force: options.force,
-        service: options.service
+        service: options.service,
+        deps: options.deps
       });
     });
   });

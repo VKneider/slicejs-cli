@@ -2,6 +2,7 @@
 
 import fs from 'fs-extra';
 import path from 'path';
+import { createRequire } from 'module';
 import { minify as terserMinify } from 'terser';
 import { minify } from 'html-minifier-terser';
 import CleanCSS from 'clean-css';
@@ -108,6 +109,36 @@ async function copySliceConfig() {
   if (await fs.pathExists(srcConfig)) {
     await fs.copy(srcConfig, distConfig);
     Print.info('sliceConfig.json copied to dist');
+  }
+}
+
+/**
+ * Copies the Slice.js framework runtime entry into dist so the production build
+ * is self-contained.
+ *
+ * The app bootstraps with `import Slice from '/Slice/Slice.js'`, which the server
+ * serves in production. Reading it from node_modules at runtime is unreliable on
+ * serverless platforms (Vercel only ships traced imports + `includeFiles: dist/**`,
+ * and pnpm stores the package behind a symlink), so we emit a physical copy into
+ * `dist/Slice/Slice.js`. The package's "." export resolves to that single,
+ * self-contained bundle; resolution is done from the *project* root so the
+ * project's installed framework is used (following pnpm symlinks to the real file).
+ */
+async function copyFrameworkRuntime() {
+  const projectRoot = getProjectRoot(import.meta.url);
+  try {
+    const projectRequire = createRequire(path.join(projectRoot, 'package.json'));
+    const frameworkEntry = projectRequire.resolve('slicejs-web-framework');
+    const distSlice = getDistPath(import.meta.url, 'Slice', 'Slice.js');
+
+    await fs.ensureDir(path.dirname(distSlice));
+    await fs.copy(frameworkEntry, distSlice);
+
+    const stat = await fs.stat(distSlice);
+    Print.info(`Framework runtime bundled to dist/Slice/Slice.js (${(stat.size / 1024).toFixed(1)} KB)`);
+  } catch (error) {
+    Print.warning(`Could not bundle framework runtime into dist: ${error.message}`);
+    Print.warning('Production servers that serve /Slice/Slice.js from dist may 404 until this is resolved.');
   }
 }
 
@@ -471,6 +502,10 @@ export default async function buildProduction(options = {}) {
     Print.info('Processing and optimizing source files for Slice.js...');
     await processDirectory(srcDir, distDir, srcDir, options);
     Print.success('All source files processed and optimized');
+
+    // Make dist self-contained: the framework runtime the app imports at
+    // /Slice/Slice.js must live under dist so it ships with serverless deploys.
+    await copyFrameworkRuntime();
 
     await verifyBuildIntegrity(distDir);
     await createOptimizedBundle();

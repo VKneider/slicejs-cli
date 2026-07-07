@@ -7,6 +7,7 @@ import validations from "../Validations.js";
 import Print from "../Print.js";
 import { getComponentsJsPath, getPath } from "../utils/PathHelper.js";
 import { loadConfig as sharedLoadConfig } from "../utils/loadConfig.js";
+import { analyzeSource } from "../utils/analyzeSource.js";
 import ora from "ora";
 
 // Base URL of the Slice.js documentation repository
@@ -292,11 +293,29 @@ filterOfficialComponents(allComponents) {
     }
   }
 
-  async installComponent(componentName, category, force = false) {
+  async installComponent(componentName, category, force = false, opts = {}) {
+    const seen = opts.seen || new Set();
+    const withDeps = opts.withDeps !== false;
+    const isDep = opts.isDep === true;
+
+    // Dedupe within a single run: a component reached through several paths
+    // (explicitly requested + pulled in as a shared dependency) installs once.
+    // Check-and-add is synchronous (no await between), so concurrent installs
+    // from installMultipleComponents can't both pass this guard.
+    const seenKey = `comp:${componentName}`;
+    if (seen.has(seenKey)) return true;
+    seen.add(seenKey);
+
     await this._ensureConfig();
      const availableComponents = this.getAvailableComponents(category);
 
   if (!availableComponents[componentName]) {
+    // A dependency that isn't in the official registry (e.g. a project-local or
+    // framework-structural component) can't be fetched — skip it, don't abort.
+    if (isDep) {
+      Print.warning(`Dependency '${componentName}' not found in registry category '${category}' — skipping`);
+      return false;
+    }
     throw new Error(`Component '${componentName}' not found in category '${category}' in the official repository`);
   }
 
@@ -329,6 +348,13 @@ filterOfficialComponents(allComponents) {
 
     // Check if component already exists
     if (await fs.pathExists(targetPath) && !force) {
+      // Dependencies pulled in transitively are never re-downloaded or prompted
+      // for: an existing local copy is assumed complete (with its own deps).
+      if (isDep) {
+        Print.info(`${componentName} already installed — skipping dependency`);
+        return true;
+      }
+
       const { overwrite } = await inquirer.prompt([
         {
           type: 'confirm',
@@ -337,7 +363,7 @@ filterOfficialComponents(allComponents) {
           default: false
         }
       ]);
-      
+
       if (!overwrite) {
         Print.info('Installation cancelled by user');
         return false;
@@ -357,6 +383,20 @@ filterOfficialComponents(allComponents) {
       console.log(`📁 Location: ${[folderSuffix, categoryPath, componentName].join('/').replace(/\/+/g, '/')}/`);
       console.log(`📄 Files: ${downloadedFiles.join(', ')}`);
 
+      // Resolve and install what this component pulls in: other components via
+      // slice.build('X') or relative imports, and helper .js modules it imports.
+      if (withDeps) {
+        const mainJsPath = path.join(targetPath, `${componentName}.js`);
+        if (await fs.pathExists(mainJsPath)) {
+          const jsText = await fs.readFile(mainJsPath, 'utf8');
+          // Path of this file relative to the repo's Components root — the anchor
+          // for resolving relative imports. category ('Visual'|'Service') matches
+          // the repo folder layout used by the download URLs.
+          const repoRelPath = `${category}/${componentName}/${componentName}.js`;
+          await this.resolveDependencies(jsText, repoRelPath, seen, force);
+        }
+      }
+
       return true;
 
     } catch (error) {
@@ -375,15 +415,109 @@ filterOfficialComponents(allComponents) {
     }
   }
 
-  async installMultipleComponents(componentNames, category = 'Visual', force = false) {
+  // Given the source of a just-installed module, install everything it needs.
+  // `repoRelPath` anchors relative-import resolution to the repo's Components root.
+  async resolveDependencies(jsText, repoRelPath, seen, force = false) {
+    const { builds, imports } = analyzeSource(jsText);
+
+    // 1) Component dependencies via slice.build('X').
+    for (const name of builds) {
+      const info = this.findComponentInRegistry(name);
+      if (!info) continue; // structural/framework/unknown — nothing to fetch
+      if (!seen.has(`comp:${info.name}`)) {
+        Print.info(`↳ dependency: ${info.name} (${info.category})`);
+      }
+      await this.installComponent(info.name, info.category, force, { seen, withDeps: true, isDep: true });
+    }
+
+    // 2) Relative imports: either another component's entrypoint, or a plain
+    //    helper .js module living inside a component folder.
+    for (const spec of imports) {
+      const resolved = this.resolveRepoImportPath(repoRelPath, spec);
+      if (!resolved) continue;
+
+      const parts = resolved.split('/');
+      const fileBase = parts[parts.length - 1].replace(/\.js$/, '');
+      const folder = parts.length >= 2 ? parts[parts.length - 2] : '';
+      const info = this.findComponentInRegistry(fileBase);
+
+      // <Category>/<Name>/<Name>.js → a registered component (e.g. Pagination
+      // importing ../../Service/DataGridEngine/DataGridEngine.js).
+      if (info && folder === info.name) {
+        if (!seen.has(`comp:${info.name}`)) {
+          Print.info(`↳ dependency: ${info.name} (${info.category})`);
+        }
+        await this.installComponent(info.name, info.category, force, { seen, withDeps: true, isDep: true });
+      } else {
+        await this.installHelperFile(resolved, seen, force);
+      }
+    }
+  }
+
+  // Resolves an import specifier to a path relative to the repo Components root,
+  // or null if it isn't a fetchable in-repo JS module.
+  resolveRepoImportPath(fromRepoRelPath, spec) {
+    const dir = path.posix.dirname(fromRepoRelPath);
+    let resolved = path.posix.normalize(path.posix.join(dir, spec));
+
+    // Escapes the Components root (e.g. test fixtures) → not fetchable here.
+    if (resolved.startsWith('..') || path.posix.isAbsolute(resolved)) return null;
+
+    const ext = path.posix.extname(resolved);
+    if (!ext) {
+      resolved += '.js';
+    } else if (ext !== '.js') {
+      return null; // only JS modules are followed
+    }
+    return resolved;
+  }
+
+  // Downloads a single helper module (a non-component .js imported by a
+  // component) into its mirrored location, then follows its own dependencies.
+  async installHelperFile(repoRelPath, seen, force = false) {
+    const seenKey = `file:${repoRelPath}`;
+    if (seen.has(seenKey)) return;
+    seen.add(seenKey);
+
+    await this._ensureConfig();
+    const folderSuffix = this.config?.production?.enabled === true ? 'dist' : 'src';
+    const segments = repoRelPath.split('/');
+    const localPath = getPath(import.meta.url, folderSuffix, 'Components', ...segments);
+
+    if (await fs.pathExists(localPath) && !force) {
+      Print.info(`↳ helper module ${repoRelPath} already present — skipping`);
+      return;
+    }
+
+    const url = `${DOCS_REPO_BASE_URL}/${repoRelPath}`;
+    let content;
+    try {
+      content = await fetchWithRetry(url, 3, 500, false);
+    } catch (error) {
+      Print.warning(`Could not download helper module '${repoRelPath}' — ${error.message}`);
+      return;
+    }
+
+    await fs.ensureDir(path.dirname(localPath));
+    await fs.writeFile(localPath, content, 'utf8');
+    Print.registryUpdate(`↳ helper module ${repoRelPath}`);
+
+    // A helper can import further helpers or build components.
+    await this.resolveDependencies(content, repoRelPath, seen, force);
+  }
+
+  async installMultipleComponents(componentNames, category = 'Visual', force = false, withDeps = true) {
     const results = [];
+    // One shared visited-set so a dependency shared by several requested
+    // components (e.g. DataGridEngine under both Table and Pagination) installs once.
+    const seen = new Set();
     Print.info(`Getting ${componentNames.length} ${category} components from official repository...`);
     const total = componentNames.length;
     let done = 0;
     const spinner = ora(`Installing 0/${total}`).start();
     const worker = async (componentName) => {
       try {
-        const result = await this.installComponent(componentName, category, force);
+        const result = await this.installComponent(componentName, category, force, { seen, withDeps });
         results.push({ name: componentName, success: result });
       } catch (error) {
         Print.componentError(componentName, 'getting', error.message);
@@ -630,10 +764,13 @@ async function getComponents(componentNames = [], options = {}) {
   // Determine category
   const category = options.service ? 'Service' : 'Visual';
 
+  // Dependency resolution is on by default; `slice get X --no-deps` opts out.
+  const withDeps = options.deps !== false;
+
   if (componentNames.length === 1) {
     // Single component install
     const componentInfo = sharedRegistry.findComponentInRegistry(componentNames[0]);
-    
+
     if (!componentInfo) {
       Print.error(`Component '${componentNames[0]}' not found in official repository`);
       Print.commandExample('View available components', 'slice browse');
@@ -644,7 +781,7 @@ async function getComponents(componentNames = [], options = {}) {
     const actualCategory = options.service ? 'Service' : componentInfo.category;
 
     try {
-      await sharedRegistry.installComponent(componentInfo.name, actualCategory, options.force);
+      await sharedRegistry.installComponent(componentInfo.name, actualCategory, options.force, { seen: new Set(), withDeps });
       return true;
     } catch (error) {
       Print.error(`Error installing component: ${error.message}`);
@@ -652,12 +789,12 @@ async function getComponents(componentNames = [], options = {}) {
     }
   } else {
     // Multiple components install
-    const normalizedComponents = componentNames.map(name => 
+    const normalizedComponents = componentNames.map(name =>
       name.charAt(0).toUpperCase() + name.slice(1)
     );
 
     try {
-      await sharedRegistry.installMultipleComponents(normalizedComponents, category, options.force);
+      await sharedRegistry.installMultipleComponents(normalizedComponents, category, options.force, withDeps);
       return true;
     } catch (error) {
       Print.error(`Error installing components: ${error.message}`);

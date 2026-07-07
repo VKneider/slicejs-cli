@@ -17,6 +17,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.8.0] - 2026-07-07
+
+### Added
+
+- **Transitive dependency resolution for `slice get`**: downloading a component
+  now installs the full dependency tree instead of just its own three files.
+  Two dependency kinds are resolved from the downloaded source:
+  - **Component dependencies** referenced via `slice.build('X')` or via a
+    relative import of another component's entrypoint
+    (e.g. `Pagination` → `../../Service/DataGridEngine/DataGridEngine.js`).
+  - **Helper `.js` modules** imported relatively (e.g. `DragDropService` →
+    `./dndGeometry.js`), downloaded into their mirrored location and scanned
+    recursively for their own dependencies.
+  - Resolution is recursive, deduplicated via a shared visited-set (a dependency
+    shared by several requested components downloads once), and cycle-safe.
+- **`--no-deps` flag** on `slice get` / `slice registry get` to restore the
+  previous behavior and install only the requested component.
+- New shared analyzer `commands/utils/analyzeSource.js` (Babel AST) that extracts
+  `slice.build('X')` targets and relative import specifiers from a source file.
+- **Self-contained production build**: `slice build` now copies the framework
+  runtime entry into `dist/Slice/Slice.js`. The app bootstraps with
+  `import Slice from '/Slice/Slice.js'`; emitting it into `dist` means serverless
+  deploys (Vercel `includeFiles: dist/**`) ship the framework instead of relying
+  on a runtime `node_modules` read — which is pruned by the file tracer and, under
+  pnpm, hidden behind a symlink (fixed a 404-on-mount on Vercel). Resolution is
+  done from the project root; if the framework can't be resolved the build warns
+  and continues.
+
+### Changed
+
+- `ComponentRegistry.installComponent` accepts an options object
+  (`{ seen, withDeps, isDep }`); transitively-pulled dependencies that already
+  exist locally are skipped without an overwrite prompt.
+
+---
+
 ## [3.6.5] - 2026-06-14
 
 ### Fixed
