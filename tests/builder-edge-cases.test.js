@@ -1,13 +1,33 @@
-import { test, describe } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'fs-extra';
+import path from 'node:path';
+import os from 'node:os';
 import { parse } from '@babel/parser';
 import BundleGenerator from '../commands/utils/bundling/BundleGenerator.js';
 
 const MODULE_URL = import.meta.url;
 
+// Shared temp project whose src/public/ holds the assets referenced by the
+// "kept absolute import" tests (absolute imports are preserved only when the
+// file exists under src/public/).
+let EDGE_TMP;
+let EDGE_SRC;
+before(async () => {
+  EDGE_TMP = await fs.mkdtemp(path.join(os.tmpdir(), 'slice-edge-'));
+  EDGE_SRC = path.join(EDGE_TMP, 'src');
+  for (const rel of ['assets/lib.js', 'assets/lib/x.js']) {
+    const p = path.join(EDGE_SRC, 'public', rel);
+    await fs.ensureDir(path.dirname(p));
+    await fs.writeFile(p, '');
+  }
+});
+after(async () => { if (EDGE_TMP) await fs.remove(EDGE_TMP); });
+
 function makeGenerator(sliceConfig = {}) {
   const gen = new BundleGenerator(MODULE_URL, null, {});
   gen.sliceConfig = sliceConfig;
+  if (EDGE_SRC) gen.srcPath = EDGE_SRC;
   return gen;
 }
 
@@ -187,8 +207,8 @@ describe('cleanJavaScript', () => {
     assert.match(code, /if \(!customElements\.get\('my-el'\)\)/);
   });
 
-  test('strips relative imports and hoists public-folder imports', () => {
-    const gen = makeGenerator({ publicFolders: ['/assets'] });
+  test('strips relative imports and hoists public/ imports', () => {
+    const gen = makeGenerator();
     const { code, hoistedImports } = gen.cleanJavaScript(
       "import './local.js';\nimport lib from '/assets/lib.js';\nclass C {}\nreturn C;",
       'C'
@@ -296,27 +316,21 @@ describe('generateBundleFileContent — broader cases', () => {
 
 describe('classifyImport / stripImports — more edge cases', () => {
   test('dynamic import() expressions are preserved', () => {
-    const gen = makeGenerator({ publicFolders: [] });
+    const gen = makeGenerator();
     const code = "const m = import('./lazy.js');\nconst v = 1;";
     const out = gen.stripImports(code, { collectHoistedImports: true });
     assert.match(out.code, /import\('\.\/lazy\.js'\)/);
   });
 
-  test('windows-style backslashes in a public import are normalized and kept', () => {
-    const gen = makeGenerator({ publicFolders: ['/assets'] });
-    const r = gen.classifyImport('/assets\\lib\\x.js', gen.getConfiguredPublicFolders());
+  test('windows-style backslashes in a public/ import are normalized and kept', () => {
+    const gen = makeGenerator();
+    const r = gen.classifyImport('/assets\\lib\\x.js');
     assert.equal(r.keep, true);
   });
 
-  test('a public import with a query string is kept', () => {
-    const gen = makeGenerator({ publicFolders: ['/assets'] });
-    const r = gen.classifyImport('/assets/lib.js?v=2', gen.getConfiguredPublicFolders());
-    assert.equal(r.keep, true);
-  });
-
-  test('publicFolders configured without a leading slash still match', () => {
-    const gen = makeGenerator({ publicFolders: ['assets'] });
-    const r = gen.classifyImport('/assets/lib.js', gen.getConfiguredPublicFolders());
+  test('a public/ import with a query string is kept', () => {
+    const gen = makeGenerator();
+    const r = gen.classifyImport('/assets/lib.js?v=2');
     assert.equal(r.keep, true);
   });
 });

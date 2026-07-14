@@ -1,10 +1,26 @@
-import { test } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
 import BundleGenerator from '../commands/utils/bundling/BundleGenerator.js';
 import { withTestProject } from './helpers/setup.js';
+
+// Shared temp project whose src/public/ holds the assets the "kept absolute
+// import" tests reference (absolute imports are preserved only when the file
+// exists under src/public/).
+let BG_TMP;
+let BG_SRC;
+before(async () => {
+  BG_TMP = await fs.mkdtemp(path.join(os.tmpdir(), 'slice-bg-'));
+  BG_SRC = path.join(BG_TMP, 'src');
+  for (const rel of ['public/logo.js', 'assets/hero.js', 'public/effects.js', 'public/hero.js']) {
+    const p = path.join(BG_SRC, 'public', rel);
+    await fs.ensureDir(path.dirname(p));
+    await fs.writeFile(p, '');
+  }
+});
+after(async () => { if (BG_TMP) await fs.remove(BG_TMP); });
 
 const createComponent = (name, deps = []) => ({
   name,
@@ -188,15 +204,13 @@ test('rebalance merge preserves and merges route path metadata deterministically
   assert.deepEqual(bundles.beta.paths, ['/beta', '/beta-alt', '/gamma']);
 });
 
-test('stripImports preserves absolute imports from configured publicFolders', () => {
+test('stripImports preserves absolute imports that exist under public/', () => {
   const generator = new BundleGenerator(import.meta.url, {
     components: [],
     routes: [],
-    metrics: {},
-    sliceConfig: {
-      publicFolders: ['/public', '/assets']
-    }
+    metrics: {}
   });
+  generator.srcPath = BG_SRC;
 
   const source = "import logo from '/public/logo.js';\nimport hero from '/assets/hero.js';\nclass Demo {}\n";
   const cleaned = generator.stripImports(source);
@@ -209,10 +223,7 @@ test('stripImports removes relative imports', () => {
   const generator = new BundleGenerator(import.meta.url, {
     components: [],
     routes: [],
-    metrics: {},
-    sliceConfig: {
-      publicFolders: ['/public']
-    }
+    metrics: {}
   });
 
   const source = "import localDep from './local.js';\nimport parentDep from '../parent.js';\nclass Demo {}\n";
@@ -223,14 +234,11 @@ test('stripImports removes relative imports', () => {
   assert.match(cleaned, /class Demo \{\}/);
 });
 
-test('stripImports warns on bare imports', () => {
+test('stripImports strips bare imports silently (resolved as external)', () => {
   const generator = new BundleGenerator(import.meta.url, {
     components: [],
     routes: [],
-    metrics: {},
-    sliceConfig: {
-      publicFolders: ['/public']
-    }
+    metrics: {}
   });
 
   const warnings = [];
@@ -241,22 +249,22 @@ test('stripImports warns on bare imports', () => {
     const source = "import { html } from 'lit';\nclass Demo {}\n";
     const cleaned = generator.stripImports(source);
 
+    // Bare import is removed from the body (bound from the registry instead)…
     assert.doesNotMatch(cleaned, /from\s+'lit'/);
-    assert.ok(warnings.some((msg) => msg.includes('bare import') && msg.includes('lit')));
+    // …and no "removing bare import" warning is emitted anymore.
+    assert.ok(!warnings.some((msg) => msg.includes('bare import')));
   } finally {
     console.warn = originalWarn;
   }
 });
 
-test('stripImports warns on absolute imports outside publicFolders', () => {
+test('stripImports warns on absolute imports not under public/', () => {
   const generator = new BundleGenerator(import.meta.url, {
     components: [],
     routes: [],
-    metrics: {},
-    sliceConfig: {
-      publicFolders: ['/public']
-    }
+    metrics: {}
   });
+  generator.srcPath = BG_SRC;
 
   const warnings = [];
   const originalWarn = console.warn;
@@ -267,7 +275,7 @@ test('stripImports warns on absolute imports outside publicFolders', () => {
     const cleaned = generator.stripImports(source);
 
     assert.doesNotMatch(cleaned, /\/private\/secret\.js/);
-    assert.ok(warnings.some((msg) => msg.includes('outside publicFolders') && msg.includes('/private/secret.js')));
+    assert.ok(warnings.some((msg) => msg.includes('absolute import') && msg.includes('/private/secret.js')));
   } finally {
     console.warn = originalWarn;
   }
@@ -277,11 +285,9 @@ test('stripImports supports side-effect and multiline imports in fallback mode',
   const generator = new BundleGenerator(import.meta.url, {
     components: [],
     routes: [],
-    metrics: {},
-    sliceConfig: {
-      publicFolders: ['/public']
-    }
+    metrics: {}
   });
+  generator.srcPath = BG_SRC;
 
   const warnings = [];
   const originalWarn = console.warn;
@@ -307,8 +313,9 @@ test('stripImports supports side-effect and multiline imports in fallback mode',
     assert.match(cleaned, /import '\/public\/effects\.js';/);
     assert.doesNotMatch(cleaned, /\/private\/effects\.js/);
     assert.doesNotMatch(cleaned, /from 'lit'/);
-    assert.ok(warnings.some((msg) => msg.includes('outside publicFolders') && msg.includes('/private/effects.js') && msg.includes('[DemoComponent]')));
-    assert.ok(warnings.some((msg) => msg.includes('bare import') && msg.includes('lit') && msg.includes('[DemoComponent]')));
+    assert.ok(warnings.some((msg) => msg.includes('absolute import') && msg.includes('/private/effects.js') && msg.includes('[DemoComponent]')));
+    // Bare imports are stripped silently now (resolved as external), no warning.
+    assert.ok(!warnings.some((msg) => msg.includes('bare import')));
   } finally {
     generator.parseImportsFromCode = originalParse;
     console.warn = originalWarn;
@@ -319,11 +326,9 @@ test('cleanJavaScript hoists allowed absolute imports and removes them from comp
   const generator = new BundleGenerator(import.meta.url, {
     components: [],
     routes: [],
-    metrics: {},
-    sliceConfig: {
-      publicFolders: ['/public']
-    }
+    metrics: {}
   });
+  generator.srcPath = BG_SRC;
 
   const source = [
     "import hero from '/public/hero.js';",

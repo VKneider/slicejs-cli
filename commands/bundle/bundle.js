@@ -47,7 +47,10 @@ export default async function bundle(options = {}) {
     const generator = new BundleGenerator(import.meta.url, analysisData, {
       minify: !!options.minify,
       obfuscate: !!options.obfuscate,
-      output: options.output || 'src'
+      output: options.output || 'src',
+      strictExternal: !!options.strictExternal,
+      sourcemap: !!options.sourcemap,
+      hashFilenames: !!options.hashFilenames
     });
     const result = await generator.generate();
 

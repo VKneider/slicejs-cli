@@ -209,8 +209,13 @@ export default class DependencyAnalyzer {
       // Read JavaScript file
       const content = await fs.readFile(jsFile, 'utf-8');
 
-      // Calculate size
-      component.size = await this.calculateComponentSize(component.path);
+      // Calculate size. `size` is the whole component folder (used for stats);
+      // `codeSize` is only the code that actually goes into a bundle (js/html/css),
+      // which is what bundle budgeting must use — a large non-code asset in the
+      // folder (image, demo dataset) must not inflate a bundle's budgeted size.
+      const sizes = await this.calculateComponentSize(component.path);
+      component.size = sizes.total;
+      component.codeSize = sizes.code;
 
       // Parse and extract dependencies
       component.dependencies = await this.extractDependencies(content, jsFile);
@@ -345,6 +350,10 @@ export default class DependencyAnalyzer {
    */
   async extractDependencies(code, componentFilePath = null) {
     const dependencies = new Set();
+    // `path` is shadowed by the Babel NodePath param inside visitors, so derive
+    // the label here where `path` is still the node module.
+    const componentLabel = componentFilePath ? path.basename(componentFilePath) : '';
+    const warnedDynamicBuilds = new Set();
 
     const resolveRoutesArray = (node, scope) => {
       if (!node) return null;
@@ -699,14 +708,34 @@ export default class DependencyAnalyzer {
               addMultiRouteDependencies(routesArrayNode);
             }
           }
-          // Regular slice.build() calls
+          // Regular slice.build() calls. Resolve the component name statically:
+          // a string literal, a template with no expressions, or an identifier /
+          // member that resolves to one of those (imported const, config object).
           else if (
             callee.type === 'MemberExpression' &&
             callee.object.name === 'slice' &&
-            callee.property.name === 'build' &&
-            args[0]?.type === 'StringLiteral'
+            callee.property.name === 'build'
           ) {
-            dependencies.add(args[0].value);
+            const resolvedName = args[0] ? resolveStringValue(args[0], path.scope) : null;
+            if (resolvedName) {
+              dependencies.add(resolvedName);
+            } else if (args[0]) {
+              // The component name is computed at runtime, so it cannot be linked
+              // into the route/critical bundle graph. The component still loads
+              // individually at runtime — warn so it's not a silent optimization
+              // gap. Deduped per source expression within this component.
+              const snippet = typeof args[0].start === 'number'
+                ? code.slice(args[0].start, args[0].end)
+                : '<expr>';
+              const line = args[0].loc?.start?.line;
+              const key = `${snippet}@${line ?? '?'}`;
+              if (!warnedDynamicBuilds.has(key)) {
+                warnedDynamicBuilds.add(key);
+                const where = componentLabel ? ` in ${componentLabel}` : '';
+                const at = line ? `:${line}` : '';
+                console.warn(`⚠️  Dynamic slice.build(${snippet})${where}${at} — the component name is computed at runtime, so it can't be linked into a bundle. It will still load individually at runtime (no bundle optimization). Use a string literal or a resolvable constant to bundle it.`);
+              }
+            }
           }
         },
 
@@ -860,6 +889,7 @@ export default class DependencyAnalyzer {
    */
   async calculateComponentSize(componentPath) {
     let totalSize = 0;
+    let codeSize = 0;
     const files = await fs.readdir(componentPath);
 
     for (const file of files) {
@@ -868,10 +898,15 @@ export default class DependencyAnalyzer {
 
       if (stat.isFile()) {
         totalSize += stat.size;
+        // Only .js/.html/.css are inlined into a bundle; everything else in the
+        // folder is a sidecar asset that never contributes to the bundle size.
+        if (/\.(js|html|css)$/i.test(file)) {
+          codeSize += stat.size;
+        }
       }
     }
 
-    return totalSize;
+    return { total: totalSize, code: codeSize };
   }
 
   /**

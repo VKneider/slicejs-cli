@@ -63,6 +63,102 @@ describe('shared dependency module transforms', () => {
     assert.equal(d.badge('hi'), '[x] hi');
   });
 
+  test('export * from a relative helper re-exports its named exports (not default)', () => {
+    const gen = makeGenerator();
+    const block = gen.buildV2DependencyModuleBlockFromModules([
+      {
+        name: 'shared/facade.js',
+        content: "export * from './leaf.js';\nexport const own = 'own-value';",
+        moduleImports: [{ depName: 'shared/leaf.js', bindings: [], specifier: './leaf.js' }],
+      },
+      {
+        name: 'shared/leaf.js',
+        content: "export const A = 1;\nexport const B = 2;\nexport default 'DEF';",
+        moduleImports: [],
+      },
+    ]);
+    const deps = evalSnippet(`${block}\nreturn SLICE_BUNDLE_DEPENDENCIES;`);
+    assert.equal(deps['shared/facade.js'].A, 1);
+    assert.equal(deps['shared/facade.js'].B, 2);
+    assert.equal(deps['shared/facade.js'].own, 'own-value');
+    // `export *` must NOT forward the source's default export.
+    assert.equal(deps['shared/facade.js'].default, undefined);
+  });
+
+  test('export { a, b as c } from a relative helper maps names to the source members', () => {
+    const gen = makeGenerator();
+    const block = gen.buildV2DependencyModuleBlockFromModules([
+      {
+        name: 'shared/facade.js',
+        content: "export { A, B as renamed, default as origin } from './leaf.js';",
+        moduleImports: [{ depName: 'shared/leaf.js', bindings: [], specifier: './leaf.js' }],
+      },
+      {
+        name: 'shared/leaf.js',
+        content: "export const A = 10;\nexport const B = 20;\nexport default 'THE-DEFAULT';",
+        moduleImports: [],
+      },
+    ]);
+    const deps = evalSnippet(`${block}\nreturn SLICE_BUNDLE_DEPENDENCIES;`);
+    assert.equal(deps['shared/facade.js'].A, 10);
+    assert.equal(deps['shared/facade.js'].renamed, 20);
+    assert.equal(deps['shared/facade.js'].origin, 'THE-DEFAULT');
+  });
+
+  test('re-export from a bare package resolves via SLICE_BUNDLE_DEPENDENCIES', () => {
+    const gen = makeGenerator();
+    const block = gen.buildV2DependencyModuleBlockFromModules([
+      {
+        name: 'shared/wrap.js',
+        content: "export { format } from 'some-pkg';\nexport * from 'other-pkg';",
+        moduleImports: [],
+      },
+    ]);
+    // Simulate the external packages being registered earlier in the bundle.
+    const deps = evalSnippet(
+      'const SLICE_BUNDLE_DEPENDENCIES = {};\n' +
+      'SLICE_BUNDLE_DEPENDENCIES["some-pkg"] = { format: () => "fmt", default: 1 };\n' +
+      'SLICE_BUNDLE_DEPENDENCIES["other-pkg"] = { star: 42, default: 9 };\n' +
+      block.replace('const SLICE_BUNDLE_DEPENDENCIES = {};', '') +
+      '\nreturn SLICE_BUNDLE_DEPENDENCIES;'
+    );
+    assert.equal(deps['shared/wrap.js'].format(), 'fmt');
+    assert.equal(deps['shared/wrap.js'].star, 42);
+    // export * excludes default from both the re-export and the merge.
+    assert.equal(deps['shared/wrap.js'].default, undefined);
+  });
+
+  test('an unresolvable relative re-export is dropped (no leaked import)', () => {
+    const gen = makeGenerator();
+    // No moduleImports edge and no real file → cannot resolve the key.
+    const block = gen.buildV2DependencyModuleBlockFromModules([
+      { name: 'shared/x.js', content: "export * from './does-not-exist.js';\nexport const ok = 1;", moduleImports: [] },
+    ]);
+    assert.ok(!/from\s+['"]\.\//.test(block), 'unresolved re-export leaked a relative import');
+    const deps = evalSnippet(`${block}\nreturn SLICE_BUNDLE_DEPENDENCIES;`);
+    assert.equal(deps['shared/x.js'].ok, 1);
+  });
+
+  test('a relative .json dependency exposes default and top-level keys', () => {
+    const d = evalDepExports('{ "name": "slice", "version": 2, "nested": { "a": 1 } }', 'data/config.json');
+    // Default import gets the whole document.
+    assert.deepEqual(d.default, { name: 'slice', version: 2, nested: { a: 1 } });
+    // Named imports get top-level keys.
+    assert.equal(d.name, 'slice');
+    assert.equal(d.version, 2);
+    assert.deepEqual(d.nested, { a: 1 });
+  });
+
+  test('a .json array dependency exposes the array as default (no named keys)', () => {
+    const d = evalDepExports('[1, 2, 3]', 'data/list.json');
+    assert.deepEqual(d.default, [1, 2, 3]);
+  });
+
+  test('an invalid .json dependency degrades to empty default (no crash)', () => {
+    const d = evalDepExports('{ not: valid json', 'data/broken.json');
+    assert.deepEqual(d.default, {});
+  });
+
   test('a transitive dependency is inlined and bound (topological order)', () => {
     const gen = makeGenerator();
     // mid imports leaf; pass mid FIRST so the topological sort must reorder.

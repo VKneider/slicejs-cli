@@ -7,7 +7,10 @@ import Print from '../Print.js';
 import { getProjectRoot, getSrcPath, getApiPath, getConfigPath, getPath, getComponentsJsPath } from '../utils/PathHelper.js';
 import { resolvePackageManager, installCommand } from '../utils/PackageManager.js';
 import updateManager from '../utils/updateManager.js';
-import { parseComponentsRegistry, extractStaticPropsFromSource } from '../types/types.js';
+import { parseComponentsRegistry, validateComponentProps } from '../types/types.js';
+import { parse as parseModule } from '@babel/parser';
+import traverse from '@babel/traverse';
+import ExternalModuleBundler from '../utils/bundling/ExternalModuleBundler.js';
 
 /**
  * Checks the Node.js version
@@ -322,93 +325,135 @@ async function checkComponents() {
  * Uses the same Babel parsing as slice types generate.
  */
 async function checkComponentProps() {
-  const issues = [];
   const registryPath = getComponentsJsPath(import.meta.url);
-  const configPath = getConfigPath(import.meta.url);
-
   if (!await fs.pathExists(registryPath)) {
     return { pass: true, message: 'No components to check' };
   }
 
   try {
-    const content = await fs.readFile(registryPath, 'utf-8');
-    const registryMap = parseComponentsRegistry(content, registryPath);
-    const entries = Object.entries(registryMap);
+    // Same validation `slice build` runs, so doctor and build agree exactly.
+    const { errors, warnings, checkedCount } = await validateComponentProps({
+      projectRoot: getProjectRoot(import.meta.url)
+    });
 
-    if (entries.length === 0) {
-      return { pass: true, message: 'No components registered' };
-    }
-
-    // Build a category-to-path map from sliceConfig.json
-    const categoryPathCache = new Map();
-    if (await fs.pathExists(configPath)) {
-      try {
-        const config = await fs.readJson(configPath);
-        if (config.paths?.components) {
-          for (const [cat, catMeta] of Object.entries(config.paths.components)) {
-            categoryPathCache.set(cat, catMeta.path?.replace(/^[/\\]+/, '') || '');
-          }
-        }
-      } catch {}
-    }
-
-    const VALID_TYPES = new Set(['string', 'number', 'boolean', 'object', 'array', 'function', 'any']);
-    const checked = [];
-
-    for (const [compName, meta] of entries) {
-      const category = typeof meta === 'string' ? meta : (meta.category || '');
-      const relPath = categoryPathCache.get(category);
-      if (!relPath) continue;
-      const jsPath = getSrcPath(import.meta.url, relPath, compName, `${compName}.js`);
-
-      if (!await fs.pathExists(jsPath)) {
-        continue;
-      }
-
-      const source = await fs.readFile(jsPath, 'utf-8');
-      const props = extractStaticPropsFromSource(source, jsPath);
-      if (!props) continue;
-
-      checked.push(compName);
-
-      for (const [propName, propMeta] of Object.entries(props)) {
-        if (propMeta.type === 'any') {
-          issues.push({ component: compName, prop: propName, message: `"${propName}" uses type "any" — specify a concrete type` });
-        }
-        if (propMeta.required && propMeta.type !== 'boolean') {
-          issues.push({ component: compName, prop: propName, message: `"${propName}" is required but has no default value` });
-        }
-        if (propMeta.schema && propMeta.type !== 'object') {
-          issues.push({ component: compName, prop: propName, message: `"${propName}" has "schema" but type is "${propMeta.type}" (should be "object")` });
-        }
-        if (propMeta.items && propMeta.type !== 'array') {
-          issues.push({ component: compName, prop: propName, message: `"${propName}" has "items" but type is "${propMeta.type}" (should be "array")` });
-        }
-        if (!VALID_TYPES.has(propMeta.type)) {
-          issues.push({ component: compName, prop: propName, message: `"${propName}" has unknown type "${propMeta.type}"` });
-        }
-        if (Array.isArray(propMeta.allowedValues) && propMeta.allowedValues.length > 0) {
-          const typeMismatch = propMeta.allowedValues.some(v => typeof v !== propMeta.type);
-          if (typeMismatch && propMeta.type !== 'any') {
-            issues.push({ component: compName, prop: propName, message: `"${propName}" allowedValues type mismatch (expected ${propMeta.type})` });
-          }
-        }
-      }
-    }
+    const issues = [
+      ...errors.map((e) => ({ ...e, severity: 'error' })),
+      ...warnings.map((w) => ({ ...w, severity: 'warning' }))
+    ];
 
     if (issues.length === 0) {
-      return { pass: true, message: `${checked.length} components checked, props look good` };
+      return { pass: true, message: `${checkedCount} components checked, props look good` };
     }
 
+    const componentCount = new Set(issues.map((i) => i.component)).size;
+    const errorNote = errors.length > 0 ? ` (${errors.length} would block "slice build")` : '';
     return {
       warn: true,
-      message: `${issues.length} prop issue(s) across ${new Set(issues.map(i => i.component)).size} component(s)`,
-      suggestion: issues.map(i => `  ${i.component}.${i.prop}: ${i.message}`).join('\n'),
+      message: `${issues.length} prop issue(s) across ${componentCount} component(s)${errorNote}`,
+      suggestion: issues
+        .map((i) => `  [${i.severity}] ${i.component}.${i.prop}: ${i.message}`)
+        .join('\n'),
       issues
     };
   } catch (error) {
     return { warn: true, message: `Cannot check props: ${error.message}` };
   }
+}
+
+/** Package root of a bare specifier: 'lodash/fp' -> 'lodash', '@s/p/x' -> '@s/p'. */
+function packageRootOf(spec) {
+    const parts = spec.split('/');
+    return spec.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
+}
+
+/** Collects bare (node_modules) import specifiers from a module's source. */
+function extractBareImports(source) {
+    const found = new Set();
+    const add = (spec) => {
+        if (typeof spec === 'string' && ExternalModuleBundler.isBareSpecifier(spec)) found.add(spec);
+    };
+    try {
+        const ast = parseModule(source, { sourceType: 'module', plugins: ['jsx'] });
+        traverse.default(ast, {
+            ImportDeclaration(p) { add(p.node.source?.value); },
+            ExportNamedDeclaration(p) { if (p.node.source) add(p.node.source.value); },
+            ExportAllDeclaration(p) { add(p.node.source?.value); },
+            CallExpression(p) {
+                if (p.node.callee?.type === 'Import' && p.node.arguments?.[0]?.type === 'StringLiteral') {
+                    add(p.node.arguments[0].value);
+                }
+            }
+        });
+    } catch { /* unparseable → skip */ }
+    return found;
+}
+
+/**
+ * Verifies that every node_modules package imported by a component is actually
+ * installed. Bare imports are resolved from node_modules at build/dev time, so a
+ * missing package would fail there — this surfaces it early.
+ */
+async function checkExternalDependencies() {
+    const registryPath = getComponentsJsPath(import.meta.url);
+    const configPath = getConfigPath(import.meta.url);
+    const projectRoot = getProjectRoot(import.meta.url);
+
+    if (!await fs.pathExists(registryPath)) {
+        return { pass: true, message: 'No components to check' };
+    }
+
+    try {
+        const content = await fs.readFile(registryPath, 'utf-8');
+        const entries = Object.entries(parseComponentsRegistry(content, registryPath));
+
+        const categoryPathCache = new Map();
+        if (await fs.pathExists(configPath)) {
+            try {
+                const config = await fs.readJson(configPath);
+                for (const [cat, catMeta] of Object.entries(config.paths?.components || {})) {
+                    categoryPathCache.set(cat, catMeta.path?.replace(/^[/\\]+/, '') || '');
+                }
+            } catch { /* config issues reported elsewhere */ }
+        }
+
+        const usedBy = new Map(); // packageRoot -> Set(component names)
+        for (const [compName, meta] of entries) {
+            const category = typeof meta === 'string' ? meta : (meta.category || '');
+            const relPath = categoryPathCache.get(category);
+            if (!relPath) continue;
+            const jsPath = getSrcPath(import.meta.url, relPath, compName, `${compName}.js`);
+            if (!await fs.pathExists(jsPath)) continue;
+
+            const source = await fs.readFile(jsPath, 'utf-8');
+            for (const spec of extractBareImports(source)) {
+                const root = packageRootOf(spec);
+                if (!usedBy.has(root)) usedBy.set(root, new Set());
+                usedBy.get(root).add(compName);
+            }
+        }
+
+        if (usedBy.size === 0) {
+            return { pass: true, message: 'No external (node_modules) imports' };
+        }
+
+        const missing = [];
+        for (const root of usedBy.keys()) {
+            const pkgJson = path.join(projectRoot, 'node_modules', root, 'package.json');
+            if (!await fs.pathExists(pkgJson)) missing.push(root);
+        }
+
+        if (missing.length === 0) {
+            return { pass: true, message: `${usedBy.size} external package(s) imported, all installed` };
+        }
+
+        return {
+            warn: true,
+            message: `${missing.length} imported package(s) not in node_modules: ${missing.sort().join(', ')}`,
+            details: missing.sort().map((m) => `Install "${m}" — used by: ${Array.from(usedBy.get(m)).sort().join(', ')}`)
+        };
+    } catch (error) {
+        return { warn: true, message: `Cannot check external dependencies: ${error.message}` };
+    }
 }
 
 /**
@@ -421,7 +466,8 @@ export {
     checkPort,
     checkDependencies,
     checkComponents,
-    checkComponentProps
+    checkComponentProps,
+    checkExternalDependencies
 };
 
 export default async function runDiagnostics() {
@@ -437,7 +483,8 @@ export default async function runDiagnostics() {
         { name: 'Package Manager', fn: checkPackageManagerSetup },
         { name: 'Dependencies', fn: checkDependencies },
         { name: 'Components', fn: checkComponents },
-        { name: 'Component Props', fn: checkComponentProps }
+        { name: 'Component Props', fn: checkComponentProps },
+        { name: 'External Dependencies', fn: checkExternalDependencies }
     ];
 
     const results = [];

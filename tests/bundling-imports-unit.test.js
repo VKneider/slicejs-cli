@@ -1,5 +1,8 @@
-import { test, describe } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'fs-extra';
+import path from 'node:path';
+import os from 'node:os';
 import { parse } from '@babel/parser';
 import BundleGenerator from '../commands/utils/bundling/BundleGenerator.js';
 
@@ -7,9 +10,27 @@ import BundleGenerator from '../commands/utils/bundling/BundleGenerator.js';
 // bundler in isolation. They are written to assert *correct* behaviour, so a
 // failure here documents a real gap/bug in the bundler rather than the test.
 
+// A shared temp project whose src/public/ holds the assets the "kept absolute
+// import" tests reference. Absolute imports are preserved only when the file
+// exists under src/public/.
+let TMP_ROOT;
+let PUBLIC_SRC;
+
+before(async () => {
+  TMP_ROOT = await fs.mkdtemp(path.join(os.tmpdir(), 'slice-imports-'));
+  PUBLIC_SRC = path.join(TMP_ROOT, 'src');
+  for (const rel of ['assets/lib.js', 'assets/lib/x.js', 'assets/a.js', 'assets/b.js']) {
+    const p = path.join(PUBLIC_SRC, 'public', rel);
+    await fs.ensureDir(path.dirname(p));
+    await fs.writeFile(p, '');
+  }
+});
+after(async () => { if (TMP_ROOT) await fs.remove(TMP_ROOT); });
+
 function makeGenerator(sliceConfig = {}) {
   const gen = new BundleGenerator(import.meta.url, null, {});
   gen.sliceConfig = sliceConfig;
+  if (PUBLIC_SRC) gen.srcPath = PUBLIC_SRC;
   return gen;
 }
 
@@ -22,58 +43,60 @@ function evalSnippet(code) {
 }
 
 describe('classifyImport', () => {
-  const gen = makeGenerator({ publicFolders: ['/assets', '/Themes'] });
-  const publicFolders = gen.getConfiguredPublicFolders();
+  // Absolute imports are kept only when the file exists under src/public/.
+  const gen = makeGenerator({});
+  before(() => { gen.srcPath = PUBLIC_SRC; });
 
   test('relative imports are dropped silently (no warning)', () => {
-    const r = gen.classifyImport('./Foo.js', publicFolders);
+    const r = gen.classifyImport('./Foo.js');
     assert.equal(r.keep, false);
     assert.equal(r.warning, null);
   });
 
   test('parent-relative imports are dropped silently', () => {
-    const r = gen.classifyImport('../shared/util.js', publicFolders);
+    const r = gen.classifyImport('../shared/util.js');
     assert.equal(r.keep, false);
     assert.equal(r.warning, null);
   });
 
-  test('absolute imports inside publicFolders are kept', () => {
-    const r = gen.classifyImport('/assets/lib/x.js', publicFolders);
+  test('absolute imports that exist under public/ are kept', () => {
+    const r = gen.classifyImport('/assets/lib/x.js');
     assert.equal(r.keep, true);
     assert.equal(r.warning, null);
   });
 
-  test('absolute import exactly matching a publicFolder is kept', () => {
-    const r = gen.classifyImport('/assets', publicFolders);
+  test('absolute import matching a public/ directory is kept', () => {
+    const r = gen.classifyImport('/assets');
     assert.equal(r.keep, true);
   });
 
-  test('absolute imports outside publicFolders are dropped with warning', () => {
-    const r = gen.classifyImport('/secret/key.js', publicFolders);
+  test('absolute imports not present under public/ are dropped with warning', () => {
+    const r = gen.classifyImport('/secret/key.js');
     assert.equal(r.keep, false);
-    assert.match(r.warning, /outside publicFolders/);
+    assert.match(r.warning, /absolute import/);
   });
 
-  test('a publicFolder name must not match by prefix only (/assetsX)', () => {
-    const r = gen.classifyImport('/assetsX/x.js', publicFolders);
+  test('a public/ name must not match by prefix only (/assetsX)', () => {
+    const r = gen.classifyImport('/assetsX/x.js');
     assert.equal(r.keep, false, '/assetsX should NOT be treated as inside /assets');
   });
 
-  test('bare specifier imports are dropped with warning', () => {
-    const r = gen.classifyImport('lodash', publicFolders);
+  test('bare specifier imports are stripped as external (resolved from node_modules)', () => {
+    const r = gen.classifyImport('lodash');
     assert.equal(r.keep, false);
-    assert.match(r.warning, /bare import/);
+    assert.equal(r.warning, null);
+    assert.equal(r.external, true);
   });
 
   test('non-string import path is handled defensively', () => {
-    const r = gen.classifyImport(undefined, publicFolders);
+    const r = gen.classifyImport(undefined);
     assert.equal(r.keep, false);
   });
 });
 
 describe('stripImports', () => {
   test('removes relative + bare imports, keeps body intact', () => {
-    const gen = makeGenerator({ publicFolders: [] });
+    const gen = makeGenerator();
     const code = [
       "import Foo from './Foo.js';",
       "import { x } from 'pkg';",
@@ -87,8 +110,8 @@ describe('stripImports', () => {
     assert.deepEqual(out.hoistedImports, []);
   });
 
-  test('hoists kept public-folder imports instead of inlining them', () => {
-    const gen = makeGenerator({ publicFolders: ['/assets'] });
+  test('hoists kept public/ imports instead of inlining them', () => {
+    const gen = makeGenerator();
     const code = "import lib from '/assets/lib.js';\nconst a = lib;";
     const out = gen.stripImports(code, { collectHoistedImports: true });
     assert.equal(out.hoistedImports.length, 1);
@@ -105,7 +128,7 @@ describe('stripImports', () => {
   });
 
   test('falls back to regex scanner when Babel cannot parse', () => {
-    const gen = makeGenerator({ publicFolders: [] });
+    const gen = makeGenerator();
     // `@decorator` + class field syntax with no plugin -> Babel throws -> fallback.
     const code = "import x from './x.js';\nconst valid = 1;\nthis is not ::: valid js @@@";
     // Should not throw; relative import must still be stripped.

@@ -481,22 +481,13 @@ const DEFAULT_EDITOR_INCLUDE = ['src/Components/**/*.js', 'src/**/*.d.ts'];
 const DEFAULT_EDITOR_EXCLUDE = ['node_modules', 'dist', 'src/libs/**', 'tests/**'];
 const NOISY_INCLUDE_PATTERNS = new Set(['src/**/*.js', 'api/**/*.js', 'tests/**/*.js']);
 
+// Vendored static assets live under src/public/. Exclude them from type-check
+// coverage (they aren't app source).
 const readPublicFolderExcludes = async (projectRoot) => {
-  const configPath = getConfigPath(import.meta.url, projectRoot);
-  if (!(await fs.pathExists(configPath))) return [];
-
-  try {
-    const raw = await fs.readFile(configPath, 'utf8');
-    const parsed = JSON.parse(raw);
-    const folders = Array.isArray(parsed?.publicFolders) ? parsed.publicFolders : [];
-    return folders
-      .map((folder) => String(folder || '').trim())
-      .filter(Boolean)
-      .map((folder) => folder.replace(/^[/\\]+/, ''))
-      .map((folder) => `src/${folder}/**`);
-  } catch {
-    return [];
+  if (await fs.pathExists(joinRoot(projectRoot, 'src', 'public'))) {
+    return ['src/public/**'];
   }
+  return [];
 };
 
 const collectJavaScriptFiles = async (dirPath) => {
@@ -528,12 +519,10 @@ const ensureNoCheckInPublicVendorFiles = async (projectRoot) => {
     return { updatedFiles: 0, scannedFiles: 0 };
   }
 
-  const publicFolders = Array.isArray(parsed?.publicFolders) ? parsed.publicFolders : [];
-  const candidateDirs = publicFolders
-    .map((folder) => String(folder || '').trim())
-    .filter(Boolean)
-    .map((folder) => folder.replace(/^[/\\]+/, ''))
-    .map((folder) => joinRoot(projectRoot, 'src', folder));
+  // Vendored JS under src/public/ gets // @ts-nocheck so it isn't type-checked.
+  const candidateDirs = [];
+  const publicDir = joinRoot(projectRoot, 'src', 'public');
+  if (await fs.pathExists(publicDir)) candidateDirs.push(publicDir);
 
   const uniqueDirs = Array.from(new Set(candidateDirs));
   let scannedFiles = 0;
@@ -768,6 +757,77 @@ const loadComponentStaticProps = async ({ projectRoot, registryMap }) => {
   return componentPropsMap;
 };
 
+const PROP_VALID_TYPES = new Set(['string', 'number', 'boolean', 'object', 'array', 'function', 'any']);
+
+/**
+ * Validates every registered component's static props. Shared by `slice doctor`
+ * and `slice build`.
+ *
+ * Returns issues split by severity:
+ *   - errors:   the definition is wrong and will misbehave at runtime
+ *               (unknown type, schema/items/allowedValues type mismatch).
+ *   - warnings: style / best-practice (type "any", required-without-default).
+ *
+ * @param {{ projectRoot: string }} options
+ * @returns {Promise<{ errors: Array, warnings: Array, checkedCount: number }>}
+ */
+const validateComponentProps = async ({ projectRoot }) => {
+  const errors = [];
+  const warnings = [];
+  let checkedCount = 0;
+
+  const registryPath = getComponentsJsPath(import.meta.url, projectRoot);
+  let registryContent;
+  try {
+    registryContent = await fs.readFile(registryPath, 'utf8');
+  } catch {
+    return { errors, warnings, checkedCount }; // no registry → nothing to validate
+  }
+
+  const registryMap = parseComponentsRegistry(registryContent, registryPath);
+  const configPath = getConfigPath(import.meta.url, projectRoot);
+  const categoryPathCache = new Map();
+
+  for (const [componentName, category] of Object.entries(registryMap)) {
+    if (!categoryPathCache.has(category)) {
+      let catPath = null;
+      try { catPath = await readCategoryPathFromConfig(configPath, category); } catch { /* config issues reported elsewhere */ }
+      categoryPathCache.set(category, catPath);
+    }
+    const categoryPath = categoryPathCache.get(category);
+    if (!categoryPath) continue;
+
+    const componentFile = joinRoot(projectRoot, 'src', categoryPath, componentName, `${componentName}.js`);
+    if (!(await fs.pathExists(componentFile))) continue;
+
+    let source;
+    try { source = await fs.readFile(componentFile, 'utf8'); } catch { continue; }
+
+    const props = extractStaticPropsFromSource(source, componentFile);
+    if (!props) continue;
+    checkedCount++;
+
+    for (const [prop, meta] of Object.entries(props)) {
+      const err = (message) => errors.push({ component: componentName, prop, message });
+      const warn = (message) => warnings.push({ component: componentName, prop, message });
+
+      if (!PROP_VALID_TYPES.has(meta.type)) err(`unknown type "${meta.type}"`);
+      if (meta.schema && meta.type !== 'object') err(`has "schema" but type is "${meta.type}" (should be "object")`);
+      if (meta.items && meta.type !== 'array') err(`has "items" but type is "${meta.type}" (should be "array")`);
+      if (Array.isArray(meta.allowedValues) && meta.allowedValues.length > 0 && meta.type !== 'any') {
+        if (meta.allowedValues.some((v) => typeof v !== meta.type)) {
+          err(`allowedValues type mismatch (expected all ${meta.type})`);
+        }
+      }
+
+      if (meta.type === 'any') warn('uses type "any" — specify a concrete type');
+      if (meta.required && meta.type !== 'boolean') warn('is required but has no default value');
+    }
+  }
+
+  return { errors, warnings, checkedCount };
+};
+
 const generateTypesFile = async ({ projectRoot, outputPath }) => {
   const registryPath = getComponentsJsPath(import.meta.url, projectRoot);
   let registryContent;
@@ -846,10 +906,13 @@ const ensureEditorConfigForTypes = async ({ projectRoot, outputPath }) => {
     })();
 
     const writeDefaultJsconfig = async () => {
+      // Include the public/ excludes up front so a freshly written jsconfig is
+      // already in its desired state (the next run reports it as unchanged).
+      const publicExcludes = await readPublicFolderExcludes(projectRoot);
       const jsconfig = {
         compilerOptions: { ...DEFAULT_EDITOR_COMPILER_OPTIONS },
         include: [...DEFAULT_EDITOR_INCLUDE, declarationGlob],
-        exclude: [...DEFAULT_EDITOR_EXCLUDE]
+        exclude: Array.from(new Set([...DEFAULT_EDITOR_EXCLUDE, ...publicExcludes]))
       };
       await fs.writeFile(jsconfigPath, `${JSON.stringify(jsconfig, null, 2)}\n`, 'utf8');
     };
@@ -954,7 +1017,7 @@ const runGenerateTypes = async ({ projectRoot, outputPath }) => {
     Print.warning(`Unexpected editor config setup error: ${editorConfig.errorMessage}`);
   }
   if (publicVendorSuppression.updatedFiles > 0) {
-    Print.info(`Added // @ts-nocheck to ${publicVendorSuppression.updatedFiles} vendor JS files from publicFolders.`);
+    Print.info(`Added // @ts-nocheck to ${publicVendorSuppression.updatedFiles} vendor JS files under src/public/.`);
   }
   return result;
 };
@@ -966,6 +1029,7 @@ export {
   generateDeclarationContent,
   generateTypesFile,
   parseComponentsRegistry,
+  validateComponentProps,
   collectEventRegistry,
   collectEventGraph,
   buildEventManifest,

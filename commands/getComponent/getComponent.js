@@ -418,7 +418,17 @@ filterOfficialComponents(allComponents) {
   // Given the source of a just-installed module, install everything it needs.
   // `repoRelPath` anchors relative-import resolution to the repo's Components root.
   async resolveDependencies(jsText, repoRelPath, seen, force = false) {
-    const { builds, imports } = analyzeSource(jsText);
+    const { builds, imports, bareImports } = analyzeSource(jsText);
+
+    // Bare (node_modules) imports can't be fetched from the registry — they are
+    // npm packages the user must install. Surface each one once.
+    for (const spec of bareImports || []) {
+      const root = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0];
+      this._reportedExternal ??= new Set();
+      if (this._reportedExternal.has(root)) continue;
+      this._reportedExternal.add(root);
+      Print.warning(`↳ npm package required: "${root}" — install it in your project (e.g. "pnpm add ${root}")`);
+    }
 
     // 1) Component dependencies via slice.build('X').
     for (const name of builds) {

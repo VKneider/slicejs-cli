@@ -329,8 +329,10 @@ describe('ensureEditorConfigForTypes robustness', () => {
       fs.writeFileSync(outputFile, 'export {};\n', 'utf8');
       const result = await ensureEditorConfigForTypes({ projectRoot: tmpRoot, outputPath: outputFile });
       assert.equal(result.mode, 'created_jsconfig');
+      // A freshly written jsconfig is already in its desired state, so the next
+      // run reports it as unchanged (idempotent).
       const result2 = await ensureEditorConfigForTypes({ projectRoot: tmpRoot, outputPath: outputFile });
-      assert.equal(result2.mode, 'updated_jsconfig');
+      assert.equal(result2.mode, 'jsconfig_already_has_include');
       assert.equal(result2.includeAdded, false);
     } finally {
       await cleanupTestProject(tmpRoot);

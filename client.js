@@ -277,6 +277,11 @@ buildCommand
   .option("--no-obfuscate", "Disable obfuscation (enabled by default, no prop mangling)")
   .option("--preview", "Start preview server after build")
   .option("--serve", "Start preview server without building")
+  .option("--strict-external", "Fail the build if a node_modules dependency cannot be resolved")
+  .option("--no-validate", "Skip component prop validation before building")
+  .option("--sourcemap", "Emit a source map (.map) next to each minified bundle")
+  .option("--hash-filenames", "Add a content hash to bundle filenames for immutable CDN caching")
+  .option("--compress", "Precompress dist assets to .gz and .br (brotli) for static serving")
   .option("--skip-clean", "Skip cleaning dist before build");
 
 // DEV COMMAND (DEVELOPMENT)

@@ -10,6 +10,7 @@ import {
   checkConfig,
   checkComponents,
   checkPackageManagerSetup,
+  checkExternalDependencies,
 } from '../commands/doctor/doctor.js';
 
 describe('doctor checks', () => {
@@ -78,6 +79,32 @@ describe('doctor checks', () => {
       assert.equal(r.warn, true);
       assert.match(r.message, /missing files/);
     });
+  });
+});
+
+describe('checkExternalDependencies', () => {
+  test('warns when an imported node_modules package is not installed', async () => {
+    await withTestProject(async (root) => {
+      const compJs = path.join(root, 'src', 'Components', 'Visual', 'Widget', 'Widget.js');
+      await fs.writeFile(compJs, "import x from 'totally-not-installed-xyz';\nexport default class Widget {}");
+      const r = await checkExternalDependencies();
+      assert.equal(r.warn, true);
+      assert.match(r.message, /totally-not-installed-xyz/);
+      assert.ok((r.details || []).some((d) => /Widget/.test(d)));
+    }, { visualComponents: ['Widget'] });
+  });
+
+  test('passes when imported packages are present in node_modules', async () => {
+    await withTestProject(async (root) => {
+      const compJs = path.join(root, 'src', 'Components', 'Visual', 'Widget', 'Widget.js');
+      await fs.writeFile(compJs, "import x from 'fake-installed';\nexport default class Widget {}");
+      const pkgDir = path.join(root, 'node_modules', 'fake-installed');
+      await fs.ensureDir(pkgDir);
+      await fs.writeFile(path.join(pkgDir, 'package.json'), JSON.stringify({ name: 'fake-installed', version: '1.0.0' }));
+      const r = await checkExternalDependencies();
+      assert.equal(r.pass, true);
+      assert.match(r.message, /all installed/);
+    }, { visualComponents: ['Widget'] });
   });
 });
 

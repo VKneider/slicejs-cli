@@ -14,17 +14,27 @@
 import { parse } from '@babel/parser';
 import traverse from '@babel/traverse';
 
+/** True for bare node_modules specifiers (not relative/absolute/URL/subpath-#). */
+function isBare(spec) {
+  return typeof spec === 'string' && spec.length > 0 &&
+    !spec.startsWith('.') && !spec.startsWith('/') && !spec.startsWith('#') &&
+    !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(spec);
+}
+
 /**
  * @param {string} sourceText
- * @returns {{ builds: Set<string>, imports: string[] }}
+ * @returns {{ builds: Set<string>, imports: string[], bareImports: string[] }}
  */
 export function analyzeSource(sourceText) {
   const builds = new Set();
   const imports = new Set();
+  const bareImports = new Set();
 
   const addImport = (node) => {
     const src = node?.source?.value;
-    if (typeof src === 'string' && src.startsWith('.')) imports.add(src);
+    if (typeof src !== 'string') return;
+    if (src.startsWith('.')) imports.add(src);
+    else if (isBare(src)) bareImports.add(src);
   };
 
   try {
@@ -45,13 +55,11 @@ export function analyzeSource(sourceText) {
           return;
         }
 
-        // dynamic import('./x.js')
-        if (
-          callee.type === 'Import' &&
-          args[0]?.type === 'StringLiteral' &&
-          args[0].value.startsWith('.')
-        ) {
-          imports.add(args[0].value);
+        // dynamic import('./x.js') or import('some-pkg')
+        if (callee.type === 'Import' && args[0]?.type === 'StringLiteral') {
+          const spec = args[0].value;
+          if (spec.startsWith('.')) imports.add(spec);
+          else if (isBare(spec)) bareImports.add(spec);
         }
       },
 
@@ -63,7 +71,7 @@ export function analyzeSource(sourceText) {
     // Unparseable source → discover nothing; the component still installs as-is.
   }
 
-  return { builds, imports: Array.from(imports) };
+  return { builds, imports: Array.from(imports), bareImports: Array.from(bareImports) };
 }
 
 export default analyzeSource;

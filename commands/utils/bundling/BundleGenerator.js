@@ -5,7 +5,27 @@ import crypto from 'crypto';
 import { parse } from '@babel/parser';
 import traverse from '@babel/traverse';
 import { minify as terserMinify } from 'terser';
-import { getSrcPath, getComponentsJsPath, getDistPath, getConfigPath } from '../PathHelper.js';
+import { getSrcPath, getComponentsJsPath, getDistPath, getConfigPath, getProjectRoot } from '../PathHelper.js';
+import ExternalModuleBundler from './ExternalModuleBundler.js';
+
+/**
+ * Build timestamp honoring SOURCE_DATE_EPOCH for reproducible builds. When the
+ * env var is set (integer seconds since the Unix epoch — the reproducible-builds
+ * convention), every build embeds the same timestamp, so bundle content and its
+ * integrity hash are byte-identical across runs. Otherwise the current time is
+ * used.
+ * @returns {string} ISO-8601 timestamp
+ */
+export function resolveBuildTimestamp() {
+  const raw = process.env.SOURCE_DATE_EPOCH;
+  if (raw != null && String(raw).trim() !== '') {
+    const seconds = Number(raw);
+    if (Number.isFinite(seconds) && seconds >= 0) {
+      return new Date(seconds * 1000).toISOString();
+    }
+  }
+  return new Date().toISOString();
+}
 
 export default class BundleGenerator {
   constructor(moduleUrl, analysisData, options = {}) {
@@ -20,11 +40,29 @@ export default class BundleGenerator {
     this.componentsPath = path.dirname(getComponentsJsPath(moduleUrl));
     this.options = {
       minify: !!options.minify,
-      obfuscate: !!options.obfuscate
+      obfuscate: !!options.obfuscate,
+      // Emit a source map next to each minified bundle (`--sourcemap`). Off by
+      // default so production source isn't shipped unless asked (matches Vite).
+      sourcemap: !!options.sourcemap,
+      // Insert a content hash into each bundle filename (`--hash-filenames`) for
+      // immutable CDN caching. Off by default to keep stable bundle names.
+      hashFilenames: !!options.hashFilenames
     };
     this.format = 'v2';
     this.sliceConfig = this.resolveSliceConfig();
     this.loadingPolicy = this.resolveLoadingPolicy();
+
+    // When true, an unresolved node_modules dependency fails the build instead
+    // of warning + emitting an empty module. Driven by `slice build --strict-external`.
+    this.strictExternal = !!options.strictExternal;
+
+    // Bare-package (node_modules) import support is always on. Bare imports are
+    // resolved+bundled with esbuild (see ExternalModuleBundler) and registered
+    // under SLICE_BUNDLE_DEPENDENCIES keyed by the bare specifier, mirroring the
+    // relative-dependency runtime contract.
+    this.externalBundler = null; // lazily constructed
+    this.externalModulesByName = new Map(); // bareName -> wrapped module expression
+    this.externalResolutionErrors = new Map(); // bareName -> error message
 
     // Configuration
     this.config = {
@@ -44,6 +82,10 @@ export default class BundleGenerator {
       dependencyUsage: new Map(),
       sharedDependencySet: new Set(),
       bundleKeysUsingSharedDependencies: new Set(),
+      // True when the critical bundle itself uses a shared dependency, so it
+      // resolves it from the vendor-shared bundle (loaded first) instead of
+      // inlining its own copy.
+      criticalUsesShared: false,
       bundle: null
     };
 
@@ -133,6 +175,9 @@ export default class BundleGenerator {
     // 1. Determine optimal strategy
     this.determineStrategy();
 
+    // 1b. Resolve external (node_modules) dependencies up front, once per package.
+    await this.prepareExternalModules();
+
     // 2. Identify critical components
     this.identifyCriticalComponents();
 
@@ -152,6 +197,16 @@ export default class BundleGenerator {
 
     // 6. Generate configuration
     const config = this.generateBundleConfig(frameworkBundle);
+
+    // 6b. Fail loudly on a self-inconsistent config (dangling refs / orphan
+    // bundles) instead of silently shipping dead files or broken references.
+    const integrity = this.collectBundleReferentialIssues(config);
+    if (integrity.dangling.length > 0) {
+      console.warn(`Warning: bundle config references missing bundle(s): ${integrity.dangling.join(', ')}`);
+    }
+    if (integrity.orphans.length > 0) {
+      console.warn(`Warning: emitted bundle(s) never referenced by any route: ${integrity.orphans.join(', ')}`);
+    }
 
     console.log('✅ Bundles generated successfully');
 
@@ -219,7 +274,7 @@ export default class BundleGenerator {
     // Fill critical bundle up to limit
     for (const comp of candidates) {
       const dependencies = this.getComponentDependencies(comp);
-      const totalSize = comp.size + dependencies.reduce((sum, dep) => sum + dep.size, 0);
+      const totalSize = this.budgetSizeOf(comp) + dependencies.reduce((sum, dep) => sum + this.budgetSizeOf(dep), 0);
       const totalCount = 1 + dependencies.length;
 
       const wouldExceedSize = this.bundles.critical.size + totalSize > this.config.maxCriticalSize;
@@ -230,20 +285,20 @@ export default class BundleGenerator {
       // Add component and its dependencies
       if (!this.bundles.critical.components.find(c => c.name === comp.name)) {
         this.bundles.critical.components.push(comp);
-        this.bundles.critical.size += comp.size;
+        this.bundles.critical.size += this.budgetSizeOf(comp);
       }
 
       for (const dep of dependencies) {
         if (!this.bundles.critical.components.find(c => c.name === dep.name)) {
           this.bundles.critical.components.push(dep);
-          this.bundles.critical.size += dep.size;
+          this.bundles.critical.size += this.budgetSizeOf(dep);
         }
       }
     }
 
     if (this.loadingPolicy === 'disabled') {
       this.bundles.critical.components = this.bundles.critical.components.filter((comp) => comp.name !== 'Loading');
-      this.bundles.critical.size = this.bundles.critical.components.reduce((sum, comp) => sum + comp.size, 0);
+      this.bundles.critical.size = this.componentsBudgetSize(this.bundles.critical.components);
     }
 
     console.log(`✓ Critical bundle: ${this.bundles.critical.components.length} components, ${(this.bundles.critical.size / 1024).toFixed(1)} KB`);
@@ -264,7 +319,10 @@ export default class BundleGenerator {
     this.extractSharedComponents(criticalNames);
     this.rebalanceBundlesByBudget(this.bundles.routes, {
       maxBundleSize: this.config.maxRouteBundleSize,
-      maxRequests: this.config.maxRouteRequests
+      maxRequests: this.config.maxRouteRequests,
+      // shared-core is referenced by route bundles via `dependencies: ['shared-core']`;
+      // pin it so the rebalancer never splits/merges it and breaks those references.
+      pinnedKeys: new Set(['shared-core'])
     });
   }
 
@@ -566,16 +624,50 @@ export default class BundleGenerator {
     }
   }
 
+  /**
+   * Size a component contributes to a bundle. Uses the bundled-code size
+   * (js+html+css) so a sidecar asset in the component folder can't inflate the
+   * budget; falls back to the folder size for synthetic components (tests).
+   */
+  budgetSizeOf(component) {
+    if (!component) return 0;
+    return typeof component.codeSize === 'number' ? component.codeSize : (component.size || 0);
+  }
+
+  componentsBudgetSize(components = []) {
+    return components.reduce((sum, component) => sum + this.budgetSizeOf(component), 0);
+  }
+
   rebalanceBundlesByBudget(bundles, limits = {}) {
     const maxBundleSize = limits.maxBundleSize || this.config.maxRouteBundleSize;
     const maxRequests = limits.maxRequests || this.config.maxRouteRequests;
+    // Bundles other bundles reference by key (e.g. `shared-core`) must NOT be
+    // split or merged: splitting orphans the `--pN` parts and leaves every
+    // referrer pointing at a bundle key that no longer exists; merging would
+    // delete the key entirely. They pass through untouched (only their size is
+    // recomputed on the code metric).
+    const pinnedKeys = limits.pinnedKeys instanceof Set
+      ? limits.pinnedKeys
+      : new Set(limits.pinnedKeys || []);
     const orderedEntries = Object.entries(bundles)
       .sort(([a], [b]) => a.localeCompare(b));
     const rebalanced = {};
+    const pinned = {};
 
     for (const [key, bundle] of orderedEntries) {
       const sortedComponents = this.dedupeComponentsByName(bundle.components || []);
-      const totalSize = sortedComponents.reduce((sum, component) => sum + component.size, 0);
+      const totalSize = this.componentsBudgetSize(sortedComponents);
+
+      if (pinnedKeys.has(key)) {
+        pinned[key] = {
+          ...bundle,
+          components: sortedComponents,
+          size: totalSize,
+          file: `slice-bundle.${this.routeToFileName(key)}.js`
+        };
+        continue;
+      }
+
       if (totalSize <= maxBundleSize || sortedComponents.length <= 1) {
         rebalanced[key] = {
           ...bundle,
@@ -591,7 +683,7 @@ export default class BundleGenerator {
       let currentSize = 0;
 
       for (const component of sortedComponents) {
-        const nextSize = currentSize + component.size;
+        const nextSize = currentSize + this.budgetSizeOf(component);
         const shouldFlush = currentChunk.length > 0 && nextSize > maxBundleSize;
 
         if (shouldFlush) {
@@ -608,7 +700,7 @@ export default class BundleGenerator {
         }
 
         currentChunk.push(component);
-        currentSize += component.size;
+        currentSize += this.budgetSizeOf(component);
       }
 
       if (currentChunk.length > 0) {
@@ -622,8 +714,11 @@ export default class BundleGenerator {
       }
     }
 
+    // Merge only among non-pinned bundles, but count pinned ones toward the
+    // request budget. Never merge below one non-pinned bundle.
+    const pinnedCount = Object.keys(pinned).length;
     const keys = Object.keys(rebalanced).sort((a, b) => a.localeCompare(b));
-    while (keys.length > maxRequests) {
+    while (keys.length + pinnedCount > maxRequests && keys.length > 1) {
       const lastKey = keys.pop();
       const targetKey = keys[keys.length - 1];
       if (!lastKey || !targetKey) break;
@@ -641,14 +736,14 @@ export default class BundleGenerator {
       );
 
       rebalanced[targetKey].components = mergedComponents;
-      rebalanced[targetKey].size = mergedComponents.reduce((sum, component) => sum + component.size, 0);
+      rebalanced[targetKey].size = this.componentsBudgetSize(mergedComponents);
       rebalanced[targetKey].dependencies = mergedDependencies;
       this.setBundlePaths(rebalanced[targetKey], mergedPaths);
       delete rebalanced[lastKey];
     }
 
     Object.keys(bundles).forEach((key) => delete bundles[key]);
-    for (const [key, bundle] of Object.entries(rebalanced).sort(([a], [b]) => a.localeCompare(b))) {
+    for (const [key, bundle] of Object.entries({ ...pinned, ...rebalanced }).sort(([a], [b]) => a.localeCompare(b))) {
       bundles[key] = bundle;
     }
 
@@ -736,13 +831,9 @@ export default class BundleGenerator {
         'critical',
         null
       );
-      const criticalIntegrity = this.computeBundleIntegrity(
-        this.bundles.critical.components,
-        'critical',
-        null,
-        'critical',
-        criticalFile.file
-      );
+      // Store the emitted (possibly content-hashed) filename so the config and
+      // the runtime loader reference the file that was actually written.
+      this.bundles.critical.file = criticalFile.file;
       this.bundles.critical.integrity = `sha256:${criticalFile.hash}`;
       this.bundles.critical.hash = criticalFile.hash;
       files.push(criticalFile);
@@ -759,13 +850,9 @@ export default class BundleGenerator {
         'route',
         routeIdentifier
       );
-      const routeIntegrity = `sha256:${routeFile.hash}`;
-      const matchingBundle = Object.values(this.bundles.routes)
-        .find((entry) => entry.file === routeFile.file);
-      if (matchingBundle) {
-        matchingBundle.hash = routeFile.hash;
-        matchingBundle.integrity = routeIntegrity;
-      }
+      bundle.file = routeFile.file;
+      bundle.hash = routeFile.hash;
+      bundle.integrity = `sha256:${routeFile.hash}`;
       files.push(routeFile);
     }
 
@@ -780,6 +867,7 @@ export default class BundleGenerator {
     this.vendorShared.dependencyUsage = usageIndex;
     this.vendorShared.sharedDependencySet = sharedDependencySet;
     this.vendorShared.bundleKeysUsingSharedDependencies = new Set();
+    this.vendorShared.criticalUsesShared = false;
 
     if (sharedDependencySet.size === 0) {
       return;
@@ -792,6 +880,10 @@ export default class BundleGenerator {
       }
     }
 
+    // The critical bundle participates in sharing too: if it uses a shared dep,
+    // it must load vendor-shared first and resolve from it (no inline copy).
+    this.vendorShared.criticalUsesShared = this.vendorShared.bundleKeysUsingSharedDependencies.has('critical');
+
     for (const bundleKey of this.vendorShared.bundleKeysUsingSharedDependencies) {
       const bundle = this.bundles.routes[bundleKey];
       if (!bundle) continue;
@@ -802,7 +894,15 @@ export default class BundleGenerator {
   async collectRouteExternalDependencyIndex() {
     const routeDependencyIndex = {};
 
-    for (const [bundleKey, bundle] of Object.entries(this.bundles.routes)) {
+    // The critical bundle participates in shared-dependency detection alongside
+    // the route bundles: a package used by critical AND a route is extracted
+    // once into vendor-shared instead of being inlined in both.
+    const indexedBundles = [
+      ...Object.entries(this.bundles.routes),
+      ['critical', { components: this.bundles.critical.components || [] }]
+    ];
+
+    for (const [bundleKey, bundle] of indexedBundles) {
       routeDependencyIndex[bundleKey] = {};
       const uniqueComponents = this.dedupeComponentsByName(bundle.components || []);
 
@@ -811,15 +911,28 @@ export default class BundleGenerator {
         const jsPath = path.join(comp.path, `${fileBaseName}.js`);
         if (!await fs.pathExists(jsPath)) continue;
         const jsContent = await fs.readFile(jsPath, 'utf-8');
+        // Relative helper modules (inline content) + bare node_modules imports
+        // (pre-bundled esbuild expression), discovered in the component and its
+        // relative helpers. Both are candidates for extraction into the shared
+        // vendor bundle when used across multiple routes.
         const dependencies = await this.buildDependencyContents(jsContent, comp.path);
         for (const [depName, depEntry] of Object.entries(dependencies || {})) {
+          const isExternal = !!(depEntry && typeof depEntry === 'object' && depEntry.external);
+          // For external deps the shareable payload is the pre-bundled
+          // expression; skip any that failed to resolve (no expression).
+          const content = isExternal
+            ? (this.externalModulesByName.get(depName) || '')
+            : (depEntry?.content || '');
+          if (isExternal && !content) continue;
+
           if (!routeDependencyIndex[bundleKey][depName]) {
-            routeDependencyIndex[bundleKey][depName] = depEntry;
+            routeDependencyIndex[bundleKey][depName] = { content, external: isExternal };
           }
           if (!this.vendorShared.dependencyModules.has(depName)) {
             this.vendorShared.dependencyModules.set(depName, {
               name: depName,
-              content: depEntry?.content || ''
+              content,
+              external: isExternal
             });
           }
         }
@@ -839,7 +952,8 @@ export default class BundleGenerator {
             name: dependencyName,
             bundleKeys: new Set(),
             bundleCount: 0,
-            content: dependencyEntry?.content || ''
+            content: dependencyEntry?.content || '',
+            external: !!dependencyEntry?.external
           });
         }
         const entry = usage.get(dependencyName);
@@ -856,13 +970,16 @@ export default class BundleGenerator {
 
     for (const [dependencyName, entry] of usageIndex.entries()) {
       if ((entry?.bundleCount || 0) < this.config.minVendorSharedUsage) continue;
-      const transformedContent = this.transformDependencyContent(
-        entry?.content || '',
-        '__sliceVendorSharedProbe',
-        dependencyName
-      );
-      const transformedSize = Buffer.byteLength(transformedContent, 'utf-8');
-      if (transformedSize < this.config.minVendorSharedTransformedSize) continue;
+      // External deps are already fully-bundled esbuild expressions — measure
+      // them directly. Relative helper modules are measured after the export
+      // rewrite, matching how they will actually be emitted.
+      const measuredSize = entry?.external
+        ? Buffer.byteLength(entry?.content || '', 'utf-8')
+        : Buffer.byteLength(
+            this.transformDependencyContent(entry?.content || '', '__sliceVendorSharedProbe', dependencyName),
+            'utf-8'
+          );
+      if (measuredSize < this.config.minVendorSharedTransformedSize) continue;
       shared.add(dependencyName);
     }
 
@@ -873,10 +990,14 @@ export default class BundleGenerator {
     const selectedModules = Array.from(sharedDependencySet)
       .sort((a, b) => a.localeCompare(b))
       .map((dependencyName) => {
-        const fromUsage = this.vendorShared.dependencyUsage.get(dependencyName)?.content;
-        const fromCollected = this.vendorShared.dependencyModules.get(dependencyName)?.content;
-        const content = fromUsage || fromCollected || '';
-        return { name: dependencyName, content };
+        const usageEntry = this.vendorShared.dependencyUsage.get(dependencyName);
+        const collectedEntry = this.vendorShared.dependencyModules.get(dependencyName);
+        const content = usageEntry?.content || collectedEntry?.content || '';
+        // External modules are emitted from their pre-bundled expression (looked
+        // up by name in buildV2DependencyModuleBlockFromModules), so the flag
+        // must survive here.
+        const external = !!(usageEntry?.external || collectedEntry?.external);
+        return { name: dependencyName, content, external };
       })
       .filter((entry) => !!entry.content);
 
@@ -894,20 +1015,15 @@ export default class BundleGenerator {
   }
 
   async createVendorSharedDependencyBundleFile(sharedDependencySet) {
-    const fileName = this.vendorShared.file;
-    const filePath = path.join(this.bundlesPath, fileName);
+    const baseFileName = this.vendorShared.file;
     const bundleContent = this.generateVendorSharedDependencyBundleContent(sharedDependencySet);
-    const finalContent = await this.applyBundleTransforms(bundleContent, fileName);
-    await fs.ensureDir(path.dirname(filePath));
-    await fs.writeFile(filePath, finalContent, 'utf-8');
-
-    const hash = crypto.createHash('sha256').update(finalContent).digest('hex');
+    const { file, path: filePath, hash, rawSize } = await this.emitBundleArtifact(baseFileName, bundleContent);
 
     return {
       name: 'vendor-shared',
-      file: fileName,
+      file,
       path: filePath,
-      size: Buffer.byteLength(bundleContent, 'utf-8'),
+      size: rawSize,
       hash,
       integrity: `sha256:${hash}`,
       componentCount: 0
@@ -919,39 +1035,41 @@ export default class BundleGenerator {
    */
   async createBundleFile(components, type, routePath) {
     const routeKey = routePath ? this.routeToFileName(routePath) : 'critical';
-    const fileName = `slice-bundle.${routeKey}.js`;
-    const filePath = path.join(this.bundlesPath, fileName);
+    const baseFileName = `slice-bundle.${routeKey}.js`;
 
     const bundleContent = await this.generateBundleContent(
       components,
       type,
       routePath,
       routeKey,
-      fileName
+      baseFileName
     );
 
-    const finalContent = await this.applyBundleTransforms(bundleContent, fileName);
-
-    await fs.ensureDir(path.dirname(filePath));
-    await fs.writeFile(filePath, finalContent, 'utf-8');
-
-    const hash = crypto.createHash('sha256').update(finalContent).digest('hex');
+    const { file, path: filePath, hash, rawSize } = await this.emitBundleArtifact(baseFileName, bundleContent);
 
     return {
       name: routeKey,
-      file: fileName,
+      file,
       path: filePath,
-      size: Buffer.byteLength(bundleContent, 'utf-8'),
+      size: rawSize,
       hash,
       componentCount: components.length
     };
   }
 
+  /**
+   * Minifies/obfuscates a bundle and (when `--sourcemap` is on) produces a
+   * source map. Returns `{ code, map }`; `map` is the raw source-map JSON string
+   * or null. The `//# sourceMappingURL` comment is NOT appended here — the
+   * caller does that once it knows the final (possibly hashed) filename.
+   * @returns {Promise<{ code: string, map: string|null }>}
+   */
   async applyBundleTransforms(bundleContent, fileName) {
     if (!this.options.minify && !this.options.obfuscate) {
-      return bundleContent;
+      return { code: bundleContent, map: null };
     }
 
+    const wantMap = !!this.options.sourcemap;
     const options = {
       parse: {
         ecma: 2022
@@ -970,7 +1088,11 @@ export default class BundleGenerator {
       format: {
         comments: false,
         ecma: 2022
-      }
+      },
+      // Map the minified output back to the readable pre-minified bundle
+      // (embedded via includeSources so DevTools shows it without a sidecar
+      // source). The URL comment is appended by the caller.
+      ...(wantMap ? { sourceMap: { includeSources: true, filename: fileName } } : {})
     };
 
     let result;
@@ -1003,9 +1125,311 @@ export default class BundleGenerator {
       throw new Error(`Terser failed for ${fileName}: ${result.error.message}. Saved bundle to ${tmpPath}`);
     }
 
-    return result.code || bundleContent;
+    return { code: result.code || bundleContent, map: wantMap ? (result.map || null) : null };
   }
 
+  /**
+   * Inserts an 8-char content hash into a bundle filename for cache-busting
+   * (`slice-bundle.home.js` → `slice-bundle.home.a1b2c3d4.js`), matching how
+   * traditional bundlers name immutable assets. Only active under `--hash-filenames`.
+   */
+  hashBundleFileName(baseFileName, code) {
+    if (!this.options.hashFilenames) return baseFileName;
+    const hash = crypto.createHash('sha256').update(code).digest('hex').slice(0, 8);
+    return baseFileName.replace(/\.js$/, `.${hash}.js`);
+  }
+
+  /**
+   * Central bundle writer: transforms the raw content, resolves the final
+   * (optionally content-hashed) filename, appends the source-map URL + writes the
+   * `.map` when enabled, writes the `.js`, and returns the emitted name + paths +
+   * integrity hash. Every bundle file (route, critical, vendor-shared, framework)
+   * goes through here so cache-busting and source maps apply uniformly.
+   * @returns {Promise<{ file: string, path: string, hash: string, rawSize: number }>}
+   */
+  async emitBundleArtifact(baseFileName, rawContent) {
+    const { code, map } = await this.applyBundleTransforms(rawContent, baseFileName);
+    const fileName = this.hashBundleFileName(baseFileName, code);
+    let finalCode = code;
+    if (map) {
+      finalCode += `\n//# sourceMappingURL=${fileName}.map\n`;
+    }
+    const filePath = path.join(this.bundlesPath, fileName);
+    await fs.ensureDir(path.dirname(filePath));
+    await fs.writeFile(filePath, finalCode, 'utf-8');
+    if (map) {
+      await fs.writeFile(path.join(this.bundlesPath, `${fileName}.map`), map, 'utf-8');
+    }
+    const hash = crypto.createHash('sha256').update(finalCode).digest('hex');
+    return { file: fileName, path: filePath, hash, rawSize: Buffer.byteLength(rawContent, 'utf-8') };
+  }
+
+
+  /**
+   * Bare-package (node_modules) imports are always resolved and bundled — no
+   * configuration needed, mirroring how a React/Vite project imports npm
+   * packages. Kept as a method so call sites read intently.
+   */
+  isExternalDependenciesEnabled() {
+    return true;
+  }
+
+  /**
+   * Every resolvable bare specifier is allowed. Retained so call sites are
+   * uniform; there is no allowlist to configure.
+   */
+  isExternalAllowed() {
+    return true;
+  }
+
+  getExternalBundler() {
+    if (!this.externalBundler) {
+      this.externalBundler = new ExternalModuleBundler({
+        resolveDir: getProjectRoot(this.moduleUrl),
+        minify: this.options.minify
+      });
+    }
+    return this.externalBundler;
+  }
+
+  /**
+   * Extracts bare-package imports from a component's source. Returns one entry
+   * per unique bare specifier with the merged local bindings and whether any
+   * consumer needs the default export (default import or namespace import).
+   * @param {string} code
+   * @returns {Array<{ name: string, bindings: Array, needsDefault: boolean }>}
+   */
+  analyzeBareImports(code) {
+    const byName = new Map();
+
+    const record = (name, bindings, needsDefault) => {
+      if (!ExternalModuleBundler.isBareSpecifier(name)) return;
+      if (!this.isExternalAllowed(name)) return;
+      if (!byName.has(name)) {
+        byName.set(name, { name, bindings: [], needsDefault: false });
+      }
+      const entry = byName.get(name);
+      entry.bindings.push(...bindings);
+      entry.needsDefault = entry.needsDefault || needsDefault;
+    };
+
+    try {
+      const ast = parse(code, { sourceType: 'module', plugins: ['jsx'] });
+      traverse.default(ast, {
+        ImportDeclaration(pathNode) {
+          const source = pathNode.node.source?.value;
+          if (typeof source !== 'string') return;
+
+          const bindings = [];
+          let needsDefault = false;
+
+          for (const spec of pathNode.node.specifiers || []) {
+            if (spec.type === 'ImportDefaultSpecifier') {
+              bindings.push({ type: 'default', importedName: 'default', localName: spec.local.name });
+              needsDefault = true;
+            } else if (spec.type === 'ImportNamespaceSpecifier') {
+              bindings.push({ type: 'namespace', localName: spec.local.name });
+              needsDefault = true; // namespace may read `.default`
+            } else if (spec.type === 'ImportSpecifier') {
+              bindings.push({
+                type: 'named',
+                importedName: spec.imported?.name ?? spec.imported?.value,
+                localName: spec.local.name
+              });
+            }
+          }
+
+          record(source, bindings, needsDefault);
+        },
+
+        // Re-exports from a bare package (`export * from 'pkg'`,
+        // `export { default as X } from 'pkg'`). record() ignores relative
+        // sources, so this only registers the package for bundling; the emission
+        // is handled in transformDependencyStatement.
+        ExportAllDeclaration(pathNode) {
+          const source = pathNode.node.source?.value;
+          if (typeof source === 'string') record(source, [], false);
+        },
+
+        ExportNamedDeclaration(pathNode) {
+          const source = pathNode.node.source?.value;
+          if (typeof source !== 'string') return;
+          // `export { default as X } from 'pkg'` needs the package default built.
+          const needsDefault = (pathNode.node.specifiers || []).some((s) => s.local?.name === 'default');
+          record(source, [], needsDefault);
+        },
+
+        // Dynamic `import('pkg')` — resolves to a module namespace at runtime, so
+        // register it (no static bindings) and request the default so the
+        // namespace exposes `.default` when the package has one.
+        CallExpression(pathNode) {
+          const node = pathNode.node;
+          if (node.callee?.type === 'Import' && node.arguments?.[0]?.type === 'StringLiteral') {
+            record(node.arguments[0].value, [], true);
+          }
+        }
+      });
+    } catch (error) {
+      console.warn(`Warning: Could not analyze bare imports: ${error.message}`);
+    }
+
+    return Array.from(byName.values());
+  }
+
+  /**
+   * Rewrites dynamic `import('pkg')` of bare packages to resolve from the
+   * bundle's registered dependencies (vendor-shared first, then the local
+   * SLICE_BUNDLE_DEPENDENCIES). Relative/absolute dynamic imports are left
+   * untouched.
+   * @param {string} code
+   * @returns {string}
+   */
+  rewriteDynamicExternalImports(code) {
+    if (!this.isExternalDependenciesEnabled()) return code;
+
+    let ast;
+    try {
+      ast = parse(code, { sourceType: 'module', plugins: ['jsx'] });
+    } catch {
+      return code;
+    }
+
+    const edits = [];
+    const isAllowedBare = (spec) =>
+      ExternalModuleBundler.isBareSpecifier(spec) && this.isExternalAllowed(spec);
+
+    traverse.default(ast, {
+      CallExpression: (pathNode) => {
+        const node = pathNode.node;
+        if (
+          node.callee?.type === 'Import' &&
+          node.arguments?.[0]?.type === 'StringLiteral' &&
+          typeof node.start === 'number' &&
+          typeof node.end === 'number'
+        ) {
+          const spec = node.arguments[0].value;
+          if (isAllowedBare(spec)) {
+            edits.push({ start: node.start, end: node.end, spec });
+          }
+        }
+      }
+    });
+
+    if (edits.length === 0) return code;
+
+    // Apply from the end so earlier offsets stay valid.
+    edits.sort((a, b) => b.start - a.start);
+    let out = code;
+    for (const { start, end, spec } of edits) {
+      const key = JSON.stringify(spec);
+      const replacement =
+        `Promise.resolve((typeof window!=="undefined"&&window.__SLICE_SHARED_DEPS__&&${key} in window.__SLICE_SHARED_DEPS__)` +
+        `?window.__SLICE_SHARED_DEPS__[${key}]:SLICE_BUNDLE_DEPENDENCIES[${key}])`;
+      out = out.slice(0, start) + replacement + out.slice(end);
+    }
+    return out;
+  }
+
+  /**
+   * Builds the per-component external-dependency map for bare imports, keyed by
+   * bare specifier. Shaped to slot alongside the relative-dependency map so the
+   * existing binding/registration machinery treats both uniformly.
+   * @param {string} code
+   * @returns {Record<string, { external: true, bindings: Array, needsDefault: boolean }>}
+   */
+  collectComponentBareDependencies(code) {
+    if (!this.isExternalDependenciesEnabled()) return {};
+    const out = {};
+    for (const imp of this.analyzeBareImports(code)) {
+      out[imp.name] = { external: true, bindings: imp.bindings, needsDefault: imp.needsDefault };
+    }
+    return out;
+  }
+
+  /**
+   * Collects every bare (node_modules) import reachable from an entry file,
+   * following relative helper imports transitively. Returns a map of
+   * packageName -> needsDefault (aggregated across all reachable sites).
+   * @param {string} entryPath absolute path to the component's entry .js
+   * @returns {Promise<Map<string, boolean>>}
+   */
+  async collectReachableBareImports(entryPath) {
+    const found = new Map();
+    const visited = new Set();
+
+    const walk = async (filePath) => {
+      if (visited.has(filePath)) return;
+      visited.add(filePath);
+
+      let code;
+      try {
+        code = await fs.readFile(filePath, 'utf-8');
+      } catch {
+        return;
+      }
+
+      for (const imp of this.analyzeBareImports(code)) {
+        found.set(imp.name, (found.get(imp.name) || false) || imp.needsDefault);
+      }
+      // Follow relative helper modules so packages imported only by a helper
+      // are discovered too.
+      for (const dep of this.analyzeDependencies(code, path.dirname(filePath))) {
+        await walk(dep.path);
+      }
+    };
+
+    await walk(entryPath);
+    return found;
+  }
+
+  /**
+   * Resolves and bundles every bare import used across the app's components with
+   * esbuild, once per package, before bundle files are emitted. needsDefault is
+   * aggregated globally so a package default-imported anywhere is always built
+   * with its default export available. Bare imports inside relative helper
+   * modules are discovered transitively.
+   */
+  async prepareExternalModules() {
+    if (!this.isExternalDependenciesEnabled()) return;
+
+    const needsDefault = new Map();
+    for (const comp of this.analysisData.components || []) {
+      const fileBaseName = comp.fileName || comp.name;
+      const jsPath = path.join(comp.path, `${fileBaseName}.js`);
+      if (!await fs.pathExists(jsPath)) continue;
+      const reachable = await this.collectReachableBareImports(jsPath);
+      for (const [name, nd] of reachable) {
+        needsDefault.set(name, (needsDefault.get(name) || false) || nd);
+      }
+    }
+
+    if (needsDefault.size === 0) return;
+
+    console.log(`📦 Resolving ${needsDefault.size} external dependenc${needsDefault.size === 1 ? 'y' : 'ies'} from node_modules...`);
+
+    for (const [name, nd] of needsDefault) {
+      try {
+        const { expression, warnings } = await this.getExternalBundler().bundle(name, { needsDefault: nd });
+        this.externalModulesByName.set(name, expression);
+        warnings.forEach((w) => console.warn(`Warning: [external:${name}] ${w}`));
+        console.log(`  ✓ ${name}`);
+      } catch (error) {
+        this.externalResolutionErrors.set(name, error.message);
+        console.warn(`Warning: ${error.message}`);
+        console.warn(`  Components importing "${name}" will fail at runtime unless it is provided another way (a file under src/public/).`);
+      }
+    }
+
+    // In strict mode, any unresolved dependency fails the build so a broken
+    // bundle never ships silently.
+    if (this.strictExternal && this.externalResolutionErrors.size > 0) {
+      const names = Array.from(this.externalResolutionErrors.keys()).sort().join(', ');
+      throw new Error(
+        `Strict external dependencies: ${this.externalResolutionErrors.size} package(s) could not be resolved from node_modules: ${names}. ` +
+        `Install them or remove the imports.`
+      );
+    }
+  }
 
   /**
    * Analyzes dependencies of a JavaScript file using simple regex
@@ -1077,8 +1501,28 @@ export default class BundleGenerator {
 
           dependencies.push({
             path: resolvedPath,
-            bindings
+            bindings,
+            specifier: importPath
           });
+        },
+
+        // Re-export edges to a RELATIVE module (`export * from './x'`,
+        // `export { a, b as c } from './x'`). These must inline + register the
+        // target so the re-export can resolve at eval time; the exact binding
+        // mapping is read back from the statement in transformDependencyStatement,
+        // so no bindings need to be carried here.
+        ExportNamedDeclaration(pathNode) {
+          const src = pathNode.node.source?.value;
+          if (typeof src !== 'string' || (!src.startsWith('./') && !src.startsWith('../'))) return;
+          const resolvedPath = resolveImportPath(src);
+          if (resolvedPath) dependencies.push({ path: resolvedPath, bindings: [], specifier: src });
+        },
+
+        ExportAllDeclaration(pathNode) {
+          const src = pathNode.node.source?.value;
+          if (typeof src !== 'string' || (!src.startsWith('./') && !src.startsWith('../'))) return;
+          const resolvedPath = resolveImportPath(src);
+          if (resolvedPath) dependencies.push({ path: resolvedPath, bindings: [], specifier: src });
         }
       });
     } catch (error) {
@@ -1116,6 +1560,11 @@ export default class BundleGenerator {
 
       const cleanedJavaScript = this.cleanJavaScript(jsContent, comp.name, jsPath);
 
+      // buildDependencyContents returns both relative helper modules (keyed by
+      // src-relative path) and bare node_modules imports (keyed by bare
+      // specifier, discovered in the component and its relative helpers).
+      const externalDependencies = await this.buildDependencyContents(jsContent, comp.path);
+
       bundleComponents.push({
         name: comp.name,
         category: comp.category,
@@ -1124,7 +1573,7 @@ export default class BundleGenerator {
         hoistedImports: cleanedJavaScript.hoistedImports,
         html: htmlContent,
         css: cssContent,
-        externalDependencies: await this.buildDependencyContents(jsContent, comp.path),
+        externalDependencies,
         size: comp.size
       });
     }
@@ -1154,9 +1603,13 @@ export default class BundleGenerator {
 
     const dependencyModules = this.collectDependencyModulesFromComponents(uniqueComponents);
     const isRouteBundle = type === 'route';
+    // The critical bundle also resolves from vendor-shared when it uses a shared
+    // dependency (see prepareVendorSharedDependencies): it loads vendor-shared
+    // first and omits its own inline copy, exactly like a route bundle.
+    const usesVendorShared = isRouteBundle || (type === 'critical' && this.vendorShared.criticalUsesShared);
     const dependencyModuleBlock = this.buildV2DependencyModuleBlock(uniqueComponents, {
-      includeSharedResolver: isRouteBundle,
-      omittedDependencies: isRouteBundle ? this.vendorShared.sharedDependencySet : null
+      includeSharedResolver: usesVendorShared,
+      omittedDependencies: usesVendorShared ? this.vendorShared.sharedDependencySet : null
     });
     const rawHoistedImports = uniqueComponents
       .flatMap((component) => component.hoistedImports || [])
@@ -1177,7 +1630,7 @@ export default class BundleGenerator {
       .map((component) => {
         const factoryName = this.classFactoryName(component.name);
         const dependencyBindings = this.buildDependencyBindings(component.externalDependencies || {}, {
-          preferShared: isRouteBundle
+          preferShared: usesVendorShared
         });
         const body = component.js && component.js.trim()
           ? component.js
@@ -1263,12 +1716,41 @@ export default class BundleGenerator {
       lines.push(...this.getBundleDependencyResolverLines());
     }
     filteredModules.forEach((module, index) => {
+      // External (node_modules) modules are emitted from their pre-bundled
+      // esbuild expression, which already yields a module-namespace-like object
+      // (named exports + a `default` key). No Babel export-rewriting needed.
+      if (module.external) {
+        const expression = this.externalModulesByName.get(module.name);
+        lines.push(`// External dependency: ${module.name}`);
+        if (expression) {
+          lines.push(`SLICE_BUNDLE_DEPENDENCIES[${JSON.stringify(module.name)}] = ${expression};`);
+        } else {
+          // Resolution failed earlier (already warned). Emit an empty namespace
+          // so the bundle still evaluates; the binding resolves to undefined.
+          lines.push(`SLICE_BUNDLE_DEPENDENCIES[${JSON.stringify(module.name)}] = {};`);
+        }
+        return;
+      }
+
       const exportVar = `__sliceDepExports${index}`;
       // Evaluate each dependency inside its own IIFE so its private,
       // non-exported top-level bindings stay local and cannot collide with
       // another dependency's (or the bundle's) identifiers. Only the exports
       // object escapes the closure.
-      const transformedContent = this.transformDependencyContent(module.content, '__sliceExports', module.name);
+      // Map each relative import/re-export specifier this module used to the
+      // src-relative key it was registered under, so a re-export resolves its
+      // source without touching the filesystem.
+      const specifierToKey = new Map(
+        (module.moduleImports || [])
+          .filter((mi) => mi.specifier && mi.depName)
+          .map((mi) => [mi.specifier, mi.depName])
+      );
+      const transformedContent = this.transformDependencyContent(module.content, '__sliceExports', module.name, {
+        // A re-export inside this helper must resolve its source through the same
+        // shared resolver the bundle uses, since the source may live in vendor-shared.
+        preferShared: !!options.includeSharedResolver,
+        specifierToKey
+      });
       // Bind this module's own (transitive) imports inside its IIFE — they were
       // registered by earlier modules in the topological order.
       const importBindings = this.buildDependencyBindings(
@@ -1321,9 +1803,25 @@ export default class BundleGenerator {
     const resolveModule = async (content, basePath) => {
       const consumerImports = [];
 
+      // Bare (node_modules) imports of THIS module. They become moduleImports of
+      // the consumer (so a helper's IIFE binds them from SLICE_BUNDLE_DEPENDENCIES)
+      // and are registered once as external modules keyed by bare name.
+      if (this.isExternalDependenciesEnabled()) {
+        for (const bare of this.analyzeBareImports(content)) {
+          consumerImports.push({ depName: bare.name, bindings: bare.bindings || [], external: true });
+          if (!dependencyContents[bare.name]) {
+            dependencyContents[bare.name] = { external: true, bindings: [], needsDefault: false };
+          }
+          dependencyContents[bare.name].needsDefault =
+            dependencyContents[bare.name].needsDefault || bare.needsDefault;
+        }
+      }
+
       for (const dep of this.analyzeDependencies(content, basePath)) {
         const depName = path.relative(this.srcPath, dep.path).replace(/\\/g, '/');
-        consumerImports.push({ depName, bindings: dep.bindings || [] });
+        // Carry the original specifier so a re-export (`export … from './x'`) can
+        // map it back to the registered key without touching the filesystem.
+        consumerImports.push({ depName, bindings: dep.bindings || [], specifier: dep.specifier });
 
         if (visited.has(depName)) continue;
         visited.add(depName);
@@ -1342,10 +1840,17 @@ export default class BundleGenerator {
     };
 
     const directImports = await resolveModule(jsContent, componentPath);
-    // The component's direct imports drive its class-factory bindings.
-    for (const { depName, bindings } of directImports) {
-      if (dependencyContents[depName]) {
-        dependencyContents[depName].bindings = bindings;
+    // The component's direct imports drive its class-factory bindings. For a
+    // package the component imports directly, those bindings belong on the
+    // external entry; helper-only packages keep empty component-level bindings
+    // (their bindings live in the helper's moduleImports).
+    for (const { depName, bindings, external } of directImports) {
+      const entry = dependencyContents[depName];
+      if (!entry) continue;
+      if (external) {
+        entry.bindings = (entry.bindings || []).concat(bindings || []);
+      } else {
+        entry.bindings = bindings;
       }
     }
 
@@ -1366,6 +1871,11 @@ export default class BundleGenerator {
     });
     const hoistedImports = stripped.hoistedImports || [];
     code = stripped.code;
+
+    // Rewrite dynamic `import('pkg')` of bare packages so they resolve from the
+    // registered dependency at runtime (native dynamic import of a bare
+    // specifier has no resolver in the built output).
+    code = this.rewriteDynamicExternalImports(code);
 
     // Guard customElements.define to avoid duplicate registrations
     code = code.replace(
@@ -1523,6 +2033,12 @@ if (window.slice && window.slice.controller) {
       const externalDependencies = component.externalDependencies || {};
       for (const [moduleName, entry] of Object.entries(externalDependencies)) {
         if (modules.has(moduleName)) continue;
+        // External (node_modules) modules carry no inline content — they are
+        // emitted from the pre-bundled esbuild expression keyed by bare name.
+        if (entry && typeof entry === 'object' && entry.external) {
+          modules.set(moduleName, { name: moduleName, external: true, content: null, moduleImports: [] });
+          continue;
+        }
         const content = typeof entry === 'string' ? entry : entry?.content;
         if (!content) continue;
         const moduleImports = (entry && typeof entry === 'object' ? entry.moduleImports : null) || [];
@@ -1536,7 +2052,35 @@ if (window.slice && window.slice.controller) {
     return (dependencyModules || []).map((_, index) => `__sliceDepExports${index}`);
   }
 
-  transformDependencyContent(content, exportVar, moduleName) {
+  /**
+   * A relative `.json` dependency (`import cfg from './data.json'`) is data, not
+   * a JS module. Embed it as a literal (JSON is a subset of JS expression
+   * syntax): the whole document as the `default` export, plus each top-level key
+   * as a named export (matching how Vite/webpack expose JSON).
+   */
+  transformJsonModule(content, exportVar) {
+    const trimmed = String(content).trim();
+    try {
+      JSON.parse(trimmed || 'null');
+    } catch (error) {
+      console.warn(`Warning: Invalid JSON dependency: ${error.message}. Emitting empty exports.`);
+      return `${exportVar}.default = {};`;
+    }
+    const literal = trimmed || 'null';
+    return [
+      `const __sliceJson = ${literal};`,
+      `${exportVar}.default = __sliceJson;`,
+      `if (__sliceJson && typeof __sliceJson === "object" && !Array.isArray(__sliceJson)) { for (const __k in __sliceJson) { if (__k !== "default") ${exportVar}[__k] = __sliceJson[__k]; } }`
+    ].join('\n');
+  }
+
+  transformDependencyContent(content, exportVar, moduleName, options = {}) {
+    // A `.json` dependency is data — embed it directly instead of parsing it as
+    // a JS module (which would drop its contents).
+    if (typeof moduleName === 'string' && moduleName.endsWith('.json')) {
+      return this.transformJsonModule(content, exportVar);
+    }
+
     let ast;
     try {
       ast = parse(content, { sourceType: 'module', plugins: ['jsx'] });
@@ -1555,11 +2099,67 @@ if (window.slice && window.slice.controller) {
     let output = '';
     for (const node of statements) {
       output += content.slice(cursor, node.start);
-      output += this.transformDependencyStatement(node, content, exportVar, moduleName, fallbackKey);
+      output += this.transformDependencyStatement(node, content, exportVar, moduleName, fallbackKey, options);
       cursor = node.end;
     }
     output += content.slice(cursor);
     return output;
+  }
+
+  /** RHS member access on a resolved dependency object: `.name` or `["weird-name"]`. */
+  describeMemberAccess(name) {
+    return /^[A-Za-z_$][\w$]*$/.test(name) ? `.${name}` : `[${JSON.stringify(name)}]`;
+  }
+
+  /**
+   * Resolves a relative import specifier written inside a bundled helper module
+   * to the src-relative key it was registered under (matching analyzeDependencies'
+   * depName computation), so a re-export can look it up in SLICE_BUNDLE_DEPENDENCIES.
+   * @param {string} moduleName the helper's own src-relative path
+   * @param {string} spec relative specifier (e.g. './x', '../lib/y.js')
+   * @returns {string|null}
+   */
+  resolveRelativeModuleKey(moduleName, spec) {
+    try {
+      const moduleDir = path.dirname(path.join(this.srcPath, moduleName));
+      let resolved = path.resolve(moduleDir, spec);
+      if (!path.extname(resolved)) {
+        for (const ext of ['.js', '.json', '.mjs']) {
+          if (fs.existsSync(resolved + ext)) { resolved = resolved + ext; break; }
+        }
+      }
+      if (!fs.existsSync(resolved)) return null;
+      return path.relative(this.srcPath, resolved).replace(/\\/g, '/');
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * JS expression that yields the exports object of a re-export source, or null
+   * if it can't be resolved (absolute/URL source, or a missing relative file).
+   * Bare packages resolve by name; relative helpers resolve to their registered
+   * key. Honors the shared resolver when the bundle uses vendor-shared.
+   * @param {string} moduleName re-exporting helper's src-relative path
+   * @param {string} src the re-export source specifier
+   * @param {boolean} preferShared
+   * @returns {string|null}
+   */
+  reexportDependencyExpression(moduleName, src, preferShared, specifierToKey = null) {
+    if (typeof src !== 'string') return null;
+    const keyFor = (name) => preferShared
+      ? `__sliceResolveBundleDependency(${JSON.stringify(name)})`
+      : `SLICE_BUNDLE_DEPENDENCIES[${JSON.stringify(name)}]`;
+    if (ExternalModuleBundler.isBareSpecifier(src)) {
+      return keyFor(src);
+    }
+    if (src.startsWith('.')) {
+      // Prefer the already-resolved key recorded on the module's import edges
+      // (fs-free, exact match); fall back to resolving against the filesystem.
+      const key = (specifierToKey && specifierToKey.get(src)) || this.resolveRelativeModuleKey(moduleName, src);
+      return key ? keyFor(key) : null;
+    }
+    return null; // absolute / URL re-export is unsupported
   }
 
   describeExportTarget(exportVar, name) {
@@ -1628,8 +2228,10 @@ if (window.slice && window.slice.controller) {
     return sourceOf(decl);
   }
 
-  transformDependencyStatement(node, content, exportVar, moduleName, fallbackKey) {
+  transformDependencyStatement(node, content, exportVar, moduleName, fallbackKey, options = {}) {
     const sourceOf = (n) => content.slice(n.start, n.end);
+    const preferShared = !!options.preferShared;
+    const specifierToKey = options.specifierToKey || null;
 
     if (node.type === 'ImportDeclaration') {
       // Transitive imports of a bundled dependency cannot be resolved at
@@ -1642,11 +2244,22 @@ if (window.slice && window.slice.controller) {
     }
 
     if (node.type === 'ExportAllDeclaration') {
-      console.warn(this.buildImportWarningMessage(
-        `Warning: Dropping unsupported 'export *' inside bundled dependency: ${node.source?.value}`,
-        moduleName
-      ));
-      return '';
+      // `export * from './x'` (or 'pkg') — copy every own enumerable export of
+      // the resolved module except `default` (per the ESM spec) onto the exports
+      // object. The source module is registered earlier by the topological order.
+      const depExpr = this.reexportDependencyExpression(moduleName, node.source?.value, preferShared, specifierToKey);
+      if (!depExpr) {
+        console.warn(this.buildImportWarningMessage(
+          `Warning: Dropping unresolvable 'export *' inside bundled dependency: ${node.source?.value}`,
+          moduleName
+        ));
+        return '';
+      }
+      const tmp = `__sliceReexportAll_${node.start}`;
+      return [
+        `const ${tmp} = ${depExpr};`,
+        `for (const __k of Object.keys(${tmp})) { if (__k !== "default") ${exportVar}[__k] = ${tmp}[__k]; }`
+      ].join('\n');
     }
 
     if (node.type === 'ExportDefaultDeclaration') {
@@ -1662,11 +2275,27 @@ if (window.slice && window.slice.controller) {
 
     if (node.type === 'ExportNamedDeclaration') {
       if (node.source) {
-        console.warn(this.buildImportWarningMessage(
-          `Warning: Dropping unsupported re-export inside bundled dependency: ${node.source.value}`,
-          moduleName
-        ));
-        return '';
+        // `export { a, b as c } from './x'` (or 'pkg') — map each PUBLIC name to
+        // the corresponding member of the resolved module's exports object.
+        const depExpr = this.reexportDependencyExpression(moduleName, node.source.value, preferShared, specifierToKey);
+        if (!depExpr) {
+          console.warn(this.buildImportWarningMessage(
+            `Warning: Dropping unresolvable re-export inside bundled dependency: ${node.source.value}`,
+            moduleName
+          ));
+          return '';
+        }
+        const tmp = `__sliceReexport_${node.start}`;
+        const lines = [`const ${tmp} = ${depExpr};`];
+        for (const spec of node.specifiers || []) {
+          // ExportSpecifier: `local` is the name in the source module, `exported`
+          // is the public name. `export { default as X }` maps X <- tmp.default.
+          const localName = spec.local?.name ?? spec.local?.value;
+          const exportedName = spec.exported?.name ?? spec.exported?.value;
+          if (!localName || !exportedName) continue;
+          lines.push(`${this.describeExportTarget(exportVar, exportedName)} = ${tmp}${this.describeMemberAccess(localName)};`);
+        }
+        return lines.join('\n');
       }
 
       if (node.declaration) {
@@ -1841,7 +2470,7 @@ if (window.slice && window.slice.controller) {
       minified: this.options.minify,
       obfuscated: this.options.obfuscate,
       production: true,
-      generated: new Date().toISOString(),
+      generated: resolveBuildTimestamp(),
 
       stats: {
         totalComponents: metrics.totalComponents || 0,
@@ -1868,7 +2497,7 @@ if (window.slice && window.slice.controller) {
           ? {
               bundleKey: 'vendor-shared',
               type: 'vendor-shared',
-              file: this.vendorShared.file,
+              file: this.vendorShared.bundle?.file || this.vendorShared.file,
               size: this.vendorShared.bundle?.size || 0,
               hash: this.vendorShared.bundle?.hash || null,
               integrity: this.vendorShared.bundle?.integrity || null,
@@ -1882,7 +2511,10 @@ if (window.slice && window.slice.controller) {
           size: this.bundles.critical.size,
           hash: this.bundles.critical.hash || null,
           integrity: this.bundles.critical.integrity || null,
-          components: this.bundles.critical.components.map(c => c.name)
+          components: this.bundles.critical.components.map(c => c.name),
+          // When critical uses a shared dependency it must load vendor-shared
+          // first so the shared resolver finds it at registration time.
+          ...(this.vendorShared.criticalUsesShared ? { dependencies: ['vendor-shared'] } : {})
         },
         routes: {}
       },
@@ -1903,7 +2535,9 @@ if (window.slice && window.slice.controller) {
 
       config.bundles.routes[key] = {
         path: bundle.path || bundle.paths || key, // Support both single path and array of paths, fallback to key
-        file: `slice-bundle.${this.routeToFileName(routeIdentifier)}.js`,
+        // Prefer the emitted (possibly content-hashed) filename; fall back to the
+        // deterministic name when the bundle wasn't emitted through the writer.
+        file: bundle.file || `slice-bundle.${this.routeToFileName(routeIdentifier)}.js`,
         size: bundle.size,
         hash: bundle.hash || null,
         integrity: bundle.integrity || null,
@@ -1964,6 +2598,39 @@ if (window.slice && window.slice.controller) {
     return config;
   }
 
+  /**
+   * Checks that the generated config is self-consistent: every bundle key
+   * referenced (in `routeBundles` or a bundle's `dependencies`) is actually
+   * emitted, and no emitted route bundle is orphaned (referenced by nothing).
+   * Guards against the class of bug where splitting/merging a bundle leaves
+   * dangling by-key references or dead files.
+   * @returns {{ dangling: string[], orphans: string[] }}
+   */
+  collectBundleReferentialIssues(config) {
+    const valid = new Set(['critical', 'framework']);
+    if (config?.bundles?.vendorShared) valid.add('vendor-shared');
+    for (const key of Object.keys(config?.bundles?.routes || {})) valid.add(key);
+
+    const dangling = new Set();
+    const referenced = new Set();
+    const note = (key) => {
+      if (!key) return;
+      if (key !== 'critical') referenced.add(key);
+      if (!valid.has(key)) dangling.add(key);
+    };
+
+    for (const list of Object.values(config?.routeBundles || {})) {
+      for (const key of list || []) note(key);
+    }
+    for (const entry of Object.values(config?.bundles?.routes || {})) {
+      for (const dep of entry?.dependencies || []) note(dep);
+    }
+    for (const dep of config?.bundles?.critical?.dependencies || []) note(dep);
+
+    const orphans = Object.keys(config?.bundles?.routes || {}).filter((key) => !referenced.has(key));
+    return { dangling: [...dangling].sort(), orphans: orphans.sort() };
+  }
+
   collectFrameworkComponents() {
     return this.analysisData.components.filter((comp) => comp.isFramework);
   }
@@ -1983,7 +2650,7 @@ if (window.slice && window.slice.controller) {
       route: null,
       bundleKey: 'framework',
       file: fileName,
-      generated: new Date().toISOString(),
+      generated: resolveBuildTimestamp(),
       totalSize: components.reduce((sum, c) => sum + c.size, 0),
       componentCount: components.length,
       strategy: this.config.strategy,
@@ -2020,17 +2687,13 @@ if (window.slice && window.slice.controller) {
 
     const prelude = `const components = ${JSON.stringify(componentsMap)};`;
     const bundleContent = `${prelude}\n${this.formatBundleFile(componentsData, metadata)}`;
-    const finalContent = await this.applyBundleTransforms(bundleContent, fileName);
-    await fs.ensureDir(path.dirname(filePath));
-    await fs.writeFile(filePath, finalContent, 'utf-8');
-
-    const hash = crypto.createHash('sha256').update(finalContent).digest('hex');
+    const { file, hash, rawSize } = await this.emitBundleArtifact(fileName, bundleContent);
     const integrity = `sha256:${hash}`;
 
     return {
       name: 'framework',
-      file: fileName,
-      size: Buffer.byteLength(bundleContent, 'utf-8'),
+      file,
+      size: rawSize,
       hash,
       integrity,
       componentCount: components.length,
@@ -2061,33 +2724,6 @@ if (window.slice && window.slice.controller) {
     return dependencyContents;
   }
 
-  getConfiguredPublicFolders() {
-    const publicFolders = Array.isArray(this.sliceConfig?.publicFolders)
-      ? this.sliceConfig.publicFolders
-      : [];
-
-    return publicFolders
-      .map((folder) => this.normalizePublicFolder(folder))
-      .filter(Boolean);
-  }
-
-  normalizePublicFolder(folder) {
-    if (typeof folder !== 'string') return null;
-    let normalized = folder.trim();
-    if (!normalized) return null;
-
-    if (!normalized.startsWith('/')) {
-      normalized = `/${normalized}`;
-    }
-
-    normalized = normalized.replace(/\\+/g, '/').replace(/\/+/g, '/');
-    if (normalized.length > 1 && normalized.endsWith('/')) {
-      normalized = normalized.slice(0, -1);
-    }
-
-    return normalized;
-  }
-
   normalizeImportPath(importPath) {
     if (typeof importPath !== 'string') return '';
     const cleanPath = importPath.split(/[?#]/)[0];
@@ -2102,12 +2738,20 @@ if (window.slice && window.slice.controller) {
     return importPath.startsWith('/');
   }
 
-  isImportInPublicFolders(importPath, publicFolders) {
-    const normalizedImport = this.normalizeImportPath(importPath);
-    return publicFolders.some((folder) => normalizedImport === folder || normalizedImport.startsWith(`${folder}/`));
+  // True when an absolute import resolves to a real file under `src/public/`.
+  // Anything served at the root URL from public/ can be imported by its
+  // absolute path.
+  isImportInPublicDir(importPath) {
+    const normalizedImport = this.normalizeImportPath(importPath).replace(/^\/+/, '');
+    if (!normalizedImport) return false;
+    try {
+      return fs.existsSync(path.join(this.srcPath, 'public', normalizedImport));
+    } catch {
+      return false;
+    }
   }
 
-  classifyImport(importPath, publicFolders) {
+  classifyImport(importPath) {
     if (typeof importPath !== 'string' || !importPath) {
       return { keep: false, warning: 'Warning: Removing bare import: <unknown>' };
     }
@@ -2117,20 +2761,21 @@ if (window.slice && window.slice.controller) {
     }
 
     if (this.isAbsoluteImport(importPath)) {
-      if (this.isImportInPublicFolders(importPath, publicFolders)) {
+      // Kept only if the file exists under src/public/ (served at the root URL).
+      if (this.isImportInPublicDir(importPath)) {
         return { keep: true, warning: null };
       }
 
       return {
         keep: false,
-        warning: `Warning: Removing absolute import outside publicFolders: ${importPath}`
+        warning: `Warning: Removing absolute import not found under public/: ${importPath}`
       };
     }
 
-    return {
-      keep: false,
-      warning: `Warning: Removing bare import: ${importPath}`
-    };
+    // Bare specifier (node_modules package). Strip it silently from the
+    // component body: it is resolved + bundled separately and re-bound in the
+    // component's class-factory prologue via SLICE_BUNDLE_DEPENDENCIES.
+    return { keep: false, warning: null, external: true };
   }
 
   buildImportWarningMessage(baseMessage, sourceContext) {
@@ -2276,7 +2921,7 @@ if (window.slice && window.slice.controller) {
     return entries;
   }
 
-  stripImportsWithFallbackRegex(code, publicFolders, sourceContext, collectHoistedImports) {
+  stripImportsWithFallbackRegex(code, sourceContext, collectHoistedImports) {
     const hoistedImports = [];
     const importEntries = this.parseImportsWithFallbackScanner(code);
     if (importEntries.length === 0) {
@@ -2287,7 +2932,7 @@ if (window.slice && window.slice.controller) {
     let cursor = 0;
     for (const entry of importEntries) {
       const { start, end, statement, importPath } = entry;
-      const classification = this.classifyImport(importPath, publicFolders);
+      const classification = this.classifyImport(importPath);
       cleanedCode += code.slice(cursor, start);
       if (classification.keep) {
         if (collectHoistedImports) {
@@ -2308,7 +2953,6 @@ if (window.slice && window.slice.controller) {
 
   stripImports(code, options = {}) {
     const { sourceContext = null, collectHoistedImports = false } = options;
-    const publicFolders = this.getConfiguredPublicFolders();
     const hoistedImports = [];
 
     try {
@@ -2323,7 +2967,7 @@ if (window.slice && window.slice.controller) {
 
       for (const node of importNodes) {
         const importPath = node.source?.value;
-        const classification = this.classifyImport(importPath, publicFolders);
+        const classification = this.classifyImport(importPath);
         const statement = code.slice(node.start, node.end);
 
         cleaned += code.slice(cursor, node.start);
@@ -2345,7 +2989,7 @@ if (window.slice && window.slice.controller) {
         ? { code: cleaned, hoistedImports }
         : cleaned;
     } catch (error) {
-      const fallback = this.stripImportsWithFallbackRegex(code, publicFolders, sourceContext, collectHoistedImports);
+      const fallback = this.stripImportsWithFallbackRegex(code, sourceContext, collectHoistedImports);
       return collectHoistedImports ? fallback : fallback.code;
     }
   }
@@ -2488,7 +3132,7 @@ export const SLICE_BUNDLE_CONFIG = null;
   generateBundleConfigJS(config) {
     return `/**
  * Slice.js Bundle Configuration
- * Generated: ${new Date().toISOString()}
+ * Generated: ${resolveBuildTimestamp()}
  * Strategy: ${config.strategy}
  */
 
@@ -2513,7 +3157,9 @@ if (typeof window !== 'undefined' && window.slice && window.slice.controller) {
         }
       }
 
-      import('./slice-bundle.critical.js').catch(err =>
+      // Load by the config's filename (which carries the content hash under
+      // --hash-filenames) rather than a hardcoded name.
+      import(bundlePath).catch(err =>
         console.warn('Failed to load critical bundle:', err)
       );
       window.slice.controller.criticalBundleLoaded = true;

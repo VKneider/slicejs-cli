@@ -312,16 +312,13 @@ describe('ensureNoCheckInPublicVendorFiles — breakage', () => {
     }
   });
 
-  test('returns zero counts when publicFolders is not an array', async () => {
+  test('updates no files when src/public/ has no vendored JS', async () => {
     const tmpRoot = await createTestProject();
-    const srcDir = path.join(tmpRoot, 'src');
     try {
-      const configPath = path.join(srcDir, 'sliceConfig.json');
-      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      config.publicFolders = 'not-an-array';
-      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), 'utf8');
+      // The starter's src/public holds only CSS/images/PWA files (no .js), so
+      // there is nothing to suppress.
       const result = await ensureNoCheckInPublicVendorFiles(tmpRoot);
-      assert.deepEqual(result, { updatedFiles: 0, scannedFiles: 0 });
+      assert.equal(result.updatedFiles, 0);
     } finally {
       await cleanupTestProject(tmpRoot);
     }

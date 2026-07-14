@@ -40,13 +40,23 @@ describe('analyzeSource', () => {
     );
   });
 
-  test('ignores bare / framework imports', () => {
+  test('keeps bare imports out of relative imports but reports them separately', () => {
     const src = `
       import { parse } from '@babel/parser';
       import ora from 'ora';
+      import dayjs from 'dayjs';
+      import utc from 'dayjs/plugin/utc';
+      const lazy = () => import('marked');
+      import './local.js';
     `;
-    const { imports } = analyzeSource(src);
-    assert.deepEqual(imports, []);
+    const { imports, bareImports } = analyzeSource(src);
+    // Only the relative import lands in `imports`.
+    assert.deepEqual(imports, ['./local.js']);
+    // Bare specifiers (static, subpath and dynamic) are reported for install.
+    assert.deepEqual(
+      bareImports.sort(),
+      ['@babel/parser', 'dayjs', 'dayjs/plugin/utc', 'marked', 'ora'].sort()
+    );
   });
 
   test('returns empty sets for unparseable source', () => {
