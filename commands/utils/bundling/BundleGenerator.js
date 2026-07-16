@@ -848,7 +848,8 @@ export default class BundleGenerator {
       const routeFile = await this.createBundleFile(
         bundle.components,
         'route',
-        routeIdentifier
+        routeIdentifier,
+        routeKey
       );
       bundle.file = routeFile.file;
       bundle.hash = routeFile.hash;
@@ -976,7 +977,9 @@ export default class BundleGenerator {
       const measuredSize = entry?.external
         ? Buffer.byteLength(entry?.content || '', 'utf-8')
         : Buffer.byteLength(
-            this.transformDependencyContent(entry?.content || '', '__sliceVendorSharedProbe', dependencyName),
+            // Size probe only — nothing here is emitted, so it must stay quiet
+            // rather than double-report warnings the real emit already covers.
+            this.transformDependencyContent(entry?.content || '', '__sliceVendorSharedProbe', dependencyName, { silent: true }),
             'utf-8'
           );
       if (measuredSize < this.config.minVendorSharedTransformedSize) continue;
@@ -1033,8 +1036,14 @@ export default class BundleGenerator {
   /**
    * Creates a bundle file
    */
-  async createBundleFile(components, type, routePath) {
-    const routeKey = routePath ? this.routeToFileName(routePath) : 'critical';
+  async createBundleFile(components, type, routePath, bundleKey = null) {
+    // The key — not the route path — names the file. Size-split parts of one
+    // route (`playground--p1`, `--p2`) share a `path`, so deriving the name from
+    // the path makes every part collide on `slice-bundle.playground.js` and the
+    // last one written wins, silently dropping the other parts' components.
+    const routeKey = bundleKey
+      ? this.routeToFileName(bundleKey)
+      : (routePath ? this.routeToFileName(routePath) : 'critical');
     const baseFileName = `slice-bundle.${routeKey}.js`;
 
     const bundleContent = await this.generateBundleContent(
@@ -1578,7 +1587,7 @@ export default class BundleGenerator {
       });
     }
 
-    return this.generateBundleFileContent(fileName, type, this.sortComponentsByName(bundleComponents), routePath);
+    return this.generateBundleFileContent(fileName, type, this.sortComponentsByName(bundleComponents), routePath, bundleKey);
   }
 
   classFactoryName(componentName) {
@@ -1593,13 +1602,19 @@ export default class BundleGenerator {
       .join('\n');
   }
 
-  generateBundleFileContent(fileName, type, components, routePath = null) {
+  generateBundleFileContent(fileName, type, components, routePath = null, bundleKeyOverride = null) {
     const uniqueComponents = this.dedupeComponentsByName(components || []);
+    // `bundleKeyOverride` carries the split-aware key (`playground--p1`) so the
+    // emitted META matches the key the runtime looks up in `routeBundles`.
     const bundleKey = type === 'critical'
       ? 'critical'
       : type === 'framework'
         ? 'framework'
-        : this.routeToFileName(routePath || fileName.replace('slice-bundle.', '').replace('.js', ''));
+        : this.routeToFileName(
+            bundleKeyOverride
+              || routePath
+              || fileName.replace('slice-bundle.', '').replace('.js', '')
+          );
 
     const dependencyModules = this.collectDependencyModulesFromComponents(uniqueComponents);
     const isRouteBundle = type === 'route';
@@ -1745,11 +1760,21 @@ export default class BundleGenerator {
           .filter((mi) => mi.specifier && mi.depName)
           .map((mi) => [mi.specifier, mi.depName])
       );
+      // Every specifier this module's imports were analyzed under — bare ones by
+      // name, relative ones by the specifier as written. Each has its module
+      // emitted in this block and its bindings re-created below, so stripping the
+      // original statement loses nothing and must not warn.
+      const handledSpecifiers = new Set(
+        (module.moduleImports || [])
+          .map((mi) => (mi.external ? mi.depName : mi.specifier))
+          .filter((specifier) => typeof specifier === 'string')
+      );
       const transformedContent = this.transformDependencyContent(module.content, '__sliceExports', module.name, {
         // A re-export inside this helper must resolve its source through the same
         // shared resolver the bundle uses, since the source may live in vendor-shared.
         preferShared: !!options.includeSharedResolver,
-        specifierToKey
+        specifierToKey,
+        handledSpecifiers
       });
       // Bind this module's own (transitive) imports inside its IIFE — they were
       // registered by earlier modules in the topological order.
@@ -2234,12 +2259,21 @@ if (window.slice && window.slice.controller) {
     const specifierToKey = options.specifierToKey || null;
 
     if (node.type === 'ImportDeclaration') {
-      // Transitive imports of a bundled dependency cannot be resolved at
-      // runtime; strip them so they never leak into the emitted bundle.
-      console.warn(this.buildImportWarningMessage(
-        `Warning: Stripping unsupported import inside bundled dependency: ${node.source?.value}`,
-        moduleName
-      ));
+      // An import listed in `handledSpecifiers` is not dropped: the caller
+      // re-emits it as an IIFE-scoped binding (buildDependencyBindings), and
+      // removing the original statement is the second half of that rewrite.
+      // Only an import nothing rebinds is actually lost — warn for that one.
+      const specifier = node.source?.value;
+      const handled = options.handledSpecifiers instanceof Set
+        && typeof specifier === 'string'
+        && options.handledSpecifiers.has(specifier);
+
+      if (!handled && !options.silent) {
+        console.warn(this.buildImportWarningMessage(
+          `Warning: Stripping unsupported import inside bundled dependency: ${specifier}`,
+          moduleName
+        ));
+      }
       return '';
     }
 

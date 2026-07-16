@@ -1,5 +1,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'fs-extra';
+import os from 'node:os';
+import path from 'node:path';
 import BundleGenerator from '../commands/utils/bundling/BundleGenerator.js';
 
 function makeGenerator() {
@@ -65,6 +68,58 @@ describe('rebalanceBundlesByBudget — referential integrity + code-size budgeti
     assert.ok(bundles['shared-core'], 'pinned bundle survives the merge pass');
     // Total bundles must respect the request budget (pinned counts toward it).
     assert.ok(Object.keys(bundles).length <= 3);
+  });
+});
+
+// Regression: size-split parts of one route share a `path` (`/playground`), so
+// naming the emitted file after the path made every part collide on
+// `slice-bundle.playground.js`. The last part written won and the others'
+// components vanished from the build, failing at runtime with
+// "ComponentClass is not a constructor".
+describe('emitted file names for size-split route parts', () => {
+  async function withTempBundles(run) {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'slice-split-'));
+    const gen = makeGenerator();
+    gen.bundlesPath = dir;
+    try {
+      await run(gen, dir);
+    } finally {
+      await fs.remove(dir);
+    }
+  }
+
+  test('parts sharing a route path emit to distinct files', async () => {
+    await withTempBundles(async (gen, dir) => {
+      const p1 = await gen.createBundleFile([], 'route', '/playground', 'playground--p1');
+      const p2 = await gen.createBundleFile([], 'route', '/playground', 'playground--p2');
+
+      assert.equal(p1.file, 'slice-bundle.playground--p1.js');
+      assert.equal(p2.file, 'slice-bundle.playground--p2.js');
+      assert.notEqual(p1.file, p2.file, 'split parts must not overwrite each other');
+
+      const written = (await fs.readdir(dir)).filter((f) => f.endsWith('.js')).sort();
+      assert.deepEqual(written, ['slice-bundle.playground--p1.js', 'slice-bundle.playground--p2.js']);
+    });
+  });
+
+  test('a part advertises its own key but keeps the real route in META', async () => {
+    await withTempBundles(async (gen, dir) => {
+      await gen.createBundleFile([], 'route', '/playground', 'playground--p1');
+      const src = await fs.readFile(path.join(dir, 'slice-bundle.playground--p1.js'), 'utf-8');
+      const meta = JSON.parse(src.match(/export const SLICE_BUNDLE_META = (\{[\s\S]*?\});/)[1]);
+
+      // The key must match what routeBundles asks the runtime to load...
+      assert.equal(meta.bundleKey, 'playground--p1');
+      // ...while the route it serves stays the real path, not the part key.
+      assert.deepEqual(meta.routes, ['/playground']);
+    });
+  });
+
+  test('without a key the file still falls back to the route path', async () => {
+    await withTempBundles(async (gen) => {
+      const bundle = await gen.createBundleFile([], 'route', '/playground');
+      assert.equal(bundle.file, 'slice-bundle.playground.js');
+    });
   });
 });
 

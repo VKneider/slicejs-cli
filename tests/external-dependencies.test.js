@@ -515,3 +515,64 @@ describe('vendor-shared dedupe of external deps', () => {
     }
   });
 });
+
+// Regression: a helper module's imports are not lost when stripped — the module
+// block re-emits them as IIFE-scoped bindings (buildDependencyBindings), so the
+// strip is half of a rewrite. Warning on those made every healthy build report a
+// scary "Stripping unsupported import: three", sending readers after phantom bugs.
+describe('stripped-import warnings only fire for imports nothing rebinds', () => {
+  function captureWarnings(run) {
+    const original = console.warn;
+    const warnings = [];
+    console.warn = (...args) => warnings.push(args.join(' '));
+    try {
+      run();
+    } finally {
+      console.warn = original;
+    }
+    return warnings;
+  }
+
+  test('a rebound bare import is stripped silently', () => {
+    const gen = makeGenerator({ externalDependencies: { enabled: true } });
+    const warnings = captureWarnings(() => {
+      const out = gen.transformDependencyContent(
+        "import * as THREE from 'three';\nexport const make = () => new THREE.Group();",
+        '__sliceExports',
+        'Components/Demo/kit/weapons.js',
+        { handledSpecifiers: new Set(['three']) }
+      );
+      // The statement is gone from the emitted body — the caller rebinds it.
+      assert.doesNotMatch(out, /import \* as THREE/);
+    });
+    assert.deepEqual(warnings, [], 'a handled import must not warn');
+  });
+
+  test('an import nothing rebinds still warns', () => {
+    const gen = makeGenerator({ externalDependencies: { enabled: true } });
+    const warnings = captureWarnings(() => {
+      gen.transformDependencyContent(
+        "import fs from 'fs';\nexport const x = 1;",
+        '__sliceExports',
+        'Components/Demo/kit/io.js',
+        { handledSpecifiers: new Set(['three']) }
+      );
+    });
+    assert.equal(warnings.length, 1, 'an unhandled import must still warn');
+    assert.match(warnings[0], /Stripping unsupported import/);
+    assert.match(warnings[0], /fs/);
+  });
+
+  test('silent mode (size probe) reports nothing', () => {
+    const gen = makeGenerator({ externalDependencies: { enabled: true } });
+    const warnings = captureWarnings(() => {
+      gen.transformDependencyContent(
+        "import fs from 'fs';\nexport const x = 1;",
+        '__sliceVendorSharedProbe',
+        'Components/Demo/kit/io.js',
+        { silent: true }
+      );
+    });
+    assert.deepEqual(warnings, [], 'a size probe emits nothing, so it must not warn');
+  });
+});
