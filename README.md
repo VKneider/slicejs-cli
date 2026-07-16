@@ -111,8 +111,40 @@ allowBuilds:
 | `slice get <component>` | Install components from the official registry |
 | `slice browse` | Browse available components |
 | `slice component create` | Create a local component |
+| `slice skill add` | Install the Slice.js Claude Code skill into `.claude/skills/` |
 | `slice doctor` | Run project diagnostics |
 | `slice postinstall` | Configure npm scripts (alternative to postinstall) |
+
+## Claude Code skill (`slice skill`)
+
+Installs the `slice-js-developer` skill — the guide Claude Code uses to build Slice.js
+apps correctly — into your project by fetching it from the official docs repo
+(`VKneider/slicejs_docs`), which is the single source of truth. A `manifest.json`
+there pins the skill version, its framework-compatibility range, and the exact file
+list, so the install never drifts.
+
+| Command | Description |
+|---------|-------------|
+| `slice skill add` | Install the skill (prompts before overwriting an existing copy; `--force` skips the prompt) |
+| `slice skill update` | Update the installed skill to the latest compatible version |
+| `slice skill status` | Show the installed version vs. the latest available |
+
+The skill is written to **`.claude/skills/slice-js-developer/`** at the **project
+root** — inside Claude Code's standard skills path, not a loose folder next to `src/`:
+
+```
+my-app/
+├── .claude/skills/slice-js-developer/   ← installed here
+├── api/
+├── src/                                  ← untouched
+└── package.json
+```
+
+> **Run `slice skill` commands from the project root.** All three subcommands
+> (`add`, `update`, `status`) resolve the target from `INIT_CWD` / the current working
+> directory, so running from a subfolder can place `.claude/` somewhere unexpected.
+> The install path itself is configurable via the `installPath` field in the docs
+> repo's `manifest.json`. After installing, reload Claude Code to pick up the skill.
 
 ## Postinstall Scripts
 

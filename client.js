@@ -6,6 +6,7 @@ import createComponent from "./commands/createComponent/createComponent.js";
 import listComponents from "./commands/listComponents/listComponents.js";
 import deleteComponent from "./commands/deleteComponent/deleteComponent.js";
 import getComponent, { listComponents as listRemoteComponents, syncComponents } from "./commands/getComponent/getComponent.js";
+import { addSkill, statusSkill, updateSkill } from "./commands/skill/skill.js";
 import startServer from "./commands/startServer/startServer.js";
 import runDiagnostics from "./commands/doctor/doctor.js";
 import versionChecker from "./commands/utils/VersionChecker.js";
@@ -498,6 +499,38 @@ componentCommand
 // REGISTRY COMMAND GROUP - For component registry operations
 const registryCommand = sliceClient.command("registry").alias("reg").description("Manage components from official Slice.js repository");
 
+// SKILL COMMAND GROUP - Claude Code skill fetched from the docs repo
+const skillCommand = sliceClient.command("skill").description("Manage the Slice.js Claude Code skill (fetched from the official docs repo)");
+
+skillCommand
+  .command("add")
+  .alias("install")
+  .description("Install the slice-js-developer skill into .claude/skills/")
+  .option("-f, --force", "Overwrite an already-installed skill without prompting")
+  .action(async (options) => {
+    await runWithVersionCheck(async () => {
+      await addSkill({ force: options.force });
+    });
+  });
+
+skillCommand
+  .command("update")
+  .description("Update the installed skill to the latest compatible version")
+  .action(async () => {
+    await runWithVersionCheck(async () => {
+      await updateSkill();
+    });
+  });
+
+skillCommand
+  .command("status")
+  .description("Show installed vs latest skill version")
+  .action(async () => {
+    await runWithVersionCheck(async () => {
+      await statusSkill();
+    });
+  });
+
 // TYPES COMMAND GROUP - TypeScript declarations from static props
 const typesCommand = sliceClient.command("types").description("Generate TypeScript declarations from component static props");
 
@@ -706,14 +739,16 @@ Common Usage Examples:
   slice list                     - List all local components
   slice doctor                   - Run project diagnostics
   slice types generate           - Generate TypeScript typings for slice.build
+  slice skill add                - Install the Slice.js Claude Code skill
   slice postinstall              - Configure npm scripts in package.json
 
 Command Categories:
   • init, dev, start             - Project lifecycle (development only)
-  • get, browse, sync, list      - Quick shortcuts  
+  • get, browse, sync, list      - Quick shortcuts
   • component <cmd>              - Local component management
   • registry <cmd>               - Official repository operations
   • types generate               - Type declarations from static props
+  • skill <cmd>                  - Claude Code skill (add / update / status)
   • version, doctor, setup - Maintenance commands
 
 Development Workflow:
