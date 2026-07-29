@@ -17,6 +17,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.1.1] - 2026-07-29
+
+### Fixed
+
+- **`moduleImports` survives the vendor-shared collection pipeline.** A relative
+  helper extracted into `slice-bundle.vendor-shared.js` lost the record of its
+  own imports in `collectRouteExternalDependencyIndex`,
+  `indexExternalDependencyUsage` and
+  `generateVendorSharedDependencyBundleContent`. Its IIFE was then emitted with
+  no bindings for them and outside topological order, so the bundle threw on
+  load — e.g. `ReferenceError: Check is not defined` for a helper importing
+  named icons from `lucide`. Since the critical/vendor-shared bundles load
+  before anything renders, this took down the whole production app while `dev`
+  (no bundles) stayed green.
+
+  Affects any project where a component imports a relative helper that itself
+  imports a bare package, and that helper is used by enough routes to be
+  extracted into `vendor-shared`.
+
+### Known limitations
+
+- The transitive closure of a shared dependency is not pulled into
+  `vendor-shared` with it. If a helper clears `minVendorSharedTransformedSize`
+  (2 KB) but a module it imports does not, the helper is emitted into
+  `vendor-shared` while its dependency stays inlined in the route bundles, and
+  the binding resolves to `undefined`. Pre-existing — this release changes the
+  symptom (a load-time `TypeError` instead of a lazy `ReferenceError`), not the
+  cause.
+
+---
+
 ## [3.8.0] - 2026-07-07
 
 ### Added
