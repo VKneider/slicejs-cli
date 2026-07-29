@@ -927,13 +927,19 @@ export default class BundleGenerator {
           if (isExternal && !content) continue;
 
           if (!routeDependencyIndex[bundleKey][depName]) {
-            routeDependencyIndex[bundleKey][depName] = { content, external: isExternal };
+            routeDependencyIndex[bundleKey][depName] = {
+              content,
+              external: isExternal,
+              moduleImports: isExternal ? [] : (depEntry?.moduleImports || [])
+            };
           }
           if (!this.vendorShared.dependencyModules.has(depName)) {
+            const moduleImports = isExternal ? [] : (depEntry?.moduleImports || []);
             this.vendorShared.dependencyModules.set(depName, {
               name: depName,
               content,
-              external: isExternal
+              external: isExternal,
+              moduleImports
             });
           }
         }
@@ -954,7 +960,8 @@ export default class BundleGenerator {
             bundleKeys: new Set(),
             bundleCount: 0,
             content: dependencyEntry?.content || '',
-            external: !!dependencyEntry?.external
+            external: !!dependencyEntry?.external,
+            moduleImports: dependencyEntry?.moduleImports || []
           });
         }
         const entry = usage.get(dependencyName);
@@ -1000,7 +1007,8 @@ export default class BundleGenerator {
         // up by name in buildV2DependencyModuleBlockFromModules), so the flag
         // must survive here.
         const external = !!(usageEntry?.external || collectedEntry?.external);
-        return { name: dependencyName, content, external };
+        const moduleImports = usageEntry?.moduleImports || collectedEntry?.moduleImports || [];
+        return { name: dependencyName, content, external, moduleImports };
       })
       .filter((entry) => !!entry.content);
 
