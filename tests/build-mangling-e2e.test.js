@@ -29,7 +29,7 @@ function collectBuiltFiles(distDir, pattern) {
   return results;
 }
 
-describe('e2e: property mangling with regex /^_/', () => {
+describe('e2e: property names survive minification', () => {
 
   describe('build succeeds and preserves public props', () => {
 
@@ -112,9 +112,12 @@ describe('e2e: property mangling with regex /^_/', () => {
         const distJs = path.join(root, 'dist', 'Components', 'Visual', 'Toast', 'Toast.js');
         const built = fs.readFileSync(distJs, 'utf8');
 
-        assert.doesNotMatch(built, /_message/, '_message backing field must be mangled');
-        assert.doesNotMatch(built, /_type/, '_type backing field must be mangled');
-        assert.doesNotMatch(built, /_duration/, '_duration backing field must be mangled');
+        // Property mangling is off (see JsMinifier.sourceFileOptions): the
+        // bundler never mangled properties, and mangling them here gave the same
+        // field two names across dist/ artifacts.
+        assert.match(built, /_message/, '_message backing field must be preserved');
+        assert.match(built, /_type/, '_type backing field must be preserved');
+        assert.match(built, /_duration/, '_duration backing field must be preserved');
 
         assert.doesNotThrow(() => parse(built, { sourceType: 'module' }), 'output must be valid JS');
       });
@@ -217,7 +220,7 @@ describe('e2e: property mangling with regex /^_/', () => {
 
   });
 
-  describe('_private props are consistently mangled within each file', () => {
+  describe('_private props stay consistent between reads and writes', () => {
 
     test('internal _ backing fields self-consistent within each component', async () => {
       await withTestProject(async (root) => {
@@ -239,16 +242,14 @@ describe('e2e: property mangling with regex /^_/', () => {
         const distJs = path.join(root, 'dist', 'Components', 'Visual', 'Counter', 'Counter.js');
         const built = fs.readFileSync(distJs, 'utf8');
 
-        assert.doesNotMatch(built, /_value/, '_value must be mangled');
+        assert.match(built, /_value/, '_value must be preserved, not mangled');
 
-        const shortName = built.match(/this\.([a-zA-Z])\s*=/);
-        assert.ok(shortName, 'should have a mangled assignment like this.a =');
-        const name = shortName[1];
-
-        const reads = [...built.matchAll(new RegExp(`this\\.${name}(?!\\w)`, 'g'))];
-        const writes = [...built.matchAll(new RegExp(`this\\.${name}\\s*=`, 'g'))];
-        assert.ok(reads.length >= 2, `_value -> "${name}" must be read at least twice (getter + updateDisplay), got ${reads.length}`);
-        assert.ok(writes.length >= 1, `_value -> "${name}" must be written at least once (setter), got ${writes.length}`);
+        // Reads and writes still have to line up — trivially now, but this is
+        // what actually matters and it is what used to break across files.
+        const reads = [...built.matchAll(/this\._value(?!\w)/g)];
+        const writes = [...built.matchAll(/this\._value\s*=/g)];
+        assert.ok(reads.length >= 2, `_value must be read at least twice (getter + updateDisplay), got ${reads.length}`);
+        assert.ok(writes.length >= 1, `_value must be written at least once (setter), got ${writes.length}`);
 
         assert.doesNotThrow(() => parse(built, { sourceType: 'module' }));
       });

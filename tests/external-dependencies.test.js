@@ -304,21 +304,39 @@ describe('strict external mode (--strict-external)', () => {
     }
   }
 
-  test('strict mode fails when a package cannot be resolved', async () => {
-    await withMissingImportProject(async (tmp, comp) => {
-      const gen = new BundleGenerator(import.meta.url, {
-        components: [comp], routes: [], metrics: { totalComponents: 1, totalRoutes: 0, sharedPercentage: 0, totalSize: 100 }
-      }, { output: 'src', strictExternal: true });
-      bindGeneratorToProject(gen, tmp);
-      await assert.rejects(() => gen.prepareExternalModules(), /Strict external dependencies/);
-    });
-  });
-
-  test('non-strict mode warns and continues (records the error)', async () => {
+  test('an unresolved package fails the build by default', async () => {
+    // Was opt-in via --strict-external. An unresolved package is emitted as an
+    // empty namespace, so every binding from it is undefined — a guaranteed
+    // runtime failure that the build used to only warn about.
     await withMissingImportProject(async (tmp, comp) => {
       const gen = new BundleGenerator(import.meta.url, {
         components: [comp], routes: [], metrics: { totalComponents: 1, totalRoutes: 0, sharedPercentage: 0, totalSize: 100 }
       }, { output: 'src' });
+      bindGeneratorToProject(gen, tmp);
+      await assert.rejects(() => gen.prepareExternalModules(), /could not be resolved from node_modules/);
+    });
+  });
+
+  test('the error says how to proceed', async () => {
+    await withMissingImportProject(async (tmp, comp) => {
+      const gen = new BundleGenerator(import.meta.url, {
+        components: [comp], routes: [], metrics: { totalComponents: 1, totalRoutes: 0, sharedPercentage: 0, totalSize: 100 }
+      }, { output: 'src' });
+      bindGeneratorToProject(gen, tmp);
+      const error = await gen.prepareExternalModules().then(() => null, (e) => e);
+      assert.ok(error);
+      assert.match(error.message, /--no-strict-external/, 'must name the escape hatch');
+      assert.match(error.message, new RegExp(MISSING), 'must name the package');
+    });
+  });
+
+  test('--no-strict-external warns and continues (records the error)', async () => {
+    // The one legitimate case: the package is provided some other way, e.g. a
+    // shim under src/public/.
+    await withMissingImportProject(async (tmp, comp) => {
+      const gen = new BundleGenerator(import.meta.url, {
+        components: [comp], routes: [], metrics: { totalComponents: 1, totalRoutes: 0, sharedPercentage: 0, totalSize: 100 }
+      }, { output: 'src', strictExternal: false });
       bindGeneratorToProject(gen, tmp);
       await gen.prepareExternalModules(); // must not throw
       assert.ok(gen.externalResolutionErrors.has(MISSING));

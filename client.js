@@ -89,6 +89,11 @@ async function runWithVersionCheck(commandFunction, ...args) {
   } catch (error) {
     Print.error(`Command execution: ${error.message}`);
     console.error(error.stack);
+    // A command that threw must not report success. This used to swallow the
+    // error and return normally, so `slice build` printed a red failure and
+    // still exited 0 — CI read that as a passing build and shipped it.
+    // process.exitCode (not process.exit) lets buffered output flush first.
+    process.exitCode = 1;
     return false;
   }
 }
@@ -253,7 +258,11 @@ const buildCommand = sliceClient.command("build")
   .description("Build Slice.js project for production")
   .action(async (options) => {
     await withNodeEnv('production', () => runWithVersionCheck(async () => {
-      await build(options);
+      // build() reports failure by returning false (degraded files, missing
+      // build dependencies) rather than throwing, so it needs its own exit code.
+      const ok = await build(options);
+      if (ok === false) process.exitCode = 1;
+      return ok;
     }));
   });
 
@@ -278,7 +287,12 @@ buildCommand
   .option("--no-obfuscate", "Disable obfuscation (enabled by default, no prop mangling)")
   .option("--preview", "Start preview server after build")
   .option("--serve", "Start preview server without building")
-  .option("--strict-external", "Fail the build if a node_modules dependency cannot be resolved")
+  // Strict is the default now. `--strict-external` is kept so existing CI
+  // scripts keep working — commander rejects unknown options, so dropping it
+  // would break them outright. It is a no-op that asks for the default.
+  .option("--strict-external", "Fail the build if a node_modules dependency cannot be resolved (default)")
+  .option("--no-strict-external", "Allow the build to continue when a node_modules dependency cannot be resolved")
+  .option("--allow-unoptimized", "Succeed even if some files could not be minified and shipped as-is")
   .option("--no-validate", "Skip component prop validation before building")
   .option("--sourcemap", "Emit a source map (.map) next to each minified bundle")
   .option("--hash-filenames", "Add a content hash to bundle filenames for immutable CDN caching")

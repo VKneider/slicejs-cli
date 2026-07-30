@@ -77,8 +77,10 @@ test('generateDeclarationContent emits SliceEventRegistry + conditional signatur
     { 'user:login': { payload: { id: 'number' } }, 'cart:cleared': { payload: null } }
   );
   assert.ok(decl.includes('export interface SliceEventRegistry {'));
-  assert.ok(decl.includes("'user:login': { id: number };"));
-  assert.ok(decl.includes("'cart:cleared': void;"));
+  // Double-quoted: event names go through JSON.stringify so a name containing
+  // a quote cannot terminate the string early.
+  assert.ok(decl.includes('"user:login": { id: number };'));
+  assert.ok(decl.includes('"cart:cleared": void;'));
   // conditional-type signature (not a permissive string-fallback overload)
   assert.ok(decl.includes('SliceEventArgs<K>'));
   assert.ok(decl.includes('events: SliceTypedEventManager;'));

@@ -5,6 +5,12 @@ import traverse from '@babel/traverse';
 
 import Print from '../Print.js';
 import { getConfigPath, getComponentsJsPath, joinRoot } from '../utils/PathHelper.js';
+import {
+  describeSyntaxError,
+  findUnresolvedRelativeImports,
+  hasDefaultExport,
+  findUnknownComponentBuilds
+} from '../utils/SourceDiagnostics.js';
 
 const TYPE_MAP = {
   string: 'string',
@@ -137,7 +143,7 @@ const payloadToTs = (payload) => {
         } else if (value && typeof value === 'object' && typeof value.type === 'string') {
           tsType = PAYLOAD_TYPE_MAP[value.type.toLowerCase()] || 'unknown';
         }
-        return `${key}: ${tsType}`;
+        return `${tsPropertyKey(key)}: ${tsType}`;
       })
       .join('; ');
     return inner.length > 0 ? `{ ${inner} }` : 'Record<string, unknown>';
@@ -465,7 +471,43 @@ const typeFromProp = (propMeta) => {
   return TYPE_MAP[propMeta.type] || 'unknown';
 };
 
-const interfaceNameFor = (componentName) => `${componentName}Props`;
+/**
+ * True when `name` can be written as a bare TypeScript property key or
+ * identifier. Anything else has to be quoted (or escaped, for a type name).
+ * @param {string} name
+ * @returns {boolean}
+ */
+const isSafeTsIdentifier = (name) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(String(name));
+
+/**
+ * Property key for a declaration line: bare when it can be, quoted otherwise.
+ * `data-id` and `my-btn` are legal keys but only in quoted form; emitting them
+ * bare produced a .d.ts that does not parse, which silently took out editor
+ * tooling for the whole project (jsconfig includes the generated file).
+ * @param {string} name
+ * @returns {string}
+ */
+const tsPropertyKey = (name) => (isSafeTsIdentifier(name) ? String(name) : JSON.stringify(String(name)));
+
+/**
+ * Interface name for a component.
+ *
+ * A component's registered name need not be a valid identifier — `my-btn` used
+ * to yield `export interface my-btnProps`, which is a syntax error. Characters
+ * outside [A-Za-z0-9_$] are hex-escaped rather than dropped, so two distinct
+ * component names can never collapse onto the same interface (the same reason
+ * BundleGenerator.toSafeIdentifier escapes instead of replacing).
+ *
+ * @param {string} componentName
+ * @returns {string}
+ */
+const interfaceNameFor = (componentName) => {
+  const raw = String(componentName);
+  if (isSafeTsIdentifier(raw)) return `${raw}Props`;
+  const encoded = raw.replace(/[^A-Za-z0-9_$]/g, (char) => `_${char.charCodeAt(0).toString(16)}_`);
+  // Prefixed so a name starting with a digit still yields a valid identifier.
+  return `SliceComponent_${encoded}Props`;
+};
 const DYNAMIC_FALLBACK_PROP = '__dynamicPropsFallback';
 
 const DEFAULT_EDITOR_COMPILER_OPTIONS = {
@@ -553,7 +595,9 @@ const generateEventRegistryLines = (eventRegistry) => {
   const lines = [];
   lines.push('export interface SliceEventRegistry {');
   for (const name of names) {
-    lines.push(`  '${name}': ${payloadToTs(events[name].payload)};`);
+    // JSON.stringify, not a hand-rolled quote: an event name containing a quote
+    // would otherwise terminate the string early.
+    lines.push(`  ${JSON.stringify(name)}: ${payloadToTs(events[name].payload)};`);
   }
   lines.push('}');
   lines.push('');
@@ -612,7 +656,7 @@ const generateDeclarationContent = (componentPropsMap, eventRegistry = {}) => {
     if (!isDynamicFallback) {
       for (const [propName, propMeta] of Object.entries(sortedProps)) {
         const optionalMark = propMeta.required ? '' : '?';
-        lines.push(`  ${propName}${optionalMark}: ${typeFromProp(propMeta)};`);
+        lines.push(`  ${tsPropertyKey(propName)}${optionalMark}: ${typeFromProp(propMeta)};`);
       }
     }
     lines.push('}');
@@ -621,7 +665,7 @@ const generateDeclarationContent = (componentPropsMap, eventRegistry = {}) => {
 
   lines.push('export interface SliceComponentPropsMap {');
   for (const componentName of Object.keys(componentsSorted)) {
-    lines.push(`  ${componentName}: ${interfaceNameFor(componentName)};`);
+    lines.push(`  ${tsPropertyKey(componentName)}: ${interfaceNameFor(componentName)};`);
   }
   lines.push('}');
   lines.push('');
@@ -771,9 +815,25 @@ const PROP_VALID_TYPES = new Set(['string', 'number', 'boolean', 'object', 'arra
  * @param {{ projectRoot: string }} options
  * @returns {Promise<{ errors: Array, warnings: Array, checkedCount: number }>}
  */
+/**
+ * Walks every component registered in components.js.
+ *
+ * Note this covers MORE than the bundler does: the bundler only ever sees
+ * components reachable from a route, so a registered-but-unused component with a
+ * syntax error, a missing default export or a broken import was never checked
+ * anywhere — it failed the first time somebody navigated to it.
+ *
+ * @returns {Promise<{errors: object[], warnings: object[], sourceErrors: object[], checkedCount: number}>}
+ */
 const validateComponentProps = async ({ projectRoot }) => {
   const errors = [];
   const warnings = [];
+  // Problems with the file itself rather than with a prop definition. Kept
+  // separate because they are reported differently (they carry a file and a
+  // position, not a prop name).
+  const sourceErrors = [];
+  // Reported but not blocking — see findUnknownComponentBuilds below.
+  const sourceWarnings = [];
   let checkedCount = 0;
 
   const registryPath = getComponentsJsPath(import.meta.url, projectRoot);
@@ -781,10 +841,11 @@ const validateComponentProps = async ({ projectRoot }) => {
   try {
     registryContent = await fs.readFile(registryPath, 'utf8');
   } catch {
-    return { errors, warnings, checkedCount }; // no registry → nothing to validate
+    return { errors, warnings, sourceErrors, sourceWarnings, checkedCount }; // no registry → nothing to validate
   }
 
   const registryMap = parseComponentsRegistry(registryContent, registryPath);
+  const registeredNames = new Set(Object.keys(registryMap));
   const configPath = getConfigPath(import.meta.url, projectRoot);
   const categoryPathCache = new Map();
 
@@ -802,6 +863,54 @@ const validateComponentProps = async ({ projectRoot }) => {
 
     let source;
     try { source = await fs.readFile(componentFile, 'utf8'); } catch { continue; }
+
+    const syntax = describeSyntaxError(source, componentFile);
+    if (!syntax.ok) {
+      sourceErrors.push({ component: componentName, message: `Syntax error at ${syntax.message}` });
+      continue; // nothing further can be said about a file that does not parse
+    }
+
+    // Being in components.js means "this is a component", and the runtime loads
+    // one with `const { default: myClass } = await import(...)` (Slice.getClass).
+    // Without a default export that entry can never resolve, so it is a broken
+    // registration, not a style issue.
+    //
+    // components.js is auto-generated by scanning directories, so a plain module
+    // parked at <Category>/<Name>/<Name>.js gets registered by accident. The fix
+    // is to move it out of the components tree — it is a module, not a component.
+    if (hasDefaultExport(source) === false) {
+      sourceErrors.push({
+        component: componentName,
+        message: `${componentFile}: no default export, but it is registered as a component. `
+          + `Slice loads components with \`const { default: myClass } = await import(...)\`, so `
+          + `slice.build('${componentName}') can never resolve. Add a default export, or — if this `
+          + 'is a plain module of constants/helpers — move it out of the components tree so it '
+          + 'stops being auto-registered.'
+      });
+    }
+
+    const unresolved = findUnresolvedRelativeImports(source, path.dirname(componentFile));
+    if (unresolved.length > 0) {
+      sourceErrors.push({
+        component: componentName,
+        message: `${componentFile}: cannot resolve ${unresolved.map((s2) => `"${s2}"`).join(', ')}. `
+          + 'An unresolved relative import silently becomes `undefined` at runtime.'
+      });
+    }
+
+    // A warning, not an error: components legitimately build OPTIONAL ones. The
+    // framework's own Button does `if (this.icon) slice.build('Icon', ...)`, and
+    // a project that never passes an icon has no reason to install Icon. So an
+    // unregistered name is a likely typo, not a certain one.
+    const unknownBuilds = findUnknownComponentBuilds(source, registeredNames);
+    if (unknownBuilds.length > 0) {
+      sourceWarnings.push({
+        component: componentName,
+        message: `builds ${unknownBuilds.map((n) => `"${n}"`).join(', ')}, not registered in `
+          + 'components.js. If that is a typo it will silently render nothing; if the component '
+          + 'is optional, ignore this.'
+      });
+    }
 
     const props = extractStaticPropsFromSource(source, componentFile);
     if (!props) continue;
@@ -825,7 +934,7 @@ const validateComponentProps = async ({ projectRoot }) => {
     }
   }
 
-  return { errors, warnings, checkedCount };
+  return { errors, warnings, sourceErrors, sourceWarnings, checkedCount };
 };
 
 const generateTypesFile = async ({ projectRoot, outputPath }) => {

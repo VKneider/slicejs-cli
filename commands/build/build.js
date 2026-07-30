@@ -35,7 +35,24 @@ export default async function build(options = {}) {
   // doctor`). Definition errors fail the build so a broken component contract
   // never ships; style issues warn but don't block. Skip with --no-validate.
   if (options.validate !== false) {
-    const { errors, warnings } = await validateComponentProps({ projectRoot: getProjectRoot(import.meta.url) });
+    const { errors, warnings, sourceErrors, sourceWarnings } = await validateComponentProps({ projectRoot: getProjectRoot(import.meta.url) });
+
+    // Source-level problems first: they cover every registered component,
+    // including ones no route reaches — which the bundler never sees at all.
+    if (sourceErrors.length > 0) {
+      Print.error(`Build blocked: ${sourceErrors.length} component source error(s) found.`);
+      for (const e of sourceErrors) {
+        Print.newLine();
+        Print.info(`  ${e.component}: ${e.message}`);
+      }
+      Print.newLine();
+      Print.info('Fix the components above. These files cannot be bundled or loaded as they are.');
+      process.exit(1);
+    }
+
+    for (const w of sourceWarnings) {
+      Print.warning(`${w.component}: ${w.message}`);
+    }
 
     for (const w of warnings) {
       Print.warning(`Props: ${w.component}.${w.prop} — ${w.message}`);

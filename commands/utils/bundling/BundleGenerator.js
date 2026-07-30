@@ -4,7 +4,8 @@ import path from 'path';
 import crypto from 'crypto';
 import { parse } from '@babel/parser';
 import traverse from '@babel/traverse';
-import { minify as terserMinify } from 'terser';
+import { minifyJs, bundleOptions } from '../JsMinifier.js';
+import { describeSyntaxError } from '../SourceDiagnostics.js';
 import { getSrcPath, getComponentsJsPath, getDistPath, getConfigPath, getProjectRoot } from '../PathHelper.js';
 import ExternalModuleBundler from './ExternalModuleBundler.js';
 
@@ -54,7 +55,12 @@ export default class BundleGenerator {
 
     // When true, an unresolved node_modules dependency fails the build instead
     // of warning + emitting an empty module. Driven by `slice build --strict-external`.
-    this.strictExternal = !!options.strictExternal;
+    // Unresolved bare imports fail the build unless explicitly allowed. They
+    // used to only warn, and the warning said the components "will fail at
+    // runtime" — which is a build error described in prose. `--no-strict-external`
+    // keeps the old behaviour for the one legitimate case: a package provided
+    // some other way (a shim under src/public/).
+    this.strictExternal = options.strictExternal !== false;
 
     // Bare-package (node_modules) import support is always on. Bare imports are
     // resolved+bundled with esbuild (see ExternalModuleBundler) and registered
@@ -993,6 +999,61 @@ export default class BundleGenerator {
       shared.add(dependencyName);
     }
 
+    this.expandSharedSetWithDependencyClosure(shared);
+
+    return shared;
+  }
+
+  /**
+   * Grows the shared set to the full dependency closure of everything in it.
+   *
+   * The usage/size thresholds decide which modules are worth extracting, but
+   * they must not decide the closure. A helper that clears
+   * minVendorSharedTransformedSize is emitted into vendor-shared and omitted
+   * from the route bundles; if a module it imports fell under the threshold, it
+   * stayed inlined in the route bundles instead, and the helper's IIFE inside
+   * vendor-shared bound a key vendor-shared never registered. Since
+   * vendor-shared evaluates before anything renders, that surfaced as the whole
+   * app failing to boot with `Cannot read properties of undefined`.
+   *
+   * Pulling a small module in is also the cheaper outcome: it stops being
+   * duplicated across every route bundle that used it.
+   *
+   * Mutates `shared` in place, following moduleImports transitively and
+   * tolerating cycles.
+   *
+   * @param {Set<string>} shared
+   * @returns {Set<string>} the same set
+   */
+  expandSharedSetWithDependencyClosure(shared) {
+    const pending = Array.from(shared);
+    const visited = new Set(pending);
+
+    while (pending.length > 0) {
+      const dependencyName = pending.pop();
+      const entry = this.vendorShared.dependencyModules.get(dependencyName)
+        || this.vendorShared.dependencyUsage.get(dependencyName);
+
+      for (const moduleImport of entry?.moduleImports || []) {
+        const importedName = moduleImport?.depName;
+        if (!importedName || visited.has(importedName)) continue;
+        visited.add(importedName);
+
+        // Only modules the vendor-shared bundle can actually emit. Anything
+        // unresolvable has no content to register, so adding it would omit it
+        // from the route bundles and register nothing in its place — the very
+        // failure this closure exists to prevent.
+        const collected = this.vendorShared.dependencyModules.get(importedName);
+        const emittable = collected?.external
+          ? !!this.externalModulesByName.get(importedName)
+          : !!collected?.content;
+        if (!emittable) continue;
+
+        shared.add(importedName);
+        pending.push(importedName);
+      }
+    }
+
     return shared;
   }
 
@@ -1087,34 +1148,18 @@ export default class BundleGenerator {
     }
 
     const wantMap = !!this.options.sourcemap;
-    const options = {
-      parse: {
-        ecma: 2022
-      },
-      ecma: 2022,
-      compress: this.options.minify ? {
-        drop_console: false,
-        drop_debugger: true,
-        passes: 1
-      } : false,
-      mangle: this.options.obfuscate ? {
-        properties: false
-      } : false,
-      keep_fnames: true,
-      keep_classnames: true,
-      format: {
-        comments: false,
-        ecma: 2022
-      },
-      // Map the minified output back to the readable pre-minified bundle
-      // (embedded via includeSources so DevTools shows it without a sidecar
-      // source). The URL comment is appended by the caller.
-      ...(wantMap ? { sourceMap: { includeSources: true, filename: fileName } } : {})
-    };
+    const createOptions = () => bundleOptions({
+      minify: this.options.minify,
+      obfuscate: this.options.obfuscate,
+      sourcemap: wantMap,
+      fileName
+    });
 
     let result;
     try {
-      result = await terserMinify(bundleContent, options);
+      // minifyJs normalizes a reported `result.error` into a throw, so both
+      // failure shapes land here and the bundle is dumped once.
+      result = await minifyJs(bundleContent, createOptions);
     } catch (error) {
       const tmpDir = path.resolve(process.cwd(), '.tmp');
       const safeName = fileName.replace(/[^a-zA-Z0-9_.-]/g, '_');
@@ -1127,19 +1172,6 @@ export default class BundleGenerator {
       }
       const message = error?.message ? `${error.message}.` : 'Unknown Terser error.';
       throw new Error(`Terser failed for ${fileName}: ${message} Saved bundle to ${tmpPath}`);
-    }
-
-    if (result.error) {
-      const tmpDir = path.resolve(process.cwd(), '.tmp');
-      const safeName = fileName.replace(/[^a-zA-Z0-9_.-]/g, '_');
-      const tmpPath = path.join(tmpDir, `terser-fail-${safeName}`);
-      try {
-        await fs.ensureDir(tmpDir);
-        await fs.writeFile(tmpPath, bundleContent, 'utf-8');
-      } catch (writeError) {
-        console.warn(`Warning: Failed to write ${tmpPath}:`, writeError.message);
-      }
-      throw new Error(`Terser failed for ${fileName}: ${result.error.message}. Saved bundle to ${tmpPath}`);
     }
 
     return { code: result.code || bundleContent, map: wantMap ? (result.map || null) : null };
@@ -1165,6 +1197,7 @@ export default class BundleGenerator {
    * @returns {Promise<{ file: string, path: string, hash: string, rawSize: number }>}
    */
   async emitBundleArtifact(baseFileName, rawContent) {
+    await this.validateGeneratedBundle(rawContent, baseFileName);
     const { code, map } = await this.applyBundleTransforms(rawContent, baseFileName);
     const fileName = this.hashBundleFileName(baseFileName, code);
     let finalCode = code;
@@ -1181,6 +1214,134 @@ export default class BundleGenerator {
     return { file: fileName, path: filePath, hash, rawSize: Buffer.byteLength(rawContent, 'utf-8') };
   }
 
+
+  /**
+   * Asserts a generated bundle parses as an ES module, before it is transformed
+   * or written.
+   *
+   * This is a guard on the generator's own output, not on user code. Every
+   * bundler bug found so far had the same shape: valid source in, invalid
+   * JavaScript out, and nothing checking. Terser used to be the accidental
+   * gatekeeper, which made for two bad failure modes — its error named the
+   * generated file instead of the source, and with `--minify` off
+   * applyBundleTransforms returns early, so the broken bundle was written
+   * silently and only failed once a browser tried to parse it.
+   *
+   * Runs unconditionally for that reason: the check is worth more precisely when
+   * minification is off.
+   *
+   * @param {string} bundleContent
+   * @param {string} fileName
+   * @returns {Promise<void>}
+   * @throws {Error} naming the bundle, the source it came from, and a saved copy
+   */
+  async validateGeneratedBundle(bundleContent, fileName) {
+    try {
+      parse(bundleContent, { sourceType: 'module', plugins: ['jsx'] });
+      return;
+    } catch (error) {
+      const position = typeof error.pos === 'number' ? error.pos : 0;
+      const owner = this.describeBundleOwner(bundleContent, position);
+      const savedPath = await this.saveFailedBundle(bundleContent, fileName, 'invalid-bundle');
+
+      const where = owner ? ` The invalid code comes from ${owner}.` : '';
+      const detail = error.message || 'unknown parse error';
+      throw new Error(
+        `Generated bundle "${fileName}" is not valid JavaScript: ${detail}.${where}`
+        + ` This is a bundler bug, not a problem with your source. Saved bundle to ${savedPath}`
+      );
+    }
+  }
+
+  /**
+   * Writes a bundle that could not be processed to `.tmp/` so it can be read.
+   * @param {string} bundleContent
+   * @param {string} fileName
+   * @param {string} prefix
+   * @returns {Promise<string>} the path written (or attempted)
+   */
+  async saveFailedBundle(bundleContent, fileName, prefix) {
+    const tmpDir = path.resolve(process.cwd(), '.tmp');
+    const safeName = String(fileName).replace(/[^a-zA-Z0-9_.-]/g, '_');
+    const tmpPath = path.join(tmpDir, `${prefix}-${safeName}`);
+    try {
+      await fs.ensureDir(tmpDir);
+      await fs.writeFile(tmpPath, bundleContent, 'utf-8');
+    } catch (writeError) {
+      console.warn(`Warning: Failed to write ${tmpPath}:`, writeError.message);
+    }
+    return tmpPath;
+  }
+
+  /**
+   * Maps an offset in a generated bundle back to whatever produced that region:
+   * a component's class factory, or a dependency module's IIFE. Turns "bundle X
+   * is broken" into "component Y emitted invalid code", which is the difference
+   * between a usable error and a scavenger hunt.
+   *
+   * @param {string} bundleContent
+   * @param {number} position
+   * @returns {string|null}
+   */
+  describeBundleOwner(bundleContent, position) {
+    const regions = [];
+
+    // Dependency modules: `const __sliceDepExportsN = (() => {` ... then
+    // `SLICE_BUNDLE_DEPENDENCIES["key"] = __sliceDepExportsN;` closes it, which
+    // is also where the key becomes known.
+    const depAssignment = /SLICE_BUNDLE_DEPENDENCIES\[("(?:[^"\\]|\\.)*")\]\s*=\s*(__sliceDepExports\d+)\s*;/g;
+    for (let match = depAssignment.exec(bundleContent); match; match = depAssignment.exec(bundleContent)) {
+      const [, quotedKey, exportVar] = match;
+      const openIndex = bundleContent.indexOf(`const ${exportVar} = (() => {`);
+      if (openIndex === -1) continue;
+      let key = quotedKey;
+      try { key = JSON.parse(quotedKey); } catch { /* keep the raw form */ }
+      regions.push({ start: openIndex, end: match.index + match[0].length, label: `dependency "${key}"` });
+    }
+
+    // Component factories: from `const SLICE_CLASS_FACTORY_x = ` up to the next
+    // factory or the template declarations that follow the whole block.
+    const factoryStarts = [];
+    const factory = /const (SLICE_CLASS_FACTORY_\S+) = \(\) => \{/g;
+    for (let match = factory.exec(bundleContent); match; match = factory.exec(bundleContent)) {
+      factoryStarts.push({ start: match.index, identifier: match[1] });
+    }
+    for (const [index, entry] of factoryStarts.entries()) {
+      const next = factoryStarts[index + 1]?.start;
+      const templates = bundleContent.indexOf('const __templateElement_', entry.start);
+      const candidates = [next, templates === -1 ? undefined : templates, bundleContent.length]
+        .filter((value) => typeof value === 'number');
+      regions.push({
+        start: entry.start,
+        end: Math.min(...candidates),
+        label: `component "${this.componentNameFromFactory(entry.identifier)}"`
+      });
+    }
+
+    // Innermost match wins, so a dependency IIFE nested in a factory is named
+    // rather than the factory around it.
+    const containing = regions
+      .filter((region) => position >= region.start && position <= region.end)
+      .sort((a, b) => (a.end - a.start) - (b.end - b.start));
+
+    return containing[0]?.label || null;
+  }
+
+  /**
+   * Reverses toSafeIdentifier() so an error can name the component as the
+   * developer wrote it. The encoding is injective, so this is exact.
+   * @param {string} factoryIdentifier
+   * @returns {string}
+   */
+  componentNameFromFactory(factoryIdentifier) {
+    const encoded = String(factoryIdentifier)
+      .replace(/^SLICE_CLASS_FACTORY_/, '')
+      .replace(/^SliceComponent_/, '');
+    return encoded.replace(/_([0-9a-f]+)_/g, (match, hex) => {
+      const codePoint = Number.parseInt(hex, 16);
+      return Number.isFinite(codePoint) ? String.fromCharCode(codePoint) : match;
+    });
+  }
 
   /**
    * Bare-package (node_modules) imports are always resolved and bundled — no
@@ -1390,7 +1551,7 @@ export default class BundleGenerator {
       }
       // Follow relative helper modules so packages imported only by a helper
       // are discovered too.
-      for (const dep of this.analyzeDependencies(code, path.dirname(filePath))) {
+      for (const dep of this.analyzeDependencies(code, path.dirname(filePath), filePath)) {
         await walk(dep.path);
       }
     };
@@ -1437,13 +1598,15 @@ export default class BundleGenerator {
       }
     }
 
-    // In strict mode, any unresolved dependency fails the build so a broken
-    // bundle never ships silently.
+    // A package that cannot be resolved is emitted as an empty namespace, so
+    // every binding from it is undefined — a guaranteed runtime failure. Fail
+    // here instead, unless the caller opted out.
     if (this.strictExternal && this.externalResolutionErrors.size > 0) {
       const names = Array.from(this.externalResolutionErrors.keys()).sort().join(', ');
       throw new Error(
-        `Strict external dependencies: ${this.externalResolutionErrors.size} package(s) could not be resolved from node_modules: ${names}. ` +
-        `Install them or remove the imports.`
+        `${this.externalResolutionErrors.size} package(s) could not be resolved from node_modules: ${names}. `
+        + 'Install them, remove the imports, or pass --no-strict-external if they are provided '
+        + 'another way (a shim under src/public/).'
       );
     }
   }
@@ -1451,8 +1614,17 @@ export default class BundleGenerator {
   /**
    * Analyzes dependencies of a JavaScript file using simple regex
    */
-  analyzeDependencies(jsContent, componentPath) {
+  /**
+   * Extensions resolveImportPath() will try. A relative import of one of these
+   * (or of nothing, meaning extensionless) points at a JavaScript module that is
+   * expected to exist in the repo — so failing to resolve it is a typo, not a
+   * supported pattern. Anything else (an asset, say) is left alone.
+   */
+  static RESOLVABLE_MODULE_EXTENSIONS = ['.js', '.json', '.mjs'];
+
+  analyzeDependencies(jsContent, componentPath, sourceFile = null) {
     const dependencies = [];
+    const unresolved = [];
 
     const resolveImportPath = (importPath) => {
       const resolvedPath = path.resolve(componentPath, importPath);
@@ -1486,6 +1658,7 @@ export default class BundleGenerator {
 
           const resolvedPath = resolveImportPath(importPath);
           if (!resolvedPath) {
+            unresolved.push(importPath);
             return;
           }
 
@@ -1533,6 +1706,7 @@ export default class BundleGenerator {
           if (typeof src !== 'string' || (!src.startsWith('./') && !src.startsWith('../'))) return;
           const resolvedPath = resolveImportPath(src);
           if (resolvedPath) dependencies.push({ path: resolvedPath, bindings: [], specifier: src });
+          else unresolved.push(src);
         },
 
         ExportAllDeclaration(pathNode) {
@@ -1540,13 +1714,53 @@ export default class BundleGenerator {
           if (typeof src !== 'string' || (!src.startsWith('./') && !src.startsWith('../'))) return;
           const resolvedPath = resolveImportPath(src);
           if (resolvedPath) dependencies.push({ path: resolvedPath, bindings: [], specifier: src });
+          else unresolved.push(src);
         }
       });
     } catch (error) {
       console.warn(`Warning: Could not analyze dependencies for ${componentPath}:`, error.message);
     }
 
+    this.assertRelativeImportsResolve(unresolved, componentPath, sourceFile);
+
     return dependencies;
+  }
+
+  /**
+   * Fails the build on a relative import that points at nothing.
+   *
+   * These used to be dropped silently: `import { x } from './typo.js'` produced
+   * a bundle where `x` was simply undefined, with no warning at build time and
+   * no clue at runtime. A relative specifier names a file in the repo, so an
+   * unresolved one is a typo or a deleted file — there is no legitimate "it will
+   * be provided some other way" story, unlike a bare package (which
+   * --strict-external governs, and which can be shimmed from src/public/).
+   *
+   * Only specifiers that name a JavaScript module are enforced: an extensionless
+   * one, or .js/.json/.mjs. A relative asset import is left alone.
+   *
+   * @param {string[]} specifiers
+   * @param {string} componentPath directory the import was resolved against
+   * @param {string|null} sourceFile importing file, when the caller knows it
+   * @throws {Error} listing every unresolved specifier
+   */
+  assertRelativeImportsResolve(specifiers, componentPath, sourceFile = null) {
+    const moduleLike = specifiers.filter((specifier) => {
+      const ext = path.extname(specifier);
+      return ext === '' || BundleGenerator.RESOLVABLE_MODULE_EXTENSIONS.includes(ext);
+    });
+    if (moduleLike.length === 0) return;
+
+    const where = sourceFile || componentPath;
+    const details = moduleLike
+      .map((specifier) => `  "${specifier}" -> ${path.resolve(componentPath, specifier)}`)
+      .join('\n');
+
+    throw new Error(
+      `Cannot resolve ${moduleLike.length} import(s) in ${where}:\n${details}\n`
+      + `Checked those paths plus ${BundleGenerator.RESOLVABLE_MODULE_EXTENSIONS.join(', ')} for extensionless specifiers. `
+      + 'Fix the path or create the file — an unresolved relative import silently becomes `undefined` at runtime.'
+    );
   }
 
   /**
@@ -1588,6 +1802,7 @@ export default class BundleGenerator {
         categoryType: comp.categoryType,
         js: cleanedJavaScript.code,
         hoistedImports: cleanedJavaScript.hoistedImports,
+        hasTopLevelAwait: cleanedJavaScript.hasTopLevelAwait,
         html: htmlContent,
         css: cssContent,
         externalDependencies,
@@ -1657,11 +1872,17 @@ export default class BundleGenerator {
         });
         const body = component.js && component.js.trim()
           ? component.js
-          : `return window.${component.name};`;
+          // Bracket-keyed: a registered name like `my-btn` is a valid key but
+          // not a valid identifier.
+          : `return window[${JSON.stringify(component.name)}];`;
         const bodyWithBindings = dependencyBindings
           ? `${dependencyBindings}\n${body}`
           : body;
-        return `const ${factoryName} = () => {\n${this.indentCodeBlock(bodyWithBindings, 2)}\n};`;
+        // A component module may legitimately use top-level await. Its code ends
+        // up inside this factory, so the factory has to be async for that to be
+        // valid — and only then, to keep every other bundle byte-identical.
+        const arrow = component.hasTopLevelAwait ? 'async () =>' : '() =>';
+        return `const ${factoryName} = ${arrow} {\n${this.indentCodeBlock(bodyWithBindings, 2)}\n};`;
       })
       .join('\n\n');
 
@@ -1675,7 +1896,13 @@ export default class BundleGenerator {
     const classRegistrations = uniqueComponents
       .map((component) => {
         const componentName = JSON.stringify(component.name);
-        return `  if (!controller.classes.has(${componentName})) {\n    controller.classes.set(${componentName}, ${this.classFactoryName(component.name)}());\n  }`;
+        // An async factory returns a promise; registerAll is already async and
+        // the framework awaits it (Controller.loadBundleWithDependencies), so
+        // awaiting here keeps `classes` holding the class itself, never a promise.
+        const call = component.hasTopLevelAwait
+          ? `await ${this.classFactoryName(component.name)}()`
+          : `${this.classFactoryName(component.name)}()`;
+        return `  if (!controller.classes.has(${componentName})) {\n    controller.classes.set(${componentName}, ${call});\n  }`;
       })
       .join('\n');
 
@@ -1725,11 +1952,15 @@ export default class BundleGenerator {
     const omittedDependencies = options.omittedDependencies instanceof Set
       ? options.omittedDependencies
       : new Set(options.omittedDependencies || []);
+    const emittedModules = modules.filter((module) => !omittedDependencies.has(module.name));
+
+    // A cycle has no topological order, and this emission strategy cannot
+    // reproduce ESM's live bindings, so it must be reported rather than emitted.
+    this.assertNoDependencyCycles(emittedModules);
+
     // Emit in topological order so a module is registered before any module
     // that depends on it (its transitive imports resolve at IIFE-eval time).
-    const filteredModules = this.sortDependencyModulesTopologically(
-      modules.filter((module) => !omittedDependencies.has(module.name))
-    );
+    const filteredModules = this.sortDependencyModulesTopologically(emittedModules);
 
     const lines = [
       'const SLICE_BUNDLE_DEPENDENCIES = {};',
@@ -1805,6 +2036,83 @@ export default class BundleGenerator {
     });
 
     return lines.join('\n');
+  }
+
+  /**
+   * Fails the build when the helper modules about to be emitted import each
+   * other in a cycle.
+   *
+   * Each dependency is emitted as an eagerly-evaluated IIFE, and its imports are
+   * bound by *copying* values out of the modules registered before it
+   * (`const B = SLICE_BUNDLE_DEPENDENCIES["b.js"].B`). That is sound for a DAG,
+   * emitted in topological order. A cycle has no such order: whichever module
+   * runs first copies from an object that is not populated yet.
+   *
+   * There is no safe way to paper over this. Registering the exports objects up
+   * front would stop the crash, but the copied binding would stay `undefined`
+   * forever — trading a loud failure for a silent wrong value, which is worse.
+   * Reproducing ESM's live bindings would mean rewriting every reference into a
+   * member access, with full scope analysis.
+   *
+   * Cycles work in `slice dev`, where each file is a real ES module, so this has
+   * to be reported at build time or it becomes a dev/production divergence.
+   *
+   * @param {Array<{name: string, moduleImports?: Array<{depName: string}>}>} modules
+   * @throws {Error} naming the modules in the cycle
+   */
+  assertNoDependencyCycles(modules = []) {
+    const cycle = this.findDependencyCycle(modules);
+    if (!cycle) return;
+
+    throw new Error(
+      `Circular import between bundled modules: ${cycle.join(' -> ')}. `
+      + 'Bundled helper modules are evaluated in dependency order and cannot reproduce '
+      + "ES module live bindings, so whichever module runs first would read the other's "
+      + 'exports before they exist. This works in `slice dev` (real ES modules) but not in a build. '
+      + 'Break the cycle — usually by moving what both files share into a third module they each import.'
+    );
+  }
+
+  /**
+   * Finds one import cycle, if any, and returns it as a readable path.
+   * @param {Array<object>} modules
+   * @returns {string[]|null} e.g. ['a.js', 'b.js', 'a.js']
+   */
+  findDependencyCycle(modules = []) {
+    const byName = new Map(modules.map((module) => [module.name, module]));
+    const visited = new Set();
+    const stack = [];
+    const onStack = new Set();
+
+    const walk = (module) => {
+      if (visited.has(module.name)) return null;
+
+      stack.push(module.name);
+      onStack.add(module.name);
+
+      for (const imported of module.moduleImports || []) {
+        const next = byName.get(imported?.depName);
+        if (!next) continue;
+
+        if (onStack.has(next.name)) {
+          // Report from the first occurrence so the path reads as a loop.
+          return [...stack.slice(stack.indexOf(next.name)), next.name];
+        }
+        const found = walk(next);
+        if (found) return found;
+      }
+
+      onStack.delete(module.name);
+      stack.pop();
+      visited.add(module.name);
+      return null;
+    };
+
+    for (const module of modules) {
+      const found = walk(module);
+      if (found) return found;
+    }
+    return null;
   }
 
   sortDependencyModulesTopologically(modules = []) {
@@ -1893,9 +2201,57 @@ export default class BundleGenerator {
   /**
    * Cleans JavaScript code by removing imports/exports and ensuring class is available globally
    */
+  /**
+   * Fails the build on a component whose source is not valid JavaScript, before
+   * anything tries to transform it.
+   *
+   * Without this the broken source flowed through every transform (each of which
+   * silently falls back to a regex when it cannot parse) and into the bundle,
+   * where the generated-bundle validation reported a position in the *generated*
+   * file and said "this is a bundler bug" — actively misleading when the mistake
+   * is a missing brace in the developer's own component. The real position was
+   * only ever visible in warnings nobody reads.
+   *
+   * @param {string} code
+   * @param {string} componentName
+   * @param {string} sourceContext file path shown in the error
+   * @throws {Error} with the file, line, column and a source frame
+   */
+  assertComponentSourceParses(code, componentName, sourceContext) {
+    const diagnosis = describeSyntaxError(code, sourceContext);
+    if (diagnosis.ok) return;
+
+    throw new Error(
+      `Syntax error in component "${componentName}" at ${diagnosis.message}`
+      + '\nFix the source above — the build cannot bundle a file it cannot parse.'
+    );
+  }
+
   cleanJavaScript(code, componentName, sourceContext = componentName) {
-    // Remove export default
-    code = code.replace(/export\s+default\s+/g, '');
+    // Before any transform: a file that does not parse cannot be bundled, and
+    // every downstream step degrades to regex fallbacks that hide the real cause.
+    this.assertComponentSourceParses(code, componentName, sourceContext);
+
+    // Detect this on the pristine source: the transforms below append a
+    // top-level `return`, after which the code no longer parses as a module.
+    const hasTopLevelAwait = this.hasModuleTopLevelAwait(code);
+
+    // Resolve what the module actually default-exports, while the source is
+    // still pristine. The factory has to return *that* binding: a component's
+    // registered name and its class name need not match, and the registered name
+    // may not even be a legal identifier (`my-btn`).
+    const defaultExport = this.resolveDefaultExportBinding(code, componentName, sourceContext);
+
+    // Drop module-level `export` keywords before anything else, while the
+    // source is still pristine enough to parse as a module.
+    code = this.stripModuleExports(code, sourceContext);
+
+    // Remove export default. An anonymous one (`export default class {}`) has no
+    // binding to return, so give it one instead of leaving a bare class
+    // expression, which is not a valid statement.
+    code = defaultExport.anonymous
+      ? code.replace(/export\s+default\s+/, `const ${defaultExport.name} = `)
+      : code.replace(/export\s+default\s+/g, '');
 
     // Remove only unsupported imports (relative always removed, allowed absolute kept)
     const stripped = this.stripImports(code, {
@@ -1922,11 +2278,16 @@ export default class BundleGenerator {
       }
     );
 
-    // Make sure the class is available globally for bundle evaluation
+    // Make sure the class is available globally for bundle evaluation.
+    // Keyed by component name as a *string*: a registered name like `my-btn` is
+    // a perfectly good key but not a valid identifier, so `window.my-btn = ...`
+    // would be a syntax error.
+    const globalKey = `window[${JSON.stringify(componentName)}]`;
+
     // Preserve original customElements.define if it exists
     if (code.includes('customElements.define')) {
       // Add global assignment before guarded or direct customElements.define
-      const globalAssignment = `window.${componentName} = ${componentName};\n`;
+      const globalAssignment = `${globalKey} = ${defaultExport.name};\n`;
       const guardedDefineRegex = /if\s*\(\s*!\s*customElements\.get\([^)]*\)\s*\)\s*\{\s*customElements\.define\([^;]+\);?\s*\}\s*$/;
       const directDefineRegex = /customElements\.define\([^;]+\);?\s*$/;
       if (guardedDefineRegex.test(code)) {
@@ -1936,16 +2297,107 @@ export default class BundleGenerator {
       }
     } else {
       // If no customElements.define found, just assign to global
-      code += `\nwindow.${componentName} = ${componentName};`;
+      code += `\n${globalKey} = ${defaultExport.name};`;
     }
 
     // Add return statement for bundle evaluation compatibility
-    code += `\nreturn ${componentName};`;
+    code += `\nreturn ${defaultExport.name};`;
 
     return {
       code,
-      hoistedImports
+      hoistedImports,
+      hasTopLevelAwait
     };
+  }
+
+  /**
+   * Works out which binding a component module default-exports.
+   *
+   * The bundle wraps the component's code in a factory that has to end with
+   * `return <the class>`, and register it on `window` for bundle evaluation.
+   * Both used to be written as the *component name*, which assumed two things
+   * that are not true: that the registered name matches the class name, and that
+   * it is a valid JavaScript identifier. A component registered as `my-btn`
+   * produced `window.my-btn = my-btn; return my-btn;` — a syntax error.
+   *
+   * A component with no default export is a source error, not a bundler one:
+   * the runtime loads components with `const { default: myClass } = await
+   * import(...)` (Slice.getClass), so such a component could never be built at
+   * all. It fails the build here, with the file named and the fix spelled out,
+   * rather than emitting a bundle that dies later.
+   *
+   * @param {string} code component source, before any transform
+   * @param {string} componentName registered name
+   * @param {string} sourceContext path, used in the error
+   * @returns {{name: string, anonymous: boolean}}
+   * @throws {Error} when the module has no default export
+   */
+  resolveDefaultExportBinding(code, componentName, sourceContext) {
+    const anonymousBinding = `__sliceComponent_${this.toSafeIdentifier(componentName)}`;
+
+    let ast;
+    try {
+      ast = parse(code, { sourceType: 'module', plugins: ['jsx'] });
+    } catch (error) {
+      // Unparseable source. Don't guess a binding — the generated bundle is
+      // validated before it is written, and that reports the real problem.
+      return { name: anonymousBinding, anonymous: false };
+    }
+
+    for (const node of ast.program.body) {
+      if (node.type !== 'ExportDefaultDeclaration') continue;
+      const declaration = node.declaration;
+
+      if ((declaration.type === 'ClassDeclaration' || declaration.type === 'FunctionDeclaration')
+        && declaration.id?.name) {
+        return { name: declaration.id.name, anonymous: false };
+      }
+      if (declaration.type === 'Identifier') {
+        return { name: declaration.name, anonymous: false };
+      }
+      // `export default class {}`, `export default function () {}`, or any
+      // expression: nothing to reference, so bind it on the way out.
+      return { name: anonymousBinding, anonymous: true };
+    }
+
+    throw new Error(
+      `Component "${componentName}" has no default export (${sourceContext}). `
+      + 'Slice loads a component with `const { default: myClass } = await import(...)`, '
+      + `so ${componentName}.js must end with \`export default class ${componentName.replace(/[^A-Za-z0-9]/g, '')} { ... }\`.`
+    );
+  }
+
+  /**
+   * True when a component module awaits at its own top level (rather than inside
+   * a function). Such a module is valid ESM, but its code is emitted inside the
+   * class factory — so the factory must be declared async.
+   *
+   * @param {string} code component source, before any transform
+   * @returns {boolean}
+   */
+  hasModuleTopLevelAwait(code) {
+    let ast;
+    try {
+      ast = parse(code, { sourceType: 'module', plugins: ['jsx'] });
+    } catch (error) {
+      // Unparseable source: assume no top-level await. The bundle validation in
+      // emitBundleArtifact is what catches whatever is actually wrong.
+      return false;
+    }
+
+    let found = false;
+    traverse.default(ast, {
+      // `for await (...)` counts too — it is only legal in an async context.
+      'AwaitExpression|ForOfStatement': (pathNode) => {
+        if (found) return;
+        if (pathNode.node.type === 'ForOfStatement' && !pathNode.node.await) return;
+        if (pathNode.getFunctionParent()) return; // awaits inside a function are fine
+        found = true;
+        pathNode.stop();
+      }
+    });
+
+    return found;
   }
 
   /**
@@ -2715,6 +3167,7 @@ if (window.slice && window.slice.controller) {
         isFramework: true,
         js: cleanedJavaScript.code,
         hoistedImports: cleanedJavaScript.hoistedImports,
+        hasTopLevelAwait: cleanedJavaScript.hasTopLevelAwait,
         externalDependencies: dependencyContents,
         componentDependencies: Array.from(comp.dependencies),
         html: fs.existsSync(path.join(comp.path, `${fileBaseName}.html`))
@@ -3034,6 +3487,116 @@ if (window.slice && window.slice.controller) {
       const fallback = this.stripImportsWithFallbackRegex(code, sourceContext, collectHoistedImports);
       return collectHoistedImports ? fallback : fallback.code;
     }
+  }
+
+  /**
+   * Removes module-level `export` keywords from a component's own source.
+   *
+   * A component file is a real ES module, so `export const` / `export function`
+   * / `export class` are valid there and work in dev (each file is loaded as a
+   * module). The bundle, however, embeds this code inside
+   * `SLICE_CLASS_FACTORY_* = () => { ... }`, and `export` is only legal at the
+   * top level of a module — so the emitted bundle is a syntax error. With
+   * minification on that surfaces as `Terser failed for slice-bundle.*.js:
+   * "Export" statement may only appear at the top level`, which names the
+   * generated file rather than the source; with minification off
+   * applyBundleTransforms returns early, so the broken bundle ships and the
+   * browser rejects it at parse time instead.
+   *
+   * Only the keyword is removed — the declaration stays, so references to the
+   * name from elsewhere in the same file keep working. Nothing can consume
+   * these names through the bundle anyway: the Bundling V2 contract reads
+   * exactly SLICE_BUNDLE_META and registerAll (Controller.validateBundleModule),
+   * and another component that imports `{ NAME }` from this file resolves it
+   * from the separate copy emitted on the dependency path
+   * (buildDependencyContents), where transformDependencyContent rewrites named
+   * exports onto an exports object properly.
+   *
+   * `export default` is handled by the caller's own strip, which also appends
+   * the `return <ComponentName>;` the factory needs.
+   *
+   * @param {string} code component source
+   * @param {string|null} sourceContext path used in warnings
+   * @returns {string}
+   */
+  stripModuleExports(code, sourceContext = null) {
+    let exportNodes;
+    try {
+      exportNodes = this.parseModuleExportsFromCode(code);
+    } catch (error) {
+      // Unparseable (e.g. TS syntax): fall back to a conservative keyword strip
+      // rather than emitting a bundle that cannot be parsed at all.
+      return this.stripModuleExportsWithFallbackRegex(code);
+    }
+
+    if (exportNodes.length === 0) return code;
+
+    let cleaned = '';
+    let cursor = 0;
+    for (const node of exportNodes) {
+      cleaned += code.slice(cursor, node.start);
+      cleaned += this.rewriteModuleExportStatement(node, code, sourceContext);
+      cursor = node.end;
+    }
+    cleaned += code.slice(cursor);
+
+    return cleaned;
+  }
+
+  /**
+   * Top-level named/star export statements, in source order. Exports are only
+   * valid at the top level, so program.body is the whole search space.
+   * @param {string} code
+   * @returns {Array<object>}
+   */
+  parseModuleExportsFromCode(code) {
+    const ast = parse(code, {
+      sourceType: 'module',
+      plugins: ['jsx']
+    });
+
+    return ast.program.body
+      .filter((node) => node.type === 'ExportNamedDeclaration' || node.type === 'ExportAllDeclaration')
+      .filter((node) => typeof node.start === 'number' && typeof node.end === 'number')
+      .sort((a, b) => a.start - b.start);
+  }
+
+  rewriteModuleExportStatement(node, code, sourceContext) {
+    // `export const X = 1` / `export function f() {}` / `export class C {}`
+    // become the bare declaration.
+    if (node.type === 'ExportNamedDeclaration' && node.declaration) {
+      return code.slice(node.declaration.start, node.declaration.end);
+    }
+
+    // A re-export (`export { x } from './y'`, `export * from './y'`) has no
+    // local declaration to keep, and the factory has no exports object to
+    // attach one to. Dropping it costs nothing inside the bundle, but it means
+    // this file is acting as a barrel — worth saying so out loud.
+    if (node.source) {
+      console.warn(this.buildImportWarningMessage(
+        `Warning: Dropping re-export '${code.slice(node.start, node.end).split('\n')[0].trim()}' from a component file (not supported in bundles)`,
+        sourceContext
+      ));
+      return '';
+    }
+
+    // Plain `export { a, b }` — the declarations of a and b stay in the file,
+    // so removing the statement loses nothing.
+    return '';
+  }
+
+  /**
+   * Last-resort strip for sources Babel cannot parse. Anchored to the start of
+   * a line and required to be followed by a declaration keyword, so `export`
+   * inside a string, a comment or a longer identifier is left alone.
+   * @param {string} code
+   * @returns {string}
+   */
+  stripModuleExportsWithFallbackRegex(code) {
+    return code.replace(
+      /^([ \t]*)export[ \t]+(?=(?:const|let|var|class|function|async[ \t]+function)\b)/gm,
+      '$1'
+    );
   }
 
   async loadComponentsMap() {

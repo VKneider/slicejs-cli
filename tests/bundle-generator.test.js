@@ -332,7 +332,7 @@ test('cleanJavaScript hoists allowed absolute imports and removes them from comp
 
   const source = [
     "import hero from '/public/hero.js';",
-    'class Demo extends HTMLElement {}',
+    'export default class Demo extends HTMLElement {}',
     'customElements.define("x-demo", Demo);'
   ].join('\n');
 

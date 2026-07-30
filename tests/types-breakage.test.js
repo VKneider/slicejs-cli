@@ -181,18 +181,25 @@ describe('generateDeclarationContent — breakage', () => {
     assert.match(content, /export interface deleteProps/);
   });
 
-  test('digit-starting component name generates invalid TS', () => {
+  test('digit-starting component name yields a valid interface name', () => {
+    // Was characterized as broken: `export interface 123CompProps` is not a
+    // valid identifier. The name is now encoded, and the map key quoted.
     const content = generateDeclarationContent({
       '123Comp': { val: { type: 'string', required: false } }
     });
-    assert.match(content, /export interface 123CompProps/);
+    assert.doesNotMatch(content, /export interface 123CompProps/);
+    assert.match(content, /"123Comp": /, 'the props-map key must be quoted');
+    const [, interfaceName] = content.match(/export interface (\S+Props) \{/) || [];
+    assert.match(interfaceName || '', /^[A-Za-z_$][A-Za-z0-9_$]*$/);
   });
 
-  test('hyphenated component name generates invalid TS', () => {
+  test('hyphenated component name yields a valid interface name', () => {
+    // Was characterized as broken — see tests/types-declaration-safety.test.js.
     const content = generateDeclarationContent({
       'my-component': { val: { type: 'string', required: false } }
     });
-    assert.match(content, /export interface my-componentProps/);
+    assert.doesNotMatch(content, /export interface my-componentProps/);
+    assert.match(content, /"my-component": /, 'the props-map key must be quoted');
   });
 
   test('__dynamicPropsFallback as real prop is hidden from declaration', () => {

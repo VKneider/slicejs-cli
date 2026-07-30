@@ -189,7 +189,8 @@ describe('cleanJavaScript', () => {
   test('exposes the component class globally and returns it', () => {
     const gen = makeGenerator();
     const { code } = gen.cleanJavaScript('export default class Button extends HTMLElement {}', 'Button');
-    assert.match(code, /window\.Button = Button;/);
+    // Keyed by string so names like `my-btn` stay valid JavaScript.
+    assert.match(code, /window\["Button"\] = Button;/);
     assert.match(code, /return Button;/);
     // The cleaned code is a factory *body* (ends in `return Button;`), so allow
     // a top-level return when checking it is otherwise syntactically valid.
@@ -201,7 +202,7 @@ describe('cleanJavaScript', () => {
   test('guards customElements.define against duplicate registration', () => {
     const gen = makeGenerator();
     const { code } = gen.cleanJavaScript(
-      "class El extends HTMLElement {}\ncustomElements.define('my-el', El);",
+      "export default class El extends HTMLElement {}\ncustomElements.define('my-el', El);",
       'El'
     );
     assert.match(code, /if \(!customElements\.get\('my-el'\)\)/);
@@ -210,7 +211,7 @@ describe('cleanJavaScript', () => {
   test('strips relative imports and hoists public/ imports', () => {
     const gen = makeGenerator();
     const { code, hoistedImports } = gen.cleanJavaScript(
-      "import './local.js';\nimport lib from '/assets/lib.js';\nclass C {}\nreturn C;",
+      "import './local.js';\nimport lib from '/assets/lib.js';\nexport default class C {}",
       'C'
     );
     assert.ok(!code.includes('./local.js'));

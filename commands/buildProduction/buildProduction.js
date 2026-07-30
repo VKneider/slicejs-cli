@@ -3,10 +3,11 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { createRequire } from 'module';
-import { minify as terserMinify } from 'terser';
 import { minify } from 'html-minifier-terser';
 import CleanCSS from 'clean-css';
 import Print from '../Print.js';
+import { minifyJs, sourceFileOptions, componentsRegistryOptions } from '../utils/JsMinifier.js';
+import { describeSyntaxError } from '../utils/SourceDiagnostics.js';
 import { getSrcPath, getDistPath, getConfigPath, getProjectRoot } from '../utils/PathHelper.js';
 import { resolvePackageManager, runScriptCommand } from '../utils/PackageManager.js';
 
@@ -43,8 +44,14 @@ async function checkBuildDependencies() {
     Print.success('Build dependencies available');
     return true;
   } catch (error) {
-    Print.warning('Some build dependencies missing - using fallback copy mode');
-    return true;
+    // This used to return true, so a build with no minifier installed reported
+    // success while shipping every file unoptimized. They are declared
+    // dependencies of the CLI — if they are missing the install is broken, and
+    // saying so beats producing a build nobody knows is unoptimized.
+    Print.error(`Build dependencies missing: ${error.message}`);
+    Print.info('Reinstall the project dependencies, then build again.');
+    Print.info('To build anyway with files copied unoptimized, pass --allow-unoptimized.');
+    return false;
   }
 }
 
@@ -146,8 +153,12 @@ async function copyFrameworkRuntime() {
  * Processes a complete directory
  */
 async function processDirectory(srcPath, distPath, baseSrcPath, options) {
-  const items = await fs.readdir(srcPath);
-  
+  // Sorted, not raw readdir order: readdir gives no ordering guarantee and it
+  // varies by filesystem, so an unstable walk would make build output and its
+  // logs differ between machines. Cheap insurance for reproducible builds and
+  // any content-hash caching built on them.
+  const items = (await fs.readdir(srcPath)).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+
   for (const item of items) {
     const srcItemPath = path.join(srcPath, item);
     const distItemPath = path.join(distPath, item);
@@ -160,6 +171,40 @@ async function processDirectory(srcPath, distPath, baseSrcPath, options) {
       await processFile(srcItemPath, distItemPath, options);
     }
   }
+}
+
+// Files that could not be optimized and were copied through instead. A build
+// that quietly degrades is worse than one that fails: every one of the bundler
+// bugs found so far shipped unoptimized output behind a red line nobody read.
+// Reset per build (buildProduction) and reported before it returns.
+let degradations = [];
+
+
+function resetDegradations() {
+  degradations = [];
+}
+
+
+function recordDegradation(entry) {
+  degradations.push(entry);
+}
+
+/**
+ * Prints what fell back, if anything.
+ * @returns {boolean} true when the build was fully optimized
+ */
+function reportDegradations() {
+  if (degradations.length === 0) return true;
+
+  Print.newLine();
+  Print.error(`${degradations.length} file(s) could not be optimized and were copied unoptimized:`);
+  for (const { file, reason } of degradations) {
+    console.log(`  • ${file}: ${reason}`);
+  }
+  Print.newLine();
+  Print.info('These files ship as-is: unminified, comments and all. Fix the cause, or');
+  Print.info('pass --allow-unoptimized to accept it and let the build succeed.');
+  return false;
 }
 
 /**
@@ -223,7 +268,14 @@ async function processFile(srcFilePath, distFilePath, options) {
       Print.info(`📄 Copied: ${fileName} (${sizeKB} KB)`);
     }
   } catch (error) {
+    // Copying the source through keeps the build usable, but the file ships
+    // unoptimized — and this used to be the whole story: a red line in the
+    // middle of a green build. Record it so the build can report and fail on it.
     Print.error(`Processing ${fileName}: ${error.message}`);
+    recordDegradation({
+      file: path.relative(getSrcPath(import.meta.url), srcFilePath) || fileName,
+      reason: error.message
+    });
     await fs.copy(srcFilePath, distFilePath);
   }
 }
@@ -235,19 +287,7 @@ async function processComponentsFile(srcPath, distPath) {
   const content = await fs.readFile(srcPath, 'utf8');
   const originalSize = Buffer.byteLength(content, 'utf8');
   
-  const result = await terserMinify(content, {
-    compress: false,
-    mangle: false,
-    format: {
-      comments: false,
-      beautify: false,
-      indent_level: 0
-    }
-  });
-
-  if (result.error) {
-    throw new Error(`Terser error in components.js: ${result.error}`);
-  }
+  const result = await minifyJs(content, componentsRegistryOptions);
 
   await fs.writeFile(distPath, result.code, 'utf8');
   
@@ -263,67 +303,19 @@ async function processComponentsFile(srcPath, distPath) {
 async function minifyJavaScript(srcPath, distPath) {
   const content = await fs.readFile(srcPath, 'utf8');
   const originalSize = Buffer.byteLength(content, 'utf8');
-  
-  const result = await terserMinify(content, {
-    compress: {
-      drop_console: false,
-      drop_debugger: true,
-      pure_funcs: [],
-      passes: 1,
-      unused: false,
-      side_effects: false,
-      reduce_vars: false,
-      collapse_vars: false
-    },
-    mangle: {
-      reserved: [
-        // Core Slice
-        'slice', 'Slice', 'SliceJS', 'window', 'document',
-        // Main classes
-        'Controller', 'StylesManager', 'Router', 'Logger', 'Debugger',
-        // Slice methods
-        'getClass', 'isProduction', 'getComponent', 'build', 'setTheme', 'attachTemplate',
-        // Controller
-        'componentCategories', 'templates', 'classes', 'requestedStyles', 'activeComponents',
-        'registerComponent', 'registerComponentsRecursively', 'loadTemplateToComponent',
-        'fetchText', 'setComponentProps', 'verifyComponentIds', 'destroyComponent',
-        // StylesManager
-        'componentStyles', 'themeManager', 'init', 'appendComponentStyles', 'registerComponentStyles',
-        // Router
-        'routes', 'pathToRouteMap', 'activeRoute', 'navigate', 'matchRoute', 'handleRoute',
-        'onRouteChange', 'loadInitialRoute', 'renderRoutesComponentsInPage',
-        // Propiedades de componentes
-        'sliceId', 'sliceType', 'sliceConfig', 'debuggerProps', 'parentComponent',
-        'value', 'customColor', 'icon', 'layout', 'view', 'items', 'columns', 'rows',
-        'onClickCallback', 'props',
-        // Custom Elements
-        'customElements', 'define', 'HTMLElement',
-        // Critical DOM APIs
-        'addEventListener', 'removeEventListener', 'querySelector', 'querySelectorAll',
-        'appendChild', 'removeChild', 'innerHTML', 'textContent', 'style', 'classList',
-        // Lifecycle
-        'beforeMount', 'afterMount', 'beforeDestroy', 'afterDestroy',
-        'mount', 'unmount', 'destroy', 'update', 'start', 'stop',
-        // Browser APIs
-        'fetch', 'setTimeout', 'clearTimeout', 'localStorage', 'history', 'pushState',
-        // Exports/Imports
-        'default', 'export', 'import', 'from', 'await', 'async',
-        // Nombres de componentes
-        'Button', 'Grid', 'Layout', 'HomePage', 'NotFound', 'Loading', 'TreeView', 'Link',
-        'FetchManager'
-      ],
-      properties: { regex: /^_/ }
-    },
-    format: {
-      comments: false,
-      beautify: false
-    },
-    keep_fnames: true,
-    keep_classnames: true
-  });
 
-  if (result.error) {
-    throw new Error(`Terser error: ${result.error}`);
+  let result;
+  try {
+    result = await minifyJs(content, sourceFileOptions);
+  } catch (minifyError) {
+    // Terser reports its own parse failures without a location and in its own
+    // vocabulary ("Unexpected token punc «(»"). When the file simply does not
+    // parse, say so against the developer's source instead.
+    const diagnosis = describeSyntaxError(content, srcPath);
+    if (!diagnosis.ok) {
+      throw new Error(`Syntax error at ${diagnosis.message}\nFix the source above.`);
+    }
+    throw minifyError;
   }
 
   await fs.writeFile(distPath, result.code, 'utf8');
@@ -472,7 +464,8 @@ async function analyzeBuild() {
 export default async function buildProduction(options = {}) {
   const startTime = Date.now();
   const packageManager = resolvePackageManager(getProjectRoot(import.meta.url)).name;
-  
+  resetDegradations();
+
   try {
     Print.title('🔨 Building Slice.js project for production...');
     Print.newLine();
@@ -511,8 +504,14 @@ export default async function buildProduction(options = {}) {
     await createOptimizedBundle();
     await generateBuildStats(srcDir, distDir);
 
+    const fullyOptimized = reportDegradations();
+    if (!fullyOptimized && !options.allowUnoptimized) {
+      Print.error('Build failed: not every file could be optimized (see above).');
+      return false;
+    }
+
     const buildTime = ((Date.now() - startTime) / 1000).toFixed(1);
-    
+
     Print.newLine();
     Print.success(`✨ Slice.js production build completed in ${buildTime}s`);
     Print.info('Your optimized project is ready in the /dist directory');
@@ -585,7 +584,9 @@ export async function buildCommand(options = {}) {
   const config = loadConfig();
   const defaultPort = config?.server?.port || 3001;
   
-  if (!await checkBuildDependencies()) {
+  // Missing minifiers are fatal unless the caller explicitly accepts an
+  // unoptimized build.
+  if (!await checkBuildDependencies() && !options.allowUnoptimized) {
     return false;
   }
 
