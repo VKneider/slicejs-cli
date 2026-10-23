@@ -21,6 +21,7 @@ import validations from "./commands/Validations.js";
 import Print from "./commands/Print.js";
 import build from './commands/build/build.js';
 import { runGenerateTypes } from './commands/types/types.js';
+import { runDocsGet, runDocsList, runDocsSearch } from './commands/docs/docs.js';
 import { cleanBundles, bundleInfo } from './commands/bundle/bundle.js';
 import {
   isLocalDelegationDisabled,
@@ -71,7 +72,10 @@ async function withNodeEnv(env, fn) {
 async function runWithVersionCheck(commandFunction, ...args) {
   try {
     const globalOpts = program.opts();
-    const skipVersionCheck = globalOpts.noVersionCheck === false;
+    // Commander stores a negated `--no-version-check` option as `versionCheck`.
+    // Keep the old property check for compatibility with callers that construct
+    // program options directly.
+    const skipVersionCheck = globalOpts.versionCheck === false || globalOpts.noVersionCheck === false;
 
     if (!skipVersionCheck) {
       updateManager.notifyAvailableUpdates().catch(() => {});
@@ -524,6 +528,45 @@ skillCommand
   .action(async (options) => {
     await runWithVersionCheck(async () => {
       await addSkill({ force: options.force });
+    });
+  });
+
+// DOCUMENTATION COMMAND GROUP - Framework and Slice.js Components docs
+const docsCommand = sliceClient.command("docs").description("Search and retrieve Slice.js documentation");
+
+docsCommand
+  .command("list")
+  .description("List documentation from the framework, Components catalog, or both")
+  .option("-s, --source <source>", "Documentation source: framework, components, or all", "all")
+  .option("--json", "Print machine-readable JSON")
+  .action(async (options) => {
+    await runWithVersionCheck(async () => {
+      await runDocsList(options);
+    });
+  });
+
+docsCommand
+  .command("search <query>")
+  .description("Search framework and Slice.js Components documentation")
+  .option("-s, --source <source>", "Documentation source: framework, components, or all", "all")
+  .option("-m, --max-results <number>", "Maximum number of results", "5")
+  .option("--snippets-per-doc <number>", "Maximum snippets per result", "3")
+  .option("--json", "Print machine-readable JSON")
+  .action(async (query, options) => {
+    await runWithVersionCheck(async () => {
+      await runDocsSearch(query, options);
+    });
+  });
+
+docsCommand
+  .command("get <ids...>")
+  .description("Retrieve the authored Markdown for one or more documents")
+  .option("-s, --source <source>", "Documentation source: framework, components, or all", "all")
+  .option("--stdout", "Print only the authored Markdown")
+  .option("--json", "Print machine-readable JSON")
+  .action(async (ids, options) => {
+    await runWithVersionCheck(async () => {
+      await runDocsGet(ids, options);
     });
   });
 
