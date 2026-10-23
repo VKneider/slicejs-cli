@@ -17,6 +17,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.3.0] - 2026-10-23
+
+### Added
+
+- Added `slice docs list`, `slice docs search`, and `slice docs get`.
+- Added framework, Slice.js Components, and cross-catalog documentation sources.
+- Added JSON and raw Markdown output modes for agent and CI workflows.
+- Added support for the Slice.js Components documentation manifest.
+
+### Fixed
+
+- Fixed `--no-version-check` so Commander’s negated option is respected.
+
+---
+
 ## [4.2.0] - 2026-07-30
 
 ### ⚠️ The build now fails on things it used to let through
@@ -193,5 +208,6 @@ scripts keep working.
 - **`slice update` / `slice upgrade` commands**: Removed from CLI and documentation.
 - **`postinstall` lifecycle hook**: `post.js` deleted, `"postinstall"` script removed from `package.json`.
 
-[Unreleased]: https://github.com/VKneider/slicejs-cli/compare/v3.6.5...HEAD
+[Unreleased]: https://github.com/VKneider/slicejs-cli/compare/v4.3.0...HEAD
+[4.3.0]: https://github.com/VKneider/slicejs-cli/releases/tag/v4.3.0
 [3.6.5]: https://github.com/VKneider/slicejs-cli/releases/tag/v3.6.5
