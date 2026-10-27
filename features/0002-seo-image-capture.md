@@ -2,7 +2,7 @@
 id: "0002"
 title: "slice seo images: generate the social cards for the app's routes"
 repo: "slicejs-cli"
-status: proposed
+status: planned
 area: cli
 priority: low
 created: 2026-10-27
@@ -222,16 +222,16 @@ apps whose images never change. `slice seo images` is a pre-deploy step; `--chec
 
 ## Open questions
 
-- [ ] `slice seo images` or a top-level `slice og`? (SEO prefix groups it with `seo check`.)
-- [ ] Does the command boot `slice dev`, `slice start`, or require `--base-url`? (Suggested: boot dev
-      by default, `--base-url` for the accurate production capture.)
-- [ ] Card ownership: neutral built-in template, or no template until the app provides one?
-- [ ] Does `theme: 'dark'` need the app's tokens for the default card, or do the card's own light/dark
-      palettes suffice? (Suggested: derive from the resolved theme's `--primary-background-color`
-      luminance, so custom themes work without a setting.)
-- [ ] Where do the generated images live by default: `src/public/og` (copied by the build) or
-      `public/og` at the root?
-- [ ] Update `seo.json` in place, or emit `seo.images.json` for the app to merge?
+- [x] Name: **`slice seo images`**, with `slice og` as an alias (grouped with `seo check`, but the
+      shorter name is what people will type).
+- [x] Capture source: **boot `slice dev`** on a free port (the capture reflects the app a user sees);
+      `--base-url` for a production-accurate capture, `--production` to boot `start` after a build.
+- [x] Card: **built-in neutral template**, `template` for full control. No app-specific chrome.
+- [x] Output: **`src/public/og`** by default (the convention the build copies).
+- [x] Write: **patch `seo.json` in place**, only the image fields, deterministic ordering, validated
+      afterwards with the same validator as `seo check`.
+- [x] Card palette: derived from the resolved theme's `--primary-background-color` luminance, so a
+      custom theme works with no extra setting.
 
 ## Decision log
 
@@ -249,3 +249,4 @@ apps whose images never change. `slice seo images` is a pre-deploy step; `--chec
   through those same doors, fails loudly when the app's config cannot express it, and the card
   palette is derived from `--primary-background-color` luminance (the test the theme manager already
   uses), so custom themes need no extra setting.
+- 2026-10-27 - Promoted to planned: slice seo images (alias slice og), boots slice dev on a free port, built-in card plus 	emplate, src/public/og, patches seo.json in place.
