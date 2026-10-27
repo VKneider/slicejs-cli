@@ -11,6 +11,88 @@ import { parseComponentsRegistry, validateComponentProps } from '../types/types.
 import { parse as parseModule } from '@babel/parser';
 import traverse from '@babel/traverse';
 import ExternalModuleBundler from '../utils/bundling/ExternalModuleBundler.js';
+import { loadFrameworkSeo, loadManifest } from '../seo/support.js';
+import { loadRoutes } from '../seo/check.js';
+
+/**
+ * SEO: is it configured, and is it safe to deploy?
+ *
+ * Warns rather than fails for an unconfigured project (SEO is opt-in), and
+ * fails only for input the user has to fix. The rules are the framework's
+ * validator, the same one `slice seo check` uses, so the two cannot disagree.
+ */
+async function checkSeoConfiguration() {
+    const projectRoot = getProjectRoot(import.meta.url);
+
+    if (!fs.existsSync(path.join(projectRoot, 'api', 'index.js'))) {
+        return { pass: true, message: 'Not a server app (no api/index.js)' };
+    }
+
+    let loaded;
+    try {
+        loaded = loadManifest(projectRoot);
+    } catch (error) {
+        return {
+            message: `seo.json is not valid JSON: ${error.message}`,
+            suggestion: 'Fix the file: the server fails at startup on the same error'
+        };
+    }
+
+    const { manifest } = loaded;
+    if (!manifest) {
+        return {
+            warn: true,
+            message: 'Not configured: every route shares one <head> and unknown paths answer 200',
+            suggestion: 'Add seo.json and pass it to createSliceServer({ seo: { manifest: "seo.json" } })'
+        };
+    }
+
+    let framework;
+    try {
+        framework = await loadFrameworkSeo(projectRoot);
+    } catch (error) {
+        return { warn: true, message: `seo.json exists, but the installed framework has no SEO module: ${error.message}` };
+    }
+
+    const routes = await loadRoutes(projectRoot).catch(() => []);
+    const { errors, warnings } = framework.validateSeoManifest(manifest, {
+        routes,
+        publicDir: path.join(projectRoot, 'src', 'public')
+    });
+
+    // The sitemap is a committed artifact, so a stale one is a deploy problem.
+    if (manifest.sitemap !== false) {
+        const sitemapFile = path.join(projectRoot, 'src', 'public', 'sitemap.xml');
+        const origin = framework.normalizeOrigin(manifest.origin);
+        if (!fs.existsSync(sitemapFile)) {
+            warnings.push('sitemap.xml is missing: run `slice seo sitemap`');
+        } else if (origin && fs.readFileSync(sitemapFile, 'utf8') !== framework.buildSitemap({ manifest, origin })) {
+            warnings.push('sitemap.xml is out of date: run `slice seo sitemap`');
+        }
+    }
+
+    const routeCount = Object.keys(manifest.routes || {}).length;
+
+    if (errors.length) {
+        return {
+            message: `${errors.length} problem(s) in seo.json: ${errors[0]}`,
+            suggestion: errors.length > 1 ? `${errors[1]} (run \`slice seo check\` for the full list)` : 'Run `slice seo check`'
+        };
+    }
+
+    if (warnings.length) {
+        return {
+            warn: true,
+            message: `origin ${manifest.origin}, ${routeCount} routes — ${warnings.length} warning(s): ${warnings[0]}`,
+            suggestion: warnings.length > 1 ? `${warnings[1]} (run \`slice seo check\` for the full list)` : undefined
+        };
+    }
+
+    return {
+        pass: true,
+        message: `origin ${manifest.origin}, ${routeCount} routes, sitemap ${manifest.sitemap === false ? 'off' : 'ok'}`
+    };
+}
 
 /**
  * Checks the Node.js version
@@ -463,6 +545,7 @@ export {
     checkNodeVersion,
     checkDirectoryStructure,
     checkConfig,
+    checkSeoConfiguration,
     checkPort,
     checkDependencies,
     checkComponents,
@@ -479,6 +562,7 @@ export default async function runDiagnostics() {
         { name: 'Node.js Version', fn: checkNodeVersion },
         { name: 'Project Structure', fn: checkDirectoryStructure },
         { name: 'Configuration', fn: checkConfig },
+        { name: 'SEO', fn: checkSeoConfiguration },
         { name: 'Port Availability', fn: checkPort },
         { name: 'Package Manager', fn: checkPackageManagerSetup },
         { name: 'Dependencies', fn: checkDependencies },

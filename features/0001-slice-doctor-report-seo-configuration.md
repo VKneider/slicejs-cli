@@ -2,7 +2,7 @@
 id: "0001"
 title: "slice doctor: report SEO configuration"
 repo: "slicejs-cli"
-status: planned
+status: done
 area: cli
 priority: low
 created: 2026-10-27
@@ -138,3 +138,4 @@ stays the strict, exit-code-1 gate for CI.
   (`slice.js/features/0002`). The check consumes the framework's validator so the rules stay in one
   place.
 - 2026-10-27 - Promoted to planned: the validator is imported from the installed framework, the verdict for an unconfigured project is a warning, and the sitemap row checks the committed public/sitemap.xml against the manifest.
+- 2026-10-27 - Done. `checkSeoConfiguration()` is a doctor row: no `api/index.js` → pass (not a server app); a server without `seo.json` → warn with the one-line snippet; invalid JSON → fail; a localhost origin, routes or manifest entries that do not match, a missing or stale sitemap, and long titles/descriptions → warn. The verdicts come from `validateSeoManifest()` in the installed framework, so doctor and `slice seo check` cannot disagree. 5 tests.

@@ -11,6 +11,7 @@ import startServer from "./commands/startServer/startServer.js";
 import runDiagnostics from "./commands/doctor/doctor.js";
 import seoCheck from "./commands/seo/check.js";
 import seoSitemap from "./commands/seo/sitemap.js";
+import seoImages from "./commands/seo/images.js";
 import versionChecker from "./commands/utils/VersionChecker.js";
 import updateManager from "./commands/utils/updateManager.js";
 import fs from "fs";
@@ -743,6 +744,24 @@ seoCommand
   .action(async () => {
     await runWithVersionCheck(async () => {
       await seoCheck({}, getProjectRoot(import.meta.url));
+    });
+  });
+
+seoCommand
+  .command("images")
+  .alias("og")
+  .description("Generate the 1200x630 social card each route advertises")
+  .option("--only <routes>", "comma-separated routes to render")
+  .option("--base-url <url>", "use a running server instead of booting one")
+  .option("--check", "verify the committed cards, no browser")
+  .option("--dry-run", "capture and compose, write nothing")
+  .option("--selector <css>", "element to capture instead of the viewport")
+  .option("--out <dir>", "write the cards somewhere else (default: from seo.json)")
+  .option("--runner <file>", "module exporting prepare(page, route) / capture")
+  .option("--storage-state <file>", "Playwright storage state for a logged-in capture")
+  .action(async (options) => {
+    await runWithVersionCheck(async () => {
+      await seoImages(options, getProjectRoot(import.meta.url));
     });
   });
 
