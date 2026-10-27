@@ -9,6 +9,8 @@ import getComponent, { listComponents as listRemoteComponents, syncComponents } 
 import { addSkill, statusSkill, updateSkill } from "./commands/skill/skill.js";
 import startServer from "./commands/startServer/startServer.js";
 import runDiagnostics from "./commands/doctor/doctor.js";
+import seoCheck from "./commands/seo/check.js";
+import seoSitemap from "./commands/seo/sitemap.js";
 import versionChecker from "./commands/utils/VersionChecker.js";
 import updateManager from "./commands/utils/updateManager.js";
 import fs from "fs";
@@ -715,6 +717,32 @@ sliceClient
   .action(async () => {
     await runWithVersionCheck(async () => {
       await runDiagnostics();
+    });
+  });
+
+// SEO COMMANDS — the artifacts are committed, so they are written on demand and
+// guarded in CI rather than generated at request time.
+const seoCommand = sliceClient
+  .command("seo")
+  .description("SEO helpers: sitemap/robots generation and seo.json validation");
+
+seoCommand
+  .command("sitemap")
+  .description("Write public/sitemap.xml (and robots.txt) from seo.json")
+  .option("--yes", "overwrite existing files without asking")
+  .option("--dry-run", "show what would change, write nothing")
+  .action(async (options) => {
+    await runWithVersionCheck(async () => {
+      await seoSitemap(options, getProjectRoot(import.meta.url));
+    });
+  });
+
+seoCommand
+  .command("check")
+  .description("Validate seo.json and the committed sitemap (exit 1 on drift)")
+  .action(async () => {
+    await runWithVersionCheck(async () => {
+      await seoCheck({}, getProjectRoot(import.meta.url));
     });
   });
 

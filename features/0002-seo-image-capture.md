@@ -163,6 +163,20 @@ The user's instinct ("let them point at the Playwright runner") is right, but it
 Never on request, and not inside `slice build` by default: the build must not require a browser for
 apps whose images never change. `slice seo images` is a pre-deploy step; `--check` is the CI gate.
 
+### Writing files: never overwrite silently
+
+Both this command and `slice seo sitemap` write artifacts a human reviews and commits
+(`public/sitemap.xml`, `public/robots.txt`, `public/og/*.png`, and the `image` fields inside
+`seo.json`). The rule, shared by every `slice seo` command that writes:
+
+- If a target file **exists and would change**, print what changes and ask for confirmation.
+  The default answer is **no**.
+- `--yes` (alias `--force`) skips the prompt — for scripts that already decided.
+- **Non-interactive runs (no TTY, e.g. CI) never prompt.** They fail with a message naming `--yes`,
+  so a pipeline cannot hang waiting for input.
+- `--check` and `--dry-run` never write and never prompt.
+- Files whose content is unchanged are not rewritten at all (no mtime churn, no diff noise).
+
 ## Alternatives considered
 
 - **Bake it into `slice build`**: forces Chromium into every CI, and a build that fails because a
@@ -250,3 +264,5 @@ apps whose images never change. `slice seo images` is a pre-deploy step; `--chec
   palette is derived from `--primary-background-color` luminance (the test the theme manager already
   uses), so custom themes need no extra setting.
 - 2026-10-27 - Promoted to planned: slice seo images (alias slice og), boots slice dev on a free port, built-in card plus 	emplate, src/public/og, patches seo.json in place.
+
+- 2026-10-27 - The file-writing rule is implemented (`commands/seo/support.js#writeFileConfirmed`): unchanged → no write and no mtime churn, changed → confirm (default no), `--yes` to skip, non-TTY → fail with a message naming the flag. `slice seo sitemap` (`slice.js/features/0002`) is the first consumer; the images command inherits it.
