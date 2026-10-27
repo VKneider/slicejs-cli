@@ -265,3 +265,24 @@ describe('categories and route params', () => {
     }, { visualComponents: ['Widget'] });
   });
 });
+
+describe('reserved build directives', () => {
+  test('declaring id, sliceId or singleton as a prop blocks the build', async () => {
+    await withTestProject(async (root) => {
+      await fs.writeFile(
+        path.join(root, 'src', 'routes.js'),
+        "const routes = [{ path: '/', component: 'Widget' }];\nexport default routes;\n"
+      );
+      await fs.writeFile(
+        path.join(root, 'src', 'Components', 'Visual', 'Widget', 'Widget.js'),
+        "export default class Widget {\n  static props = { id: { type: 'string' } }\n}\n"
+      );
+
+      const { blocking, row } = await verdicts(root);
+      assert.equal(blocking.length, 1, JSON.stringify(blocking));
+      assert.match(blocking[0].message, /reserved build directive/);
+      assert.match(blocking[0].message, /slice\.build\("Widget", \{ id: \.\.\. \}\)/);
+      assert.equal(row.pass, undefined);
+    }, { visualComponents: ['Widget'] });
+  });
+});

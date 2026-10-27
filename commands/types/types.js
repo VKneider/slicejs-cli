@@ -833,6 +833,10 @@ const loadComponentStaticProps = async ({ projectRoot, registryMap }) => {
 };
 
 const PROP_VALID_TYPES = new Set(['string', 'number', 'boolean', 'object', 'array', 'function', 'any']);
+// Build directives, stripped from props before setters run. Declaring one as a
+// prop is a silent no-op: the value never reaches the component. Found by the
+// Conclave lint audit (0 uses in 338 components, so it guards future mistakes).
+const RESERVED_PROP_NAMES = new Set(['id', 'sliceId', 'singleton']);
 
 /**
  * Validates every registered component's static props. Shared by `slice doctor`
@@ -1000,6 +1004,9 @@ const validateComponentProps = async ({ projectRoot }) => {
       const err = (message) => errors.push({ component: componentName, prop, message });
       const warn = (message) => warnings.push({ component: componentName, prop, message });
 
+      if (RESERVED_PROP_NAMES.has(prop)) {
+        err(`is a reserved build directive and is stripped before setters run. Pass it to slice.build("${componentName}", { ${prop}: ... }) instead of declaring it as a prop.`);
+      }
       if (!PROP_VALID_TYPES.has(meta.type)) err(`unknown type "${meta.type}"`);
       if (meta.schema && meta.type !== 'object') err(`has "schema" but type is "${meta.type}" (should be "object")`);
       if (meta.items && meta.type !== 'array') err(`has "items" but type is "${meta.type}" (should be "array")`);
