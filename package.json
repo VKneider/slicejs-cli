@@ -33,7 +33,8 @@
     "slice:version": "slice version",
     "slice:types": "slice types generate",
     "slice:doctor": "node ./node_modules/slicejs-cli/client.js doctor",
-    "slice:help": "node ./node_modules/slicejs-cli/client.js --help"
+    "slice:help": "node ./node_modules/slicejs-cli/client.js --help",
+    "release:check": "node scripts/release-check.mjs"
   },
   "keywords": [
     "framework",
@@ -63,7 +64,7 @@
     "html-minifier-terser": "^7.2.0",
     "inquirer": "^12.4.2",
     "ora": "^8.2.0",
-    "slicejs-web-framework": "^3.5.0",
+    "slicejs-web-framework": "^4.0.2",
     "terser": "^5.43.1"
   },
   "devDependencies": {

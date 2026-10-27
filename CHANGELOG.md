@@ -10,11 +10,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `CHANGELOG.md` with Keep a Changelog format.
+- `slice seo sitemap`, `slice seo check` and `slice seo images` (alias `slice og`): write and
+  validate the committed `public/sitemap.xml`, and render the 1200×630 social card each indexable
+  route advertises into `public/og/` plus the `manifest.json` the server merges via `seo.images`.
+- `slice doctor` reports an `SEO` row: not configured warns, malformed input fails, and the
+  verdicts come from the same validator as `slice seo check`.
+- `scripts/release-check.mjs` (`npm run release:check`): packaging, unpublished-version, changelog
+  and framework-range checks, so a release cannot ship a CLI that installs the wrong runtime.
 
 ### Changed
 
 - Pointed the component registry and the Slice.js Components documentation catalog at the new
   `slicejs-components` repository (renamed from `slice.js_visual_library`).
+- `slicejs-web-framework` range is `^4.0.2` (was `^3.5.0`, which made a fresh global install resolve
+  a 3.x runtime).
+
+### Fixed
+
+- `slice init` no longer delegates to a `slicejs-cli` found by walking up from the current folder.
+  Running `npx`/`pnpm dlx slicejs-cli@latest init` inside another Slice project used that project's
+  CLI instead of the requested one.
+- `slice init` no longer scaffolds from a framework that sits next to a globally installed CLI.
+  The only accepted fallback is the new project's own `node_modules`, and a failed install now
+  stops with the retry command instead of continuing with a runtime the project does not depend on.
 
 ---
 

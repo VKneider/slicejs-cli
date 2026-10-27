@@ -262,7 +262,10 @@ Follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format and [Sem
 2. Move `[Unreleased]` content into a new `[X.Y.Z] - YYYY-MM-DD` section below
 3. Add compare link at bottom: `[X.Y.Z]: https://github.com/VKneider/slicejs-cli/releases/tag/vX.Y.Z`
 4. Update `[Unreleased]` compare link: `[Unreleased]: https://github.com/VKneider/slicejs-cli/compare/vX.Y.Z...HEAD`
-5. Commit: `git commit -m "chore: bump vX.Y.Z"`
-6. Tag: `git tag vX.Y.Z`
-7. Push: `git push && git push --tags`
-8. GitHub Release: `gh release create vX.Y.Z --title "vX.Y.Z" --notes-file CHANGELOG.md`
+5. `node scripts/release-check.mjs` — packaging, "version not already on npm", changelog section and
+   the `slicejs-web-framework` range must all pass. This is the gate that catches a CLI whose
+   declared range installs the wrong runtime (`4.3.0` shipped `^3.5.0`).
+6. Commit: `git commit -m "chore: bump vX.Y.Z"`
+7. Tag: `git tag vX.Y.Z`
+8. Push: `git push && git push --tags`
+9. GitHub Release: `gh release create vX.Y.Z --title "vX.Y.Z" --notes-file CHANGELOG.md`

@@ -35,6 +35,11 @@ jobs:
       - name: Browser E2E tests
         run: pnpm exec playwright test
 
+      # Packaging, published-version, changelog and framework-range checks. The
+      # range check is the one that catches a CLI shipping the wrong runtime.
+      - name: Release readiness
+        run: node scripts/release-check.mjs --allow-published
+
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
