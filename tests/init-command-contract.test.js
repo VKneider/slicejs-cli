@@ -88,15 +88,19 @@ test('initializeProject persists the packageManager field', () => {
   assert.ok(initSource.includes('pkg.packageManager ='), 'init.js must persist the packageManager field in package.json');
 });
 
-test('initializeProject configures pnpm allowBuilds for slicejs-cli', () => {
+test('initializeProject configures pnpm allowBuilds for the packages a project needs', () => {
   assert.ok(
     initSource.includes("if (packageManager === 'pnpm')")
       && initSource.includes('ensurePnpmAllowBuilds(projectRoot)'),
     'init.js must configure pnpm allowBuilds when pnpm is selected'
   );
   assert.ok(
-    initSource.includes("allowBuilds:") && initSource.includes("slicejs-cli: true"),
-    'init.js must write allowBuilds.slicejs-cli: true in pnpm-workspace.yaml'
+    initSource.includes('allowBuilds:') && initSource.includes('REQUIRED_BUILDS'),
+    'init.js must write the allowBuilds block from a single list'
+  );
+  assert.ok(
+    initSource.includes("'esbuild'") && initSource.includes("'slicejs-cli'"),
+    'esbuild ships with the framework and verifies its binary; without its entry the next pnpm add fails with ERR_PNPM_IGNORED_BUILDS'
   );
 });
 

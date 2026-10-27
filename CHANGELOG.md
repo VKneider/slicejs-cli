@@ -38,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `slice init` writes `allowBuilds` for `esbuild` as well as `slicejs-cli`. The framework always ships
+  esbuild, and without the entry the first `pnpm add` in a new project failed with
+  `ERR_PNPM_IGNORED_BUILDS`.
 - `slice doctor` reported `0 components checked, props look good` for a component that does not
   parse, while `slice build` blocked on it. Doctor now reports the same source errors.
 - `slice doctor` called a `sliceConfig` valid that `slice build` refuses to bundle

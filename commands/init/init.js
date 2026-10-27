@@ -42,23 +42,36 @@ function getRunningCliVersion() {
     }
 }
 
-async function ensurePnpmAllowBuilds(projectRoot) {
-    const workspacePath = path.join(projectRoot, 'pnpm-workspace.yaml');
-    const allowBuildLine = '  slicejs-cli: true';
+// Packages whose install scripts a new project needs. `slicejs-cli` has a
+// postinstall; `esbuild` (a framework dependency) verifies its platform binary.
+// Missing either one makes the *next* `pnpm add` fail with
+// ERR_PNPM_IGNORED_BUILDS, which is how it was found.
+const REQUIRED_BUILDS = ['esbuild', 'slicejs-cli'];
 
-    if (!(await fs.pathExists(workspacePath))) {
-        await fs.writeFile(workspacePath, `allowBuilds:\n${allowBuildLine}\n`, 'utf8');
-        return;
+export async function ensurePnpmAllowBuilds(projectRoot) {
+    const workspacePath = path.join(projectRoot, 'pnpm-workspace.yaml');
+    const exists = await fs.pathExists(workspacePath);
+    const raw = exists ? await fs.readFile(workspacePath, 'utf8') : '';
+    const lines = raw ? raw.split(/\r?\n/) : [];
+
+    let result = lines;
+    for (const packageName of REQUIRED_BUILDS) {
+        result = ensureAllowBuildEntry(result, packageName);
     }
 
-    const raw = await fs.readFile(workspacePath, 'utf8');
-    const lines = raw.split(/\r?\n/);
+    const content = `${result.join('\n').replace(/\n+$/, '')}\n`;
+    await fs.writeFile(workspacePath, content, 'utf8');
+}
+
+/** Adds `<name>: true` to the `allowBuilds:` block, creating the block if needed. */
+function ensureAllowBuildEntry(lines, packageName) {
+    const entry = `  ${packageName}: true`;
     const allowIdx = lines.findIndex((line) => /^allowBuilds:\s*$/.test(line));
 
     if (allowIdx === -1) {
-        const suffix = raw.endsWith('\n') ? '' : '\n';
-        await fs.writeFile(workspacePath, `${raw}${suffix}allowBuilds:\n${allowBuildLine}\n`, 'utf8');
-        return;
+        const base = [...lines];
+        while (base.length && !base[base.length - 1].trim()) base.pop();
+        return [...base, 'allowBuilds:', entry];
     }
 
     let blockEnd = lines.length;
@@ -71,20 +84,18 @@ async function ensurePnpmAllowBuilds(projectRoot) {
         }
     }
 
-    let found = false;
-    for (let i = allowIdx + 1; i < blockEnd; i++) {
-        if (/^\s+slicejs-cli\s*:/.test(lines[i])) {
-            lines[i] = allowBuildLine;
-            found = true;
-            break;
-        }
+    const pattern = new RegExp(`^\\s+${packageName}\\s*:`);
+    const existing = lines.findIndex((line, index) => index > allowIdx && index < blockEnd && pattern.test(line));
+
+    if (existing !== -1) {
+        const next = [...lines];
+        next[existing] = entry;
+        return next;
     }
 
-    if (!found) {
-        lines.splice(blockEnd, 0, allowBuildLine);
-    }
-
-    await fs.writeFile(workspacePath, `${lines.join('\n').replace(/\n*$/, '\n')}`, 'utf8');
+    const next = [...lines];
+    next.splice(blockEnd, 0, entry);
+    return next;
 }
 
 // Create the project manifest BEFORE any install runs. Without a package.json in
