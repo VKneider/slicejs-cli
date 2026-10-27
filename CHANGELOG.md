@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Routes written as `/producto/:id` are reported: Slice only compiles `${id}` patterns, so a
   `:param` route is treated as a literal path and never matches.
 - `commands/utils/semver.js` holds the range check shared by `slice doctor` and `release-check`.
+- `slice setup lint` adds linting to an existing project: installs `eslint` and `slicejs-cli` when
+  missing, writes `eslint.config.js` only if there is none, and adds `lint`/`lint:fix` scripts.
+  Idempotent, `--dry-run` available, never overwrites a config or script. `slice init` prints it as
+  a next step instead of installing ESLint for everyone.
 - `slice lint` runs the project's ESLint, and the shared flat config ships as
   `slicejs-cli/eslint-config.js` (default = app/browser, `nodeConfig` = tooling). It does not
   duplicate build/doctor rules.

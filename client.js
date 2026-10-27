@@ -24,6 +24,7 @@ import validations from "./commands/Validations.js";
 import Print from "./commands/Print.js";
 import build from './commands/build/build.js';
 import lintCommand from './commands/lint/lint.js';
+import setupLintCommand from './commands/setup/lint.js';
 import { runGenerateTypes } from './commands/types/types.js';
 import { runDocsGet, runDocsList, runDocsSearch } from './commands/docs/docs.js';
 import { cleanBundles, bundleInfo } from './commands/bundle/bundle.js';
@@ -741,6 +742,20 @@ sliceClient
   .action(async (paths, options) => {
     await runWithVersionCheck(async () => {
       await lintCommand({ paths, fix: options.fix }, getProjectRoot(import.meta.url));
+    });
+  });
+
+const setupCommand = sliceClient
+  .command("setup")
+  .description("Add optional tooling to an existing project");
+
+setupCommand
+  .command("lint")
+  .description("Install ESLint and add the shared Slice config")
+  .option("--dry-run", "Show what would change, write nothing")
+  .action(async (options) => {
+    await runWithVersionCheck(async () => {
+      await setupLintCommand(options, getProjectRoot(import.meta.url));
     });
   });
 
