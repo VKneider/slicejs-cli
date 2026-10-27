@@ -64,3 +64,21 @@ test('an app can append its own globals after the preset', async () => {
 
   assert.deepEqual(results[0].messages, []);
 });
+
+test('the server entry and build scripts get Node globals', async () => {
+  const server = await lint('process.env.PORT;', { filePath: 'api/index.js' });
+  assert.deepEqual(server[0].messages, []);
+
+  const script = await lint('process.exit(0);', { filePath: 'scripts/copy.js' });
+  assert.deepEqual(script[0].messages, []);
+
+  const browserCode = await lint('process.env.PORT;', { filePath: 'src/App/index.js' });
+  assert.deepEqual(rulesOf(browserCode), ['no-undef'], 'src/ stays browser-only');
+});
+
+test('vendored agent folders are ignored', async () => {
+  const eslint = new ESLint({ cwd: process.cwd(), overrideConfigFile: true, overrideConfig: appConfig });
+
+  assert.equal(await eslint.isPathIgnored('.agents/skills/x/assets/routes.js'), true);
+  assert.equal(await eslint.isPathIgnored('.claude/skills/x/SKILL.md'), true);
+});

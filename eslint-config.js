@@ -61,7 +61,8 @@ const recommendedWarnings = {
 };
 
 // Generated, vendored or throwaway output. `components.js` is rewritten by
-// `slice component list`, and `.tmp/` is where the CLI's own tests write.
+// `slice component list`, `.tmp/` is where the CLI's own tests write, and the
+// agent folders hold a vendored copy of the skill.
 const ignores = [
   'dist/**',
   'node_modules/**',
@@ -69,6 +70,9 @@ const ignores = [
   'playwright-report/**',
   'test-results/**',
   '.tmp/**',
+  '.agents/**',
+  '.claude/**',
+  '.opencode/**',
   'src/libs/**',
   '**/*.generated.js',
   'src/Components/components.js'
@@ -87,9 +91,14 @@ const base = (globalsForEnv) => [
   { ignores }
 ];
 
-/** App preset: browser + framework globals. The default export. */
+/** App preset: browser + framework globals for `src/`, Node for the server side. */
 export const appConfig = [
   ...base(sliceGlobals),
+  {
+    // The server entry and build scripts are Node, not browser code.
+    files: ['api/**/*.js', 'scripts/**/*.js', '*.config.js'],
+    languageOptions: { globals: { ...globals.node } }
+  },
   {
     // Specs and e2e helpers run in Node, and Playwright exposes `page`/`browser`.
     files: ['**/*.spec.js', 'tests/**/*.js', 'playwright/**/*.js'],
