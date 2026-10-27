@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Routes written as `/producto/:id` are reported: Slice only compiles `${id}` patterns, so a
   `:param` route is treated as a literal path and never matches.
 - `commands/utils/semver.js` holds the range check shared by `slice doctor` and `release-check`.
+- `slice lint` runs the project's ESLint, and the shared flat config ships as
+  `slicejs-cli/eslint-config.js` (default = app/browser, `nodeConfig` = tooling). It does not
+  duplicate build/doctor rules.
+- `slice build` and `slice doctor` block `id`, `sliceId` and `singleton` declared in `static props`:
+  the runtime strips them as build directives, so the prop can never reach the component.
 
 ### Changed
 
@@ -47,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `getLocalComponents()` referenced `componentsPath` from inside its `catch`, so it threw a
+  ReferenceError exactly when the local registry could not be read (found by the new lint config).
 - `slice init` writes `allowBuilds` for `esbuild` as well as `slicejs-cli`. The framework always ships
   esbuild, and without the entry the first `pnpm add` in a new project failed with
   `ERR_PNPM_IGNORED_BUILDS`.

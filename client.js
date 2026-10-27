@@ -23,6 +23,7 @@ import { spawnSync } from "node:child_process";
 import validations from "./commands/Validations.js";
 import Print from "./commands/Print.js";
 import build from './commands/build/build.js';
+import lintCommand from './commands/lint/lint.js';
 import { runGenerateTypes } from './commands/types/types.js';
 import { runDocsGet, runDocsList, runDocsSearch } from './commands/docs/docs.js';
 import { cleanBundles, bundleInfo } from './commands/bundle/bundle.js';
@@ -728,6 +729,18 @@ sliceClient
   .action(async () => {
     await runWithVersionCheck(async () => {
       await runDiagnostics();
+    });
+  });
+
+// LINT COMMAND - runs the project's ESLint, with the shared config available
+// as `slicejs-cli/eslint-config.js`. The CLI does not bundle ESLint itself.
+sliceClient
+  .command("lint [paths...]")
+  .description("Run ESLint in this project")
+  .option("--fix", "Apply automatic fixes")
+  .action(async (paths, options) => {
+    await runWithVersionCheck(async () => {
+      await lintCommand({ paths, fix: options.fix }, getProjectRoot(import.meta.url));
     });
   });
 

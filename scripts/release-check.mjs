@@ -86,6 +86,7 @@ function checkPackaging() {
   const has = (prefix) => entries.some((entry) => entry === prefix || entry.startsWith(`${prefix}/`));
 
   check(has('client.js'), 'the tarball contains client.js');
+  check(has('eslint-config.js'), 'the tarball contains eslint-config.js');
   check(has('commands'), 'the tarball contains commands/');
   check(has('assets'), 'the tarball contains assets/');
 
