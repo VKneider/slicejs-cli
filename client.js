@@ -28,6 +28,7 @@ import { runDocsGet, runDocsList, runDocsSearch } from './commands/docs/docs.js'
 import { cleanBundles, bundleInfo } from './commands/bundle/bundle.js';
 import {
   isLocalDelegationDisabled,
+  isNonDelegatingCommand,
   findNearestLocalCliEntry,
   resolveLocalCliCandidate,
   shouldDelegateToLocalCli
@@ -107,6 +108,15 @@ async function runWithVersionCheck(commandFunction, ...args) {
 
 function maybeDelegateToLocalCli() {
   if (isLocalDelegationDisabled(process.env)) {
+    return;
+  }
+
+  // `init` must run on the CLI the user invoked (a global install, `npx`,
+  // `pnpm dlx slicejs-cli@latest`). Delegating to a copy found by walking up
+  // from the current folder would scaffold with an unrelated project's
+  // version, and a version that cannot install the framework fails halfway
+  // while still walking the success path.
+  if (isNonDelegatingCommand(process.argv.slice(2))) {
     return;
   }
 

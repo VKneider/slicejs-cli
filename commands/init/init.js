@@ -174,6 +174,13 @@ export default async function initializeProject(options = {}) {
             if (!installed || (latestVersion && installed !== latestVersion)) {
                 execSync(installCommand(packageManager, frameworkPackage), { cwd: projectRoot, stdio: 'inherit' });
             }
+            // Verify the project itself, not whatever node_modules the CLI happens
+            // to live in: a package manager can finish successfully without adding
+            // the dependency here (workspace protocols, a global .npmrc, an offline
+            // store), and the scaffold below would then read the wrong tree.
+            if (!(await fs.pathExists(installedPkgPath))) {
+                throw new Error(`${frameworkPackage} is not in ${path.join(projectRoot, 'node_modules')} after installing`);
+            }
             if (await fs.pathExists(installedPkgPath)) {
                 const pkg = await fs.readJson(installedPkgPath);
                 installedVersion = pkg.version;
@@ -184,16 +191,21 @@ export default async function initializeProject(options = {}) {
                 Print.info(`Latest published is ${latestVersion}; your package manager resolved ${installedVersion} (release-age policy or cached registry).`);
             }
         } catch (err) {
-            // Fallback uses __dirname-style path because it looks for a local development copy,
-            // not a project-relative path — the install failed, so we fall back to monorepo sibling.
-            const fallback = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../../slicejs-web-framework');
-            if (await fs.pathExists(fallback)) {
-                sliceBaseDir = fallback;
-                fwSpinner.warn('Using local slicejs-web-framework fallback');
+            // The only valid fallback is a framework already inside THIS project
+            // (a retry, or a dependency linked before init ran). A copy sitting
+            // next to a globally installed CLI is a different runtime: scaffolding
+            // from it would ship a version the project does not depend on and the
+            // lockfile cannot reproduce. That is how a global install used to win
+            // over the package manager.
+            const projectFramework = getPath(import.meta.url, 'node_modules', 'slicejs-web-framework');
+            if (await fs.pathExists(projectFramework)) {
+                sliceBaseDir = projectFramework;
+                fwSpinner.warn('Install did not run; using the slicejs-web-framework already in this project');
             } else {
-                fwSpinner.fail('Failed to ensure latest slicejs-web-framework');
-                Print.error(err.message);
-                console.error(err.stack);
+                fwSpinner.fail('Failed to install slicejs-web-framework');
+                Print.error('slice init:', err.message);
+                const retry = installCommand(packageManager, latestVersion ? `slicejs-web-framework@${latestVersion}` : 'slicejs-web-framework');
+                Print.info(`Retry with: ${retry}`);
                 return;
             }
         }

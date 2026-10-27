@@ -7,7 +7,9 @@ import {
   findNearestLocalCliEntry,
   resolveLocalCliCandidate,
   shouldDelegateToLocalCli,
-  isLocalDelegationDisabled
+  isLocalDelegationDisabled,
+  commandNameFromArgv,
+  isNonDelegatingCommand
 } from '../commands/utils/LocalCliDelegation.js';
 
 test('isLocalDelegationDisabled returns true when env flag is set', () => {
@@ -78,4 +80,19 @@ test('resolveLocalCliCandidate returns null when candidate path is a directory',
   } finally {
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
+});
+
+test('commandNameFromArgv finds the command behind flags', () => {
+  assert.equal(commandNameFromArgv(['init']), 'init');
+  assert.equal(commandNameFromArgv(['init', '-y', 'demo']), 'init');
+  assert.equal(commandNameFromArgv(['--version']), null);
+  assert.equal(commandNameFromArgv([]), null);
+});
+
+test('init never delegates to a local CLI', () => {
+  assert.equal(isNonDelegatingCommand(['init']), true);
+  assert.equal(isNonDelegatingCommand(['init', '-y', 'demo-app', '--pm', 'pnpm']), true);
+  assert.equal(isNonDelegatingCommand(['build']), false);
+  assert.equal(isNonDelegatingCommand(['--version']), false);
+  assert.equal(isNonDelegatingCommand(['help', 'init']), false);
 });

@@ -99,3 +99,18 @@ test('initializeProject configures pnpm allowBuilds for slicejs-cli', () => {
     'init.js must write allowBuilds.slicejs-cli: true in pnpm-workspace.yaml'
   );
 });
+
+test('initializeProject never scaffolds from a framework outside the new project', () => {
+  // A globally installed CLI used to fall back to a framework copy sitting next
+  // to itself (node_modules/slicejs-web-framework relative to the CLI), so the
+  // new project was scaffolded from a runtime it did not depend on. The only
+  // accepted fallback is the project's own node_modules.
+  assert.ok(
+    !initSource.includes("'../../../slicejs-web-framework'"),
+    'init.js must not resolve a framework relative to the CLI install location'
+  );
+  assert.ok(
+    initSource.includes("const projectFramework = getPath(import.meta.url, 'node_modules', 'slicejs-web-framework')"),
+    'init.js must fall back only to the project own framework'
+  );
+});
