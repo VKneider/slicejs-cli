@@ -4,6 +4,8 @@ import { parse } from '@babel/parser';
 import traverse from '@babel/traverse';
 
 import Print from '../Print.js';
+import { componentTagFromSource, findUnscopedSelectors } from '../utils/cssScope.js';
+import { auditComponentLifecycle } from '../utils/componentAudit.js';
 import { getConfigPath, getComponentsJsPath, joinRoot } from '../utils/PathHelper.js';
 import {
   describeSyntaxError,
@@ -955,7 +957,7 @@ const RESERVED_PROP_NAMES = new Set(['id', 'sliceId', 'singleton']);
  *
  * @returns {Promise<{errors: object[], warnings: object[], sourceErrors: object[], checkedCount: number}>}
  */
-const validateComponentProps = async ({ projectRoot }) => {
+const validateComponentProps = async ({ projectRoot, includeCss = true }) => {
   const errors = [];
   const warnings = [];
   // Problems with the file itself rather than with a prop definition. Kept
@@ -1091,7 +1093,42 @@ const validateComponentProps = async ({ projectRoot }) => {
       });
     }
 
-    const props = extractStaticPropsFromSource(source, componentFile);
+        // Lifecycle conventions that are statically visible. Advisories: the app runs,
+    // but the cleanup is not what the author thinks it is.
+    const lifecycle = auditComponentLifecycle(source);
+    if (lifecycle.asyncBeforeDestroy) {
+      warnings.push({
+        component: componentName,
+        message: 'beforeDestroy is async: the framework does not await it, so the cleanup runs after the component is removed. Keep it synchronous, or fire-and-forget the promise.'
+      });
+    }
+    if (lifecycle.deadTeardown) {
+      warnings.push({
+        component: componentName,
+        message: `${lifecycle.deadTeardown}() is never called: the framework only invokes beforeDestroy(). Move the cleanup there.`
+      });
+    }
+    if (lifecycle.globalListener) {
+      warnings.push({
+        component: componentName,
+        message: `${lifecycle.globalListener} global listener(s) added on window/document with no removeEventListener in this file: they outlive the component. Remove them in beforeDestroy() (or pass { once: true } / { signal }).`
+      });
+    }
+    // Component CSS is loaded globally: a selector that does not start with the
+    // component's tag leaks into every page. Advisory - most are harmless class
+    // names, and portaled widgets opt out with the slice:unscoped marker.
+    const componentTag = componentTagFromSource(source);
+    const cssFile = path.join(path.dirname(componentFile), `${componentName}.css`);
+    if (includeCss && componentTag && await fs.pathExists(cssFile)) {
+      const unscoped = findUnscopedSelectors(await fs.readFile(cssFile, 'utf8'), componentTag);
+      if (unscoped.length > 0) {
+        warnings.push({
+          component: componentName,
+          message: `${unscoped.length} CSS selector(s) are not scoped under <${componentTag}>: ${unscoped.slice(0, 2).join(', ')}${unscoped.length > 2 ? ', ...' : ''}. Component CSS is global: prefix them with the tag or :host.`
+        });
+      }
+    }
+const props = extractStaticPropsFromSource(source, componentFile);
     if (!props) continue;
     checkedCount++;
 

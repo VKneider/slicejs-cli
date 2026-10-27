@@ -25,7 +25,10 @@ export default async function build(options = {}) {
   // issue.
   const validation = await validateProject({
     projectRoot: getProjectRoot(import.meta.url),
-    skipComponents: options.validate === false
+    skipComponents: options.validate === false,
+    // CSS scoping is a doctor advisory: it never blocks, and on an existing app
+    // it can be dozens of lines that do not belong in a build log.
+    includeCss: false
   });
   // The server entry is not part of the bundle, but a deploy with a broken
   // api/index.js is a broken deploy: it joins the same blocking list.

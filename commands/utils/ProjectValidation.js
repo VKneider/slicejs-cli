@@ -149,7 +149,7 @@ export async function validateServerEntry({ projectRoot }) {
 }
 
 /** Config, components and routes in one result. Both commands start here. */
-export async function validateProject({ projectRoot, skipComponents = false }) {
+export async function validateProject({ projectRoot, skipComponents = false, includeCss = true }) {
   const config = readConfig(projectRoot);
   const registry = readRegistry(projectRoot);
 
@@ -160,7 +160,7 @@ export async function validateProject({ projectRoot, skipComponents = false }) {
     };
   } else {
     try {
-      components = await validateComponentProps({ projectRoot });
+      components = await validateComponentProps({ projectRoot, includeCss });
     } catch (error) {
       // A registry that does not parse used to escape as a stack trace from
       // build and as a vague warning from doctor. It is a blocking finding.

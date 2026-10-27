@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Routes written as `/producto/:id` are reported: Slice only compiles `${id}` patterns, so a
   `:param` route is treated as a literal path and never matches.
 - `commands/utils/semver.js` holds the range check shared by `slice doctor` and `release-check`.
+- `slice doctor` reports four more advisories: component CSS selectors not scoped under the
+  component tag (doctor-only, so build logs stay clean), a `destroy()`/`dispose()`/`teardown()` method
+  the controller never calls, a `window`/`document` listener with no `removeEventListener` in the same
+  file, and an `async beforeDestroy` (the framework does not await it).
 - Prop metadata written as an expression (`type: TYPE_STRING`, `allowedValues: SIZES`, `schema: SHARED`,
   or `static props = SHARED`) is reported by `slice types generate`, `slice build` and `slice doctor`.
   The generator reads the AST, so those props silently became `any` with no warning anywhere.
