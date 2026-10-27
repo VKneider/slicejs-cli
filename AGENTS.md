@@ -118,6 +118,11 @@ after(async () => {
 1. **Contract tests** (`*-contract.test.js`) — Static analysis of `client.js` source code via `@babel/parser` + AST or regex. Verify command registration, option flags, and function calls. No runtime execution.
 2. **Unit tests** — Test individual functions/modules in isolation. Use temp dirs for filesystem-dependent code.
 3. **Snapshot/Integration tests** — Verify output files, generated declarations, bundle configs.
+4. **Template contract** (`tests/init-e2e.test.js`) — Opt-in locally with `SLICE_INIT_E2E=1`, on in CI.
+   Real `slice init` (network), then build with this CLI, boot the project's server and render it in
+   Chromium: starter navbar and home section present, unknown URL renders `NotFound`, no
+   `not found in components.js` console error. It is the only test that proves a scaffolded project
+   works with the components init downloads from the registry.
 
 ### Rules
 - No external mocking libraries (sinon, jest, etc.). Use monkey-patching + try/finally restore.

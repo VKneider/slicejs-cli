@@ -32,6 +32,15 @@ jobs:
       - name: Unit & integration tests
         run: node --test --test-concurrency=1
 
+      # The template contract: a real `slice init`, then build, boot and render
+      # in Chromium. It is the only check that proves the scaffolded app works
+      # with the components init downloads from the registry — a starter that
+      # builds but renders nothing passes every other suite.
+      - name: Template contract (init → build → boot → render)
+        env:
+          SLICE_INIT_E2E: '1'
+        run: node --test tests/init-e2e.test.js
+
       - name: Browser E2E tests
         run: pnpm exec playwright test
 
