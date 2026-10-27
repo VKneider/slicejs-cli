@@ -124,9 +124,11 @@ filterOfficialComponents(allComponents) {
 }
 
   async getLocalComponents() {
+    // Declared outside the try: the catch reports this path, and it used to
+    // throw a ReferenceError exactly when the registry was unreadable.
+    const componentsPath = getComponentsJsPath(import.meta.url);
+
     try {
-      const componentsPath = getComponentsJsPath(import.meta.url);
-      
       if (!await fs.pathExists(componentsPath)) {
         return {};
       }
