@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OUT = path.join(__dirname, 'components');
-const BASE = 'https://raw.githubusercontent.com/VKneider/slice.js_visual_library/master/src/Components';
+const BASE = 'https://raw.githubusercontent.com/VKneider/slicejs-components/master/src/Components';
 
 // Mirrors the starter set installed by `slice init`.
 const VISUAL = ['Button', 'Link', 'Loading', 'MultiRoute', 'Navbar', 'NotFound', 'Route'];

@@ -11,8 +11,8 @@ import { analyzeSource } from "../utils/analyzeSource.js";
 import ora from "ora";
 
 // Base URL of the Slice.js documentation repository
-const DOCS_REPO_BASE_URL = 'https://raw.githubusercontent.com/VKneider/slice.js_visual_library/master/src/Components';
-const COMPONENTS_REGISTRY_URL = 'https://raw.githubusercontent.com/VKneider/slice.js_visual_library/master/src/Components/components.js';
+const DOCS_REPO_BASE_URL = 'https://raw.githubusercontent.com/VKneider/slicejs-components/master/src/Components';
+const COMPONENTS_REGISTRY_URL = 'https://raw.githubusercontent.com/VKneider/slicejs-components/master/src/Components/components.js';
 
 /**
  * Loads configuration from sliceConfig.json

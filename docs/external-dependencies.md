@@ -276,6 +276,6 @@ default).
 | Import classification + stripImports (public/ resolution) | `tests/bundling-imports-unit.test.js`, `tests/bundle-generator.test.js`, `tests/builder-edge-cases.test.js` |
 | Dev optimizer (rewrite, on-demand bundle, disk cache) | `slice.js/api/tests/dev-deps-optimizer.test.js` |
 | Dev server integration (HTTP) | `slice.js/api/tests/dev-server-external.test.js` |
-| Browser end-to-end (real npm libs) | `slice.js_visual_library/src/Components/DemoComponents/{ExternalDepsProbe,GsapDemo,GsapShowcase}/*.spec.js` |
+| Browser end-to-end (real npm libs) | `slicejs-components/src/Components/DemoComponents/{ExternalDepsProbe,GsapDemo,GsapShowcase}/*.spec.js` |
 | `slice doctor` external check | `tests/commands-doctor.test.js` |
 | `slice get` awareness | `tests/dependency-resolution.test.js` |

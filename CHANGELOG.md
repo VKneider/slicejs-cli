@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- (placeholder)
+- Pointed the component registry and the Slice.js Components documentation catalog at the new
+  `slicejs-components` repository (renamed from `slice.js_visual_library`).
 
 ---
 

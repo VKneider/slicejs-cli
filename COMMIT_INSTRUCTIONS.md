@@ -10,7 +10,7 @@ Three repos were modified:
 2. **`slice.js`** (framework) — **canonical** Vercel 404-on-mount fix in the API
    server (`api/framework/server.js`, the code `slice init` wires into new
    projects via the thin `api/index.js`).
-3. **`slice.js_visual_library`** — the same fix applied directly to that app's
+3. **`slicejs-components`** — the same fix applied directly to that app's
    **own** monolithic `api/index.js` (it predates the `server.js` refactor, so it
    carries its own copy and must be patched independently).
 
@@ -125,9 +125,9 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ---
 
-## Repo 3 — `slice.js_visual_library`
+## Repo 3 — `slicejs-components`
 
-Run from `/datadrive/vkneider/vk/slc/slice.js_visual_library`.
+Run from `/datadrive/vkneider/vk/slc/slicejs-components`.
 
 This app owns a **monolithic** `api/index.js` (copied by `slice init` before the
 `server.js` refactor), so it must be patched directly — it does not pick up the

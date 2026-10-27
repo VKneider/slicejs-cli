@@ -233,7 +233,7 @@ sliceClient
 - Controlled by `SLICE_NO_LOCAL_DELEGATION` env var
 
 ## Visual Component Registry
-- Components downloaded from GitHub: `https://raw.githubusercontent.com/VKneider/slice.js_visual_library/master/src/Components/{category}/{Name}/{file}`
+- Components downloaded from GitHub: `https://raw.githubusercontent.com/VKneider/slicejs-components/master/src/Components/{category}/{Name}/{file}`
 - Registry URL: same base + `src/Components/components.js`
 - Starter visual components on init: Button, Link, Loading, MultiRoute, Navbar, NotFound, Route
 - Components are registered by writing to `src/Components/components.js`

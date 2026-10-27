@@ -14,7 +14,7 @@ and quote the claim that can be reproduced.
   degrades the prop to plain `string` — with no error and no warning.
 
   Repro, today, with one component: a prop written inline and a prop sourced from an imported const
-  produce different types. `Button` in `slice.js_visual_library` is exactly that pair —
+  produce different types. `Button` in `slicejs-components` is exactly that pair —
   `variant?: 'filled' | 'outlined' | 'ghost' | 'soft' | 'danger'` but `size?: string`, where
   `size` comes from `SIZE_VALUES`.
 
@@ -34,7 +34,7 @@ and quote the claim that can be reproduced.
   `HTMLElement` and touch `document`, which is why the generator is static-analysis-only.
 
   Until this lands, the library declares these lists inline in `static props` and has the setter read
-  them back (see `slice.js_visual_library/COMPONENT_API_STANDARDS.md` §10), which removes the module
+  them back (see `slicejs-components/COMPONENT_API_STANDARDS.md` §10), which removes the module
   constant but not the duplication with the shared recipe.
 
 ## slice doctor
