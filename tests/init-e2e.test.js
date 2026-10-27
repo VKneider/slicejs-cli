@@ -65,6 +65,35 @@ function stopServer(server) {
   }
 }
 
+/**
+ * Re-apply a candidate framework's template over a freshly initialised project.
+ *
+ * `init` copies the *published* template, so the only way to gate a local change
+ * before releasing it is to install the packed tarball and put its template in
+ * place. `components.js` is deliberately left alone: it holds the registry of
+ * the components init downloaded, and it is regenerated from the folders below.
+ */
+async function applyCandidateTemplate({ projectDir, candidateRoot }) {
+  await fs.copy(path.join(candidateRoot, 'api', 'index.js'), path.join(projectDir, 'api', 'index.js'));
+
+  const components = path.join(projectDir, 'src', 'Components', 'AppComponents');
+  await fs.remove(components);
+  await fs.copy(path.join(candidateRoot, 'src', 'Components', 'AppComponents'), components, { recursive: true });
+
+  for (const relative of ['src/App', 'src/public', 'src/routes.js', 'src/sliceConfig.json']) {
+    const target = path.join(projectDir, relative);
+    await fs.remove(target);
+    await fs.copy(path.join(candidateRoot, relative), target, { recursive: true });
+  }
+
+  const list = spawnSync(process.execPath, [CLIENT, 'component', 'list'], {
+    cwd: projectDir,
+    encoding: 'utf-8',
+    env: { ...process.env, INIT_CWD: projectDir, SLICE_NO_LOCAL_DELEGATION: '1', NO_COLOR: '1' }
+  });
+  assert.equal(list.status, 0, `the component registry must be regenerated for the candidate:\n${list.stdout}\n${list.stderr}`);
+}
+
 test('slice init -y creates a fully self-contained project (real run)', { skip: !E2E_ENABLED && 'set SLICE_INIT_E2E=1 to run' }, async () => {
   const pm = ['pnpm', 'npm'].find(isPackageManagerAvailable);
   assert.ok(pm, 'a package manager must be available');
@@ -125,6 +154,29 @@ test('slice init -y creates a fully self-contained project (real run)', { skip: 
     assert.ok(!(await fs.pathExists(path.join(parent, 'node_modules'))), 'no node_modules may leak into the parent');
     assert.ok(!(await fs.pathExists(path.join(parent, 'pnpm-lock.yaml'))), 'no lockfile may leak into the parent');
     assert.ok(!(await fs.pathExists(path.join(parent, 'package-lock.json'))), 'no lockfile may leak into the parent');
+
+    // Optional: gate a *candidate* framework before it is published. CI packs
+    // the checkout and passes the tarball; init has already copied the published
+    // template, so install the candidate and re-apply its template on top.
+    const tarball = process.env.SLICE_TEMPLATE_TARBALL;
+    if (tarball) {
+      assert.ok(await fs.pathExists(tarball), `SLICE_TEMPLATE_TARBALL does not exist: ${tarball}`);
+      const install = spawnSync(
+        pm,
+        [pm === 'pnpm' ? 'add' : 'install', `slicejs-web-framework@file:${tarball}`],
+        {
+          cwd: projectDir,
+          encoding: 'utf-8',
+          shell: process.platform === 'win32',
+          env: { ...process.env, INIT_CWD: projectDir, SLICE_NO_LOCAL_DELEGATION: '1', NO_COLOR: '1' },
+          timeout: 600_000
+        }
+      );
+      assert.equal(install.status, 0, `the candidate tarball must install:\n${install.stdout}\n${install.stderr}`);
+
+      const candidateRoot = path.join(projectDir, 'node_modules', 'slicejs-web-framework');
+      await applyCandidateTemplate({ projectDir, candidateRoot });
+    }
 
     // ── The template contract: build, boot, render ───────────────────────────
     // The CLI under test builds it (the project's own CLI would be the published
