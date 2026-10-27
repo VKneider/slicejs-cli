@@ -8,6 +8,7 @@ import { getProjectRoot, getSrcPath, getApiPath, getConfigPath, getPath, getComp
 import { resolvePackageManager, installCommand } from '../utils/PackageManager.js';
 import updateManager from '../utils/updateManager.js';
 import { parseComponentsRegistry, validateComponentProps } from '../types/types.js';
+import { validateConfigRules, classifyValidation, describeIssue } from '../utils/ProjectValidation.js';
 import { parse as parseModule } from '@babel/parser';
 import traverse from '@babel/traverse';
 import ExternalModuleBundler from '../utils/bundling/ExternalModuleBundler.js';
@@ -166,6 +167,17 @@ async function checkConfig() {
                 pass: false,
                 message: 'sliceConfig.json is invalid (missing paths.components)',
                 suggestion: 'Check your configuration file'
+            };
+        }
+
+        // Same rules `slice build` applies before bundling. A config that passes
+        // here but blocks the build is worse than no check at all.
+        const ruleProblems = validateConfigRules(config);
+        if (ruleProblems.length > 0) {
+            return {
+                pass: false,
+                message: `sliceConfig.json would build a broken bundle: ${ruleProblems[0].path}`,
+                suggestion: ruleProblems.map((problem) => `${problem.path} ${problem.message}`).join('\n')
             };
         }
 
@@ -337,109 +349,55 @@ async function checkDependencies() {
 }
 
 /**
- * Checks component integrity
+ * Components: registry, source and static props in one verdict.
+ *
+ * This is the pass `slice build` uses, classified by the same helper it uses.
+ * It used to be two rows that disagreed with each other and with the build:
+ * "Components" scanned folders, "Component Props" read only prop definitions and
+ * dropped the source errors the build blocks on.
  */
 async function checkComponents() {
-    const configPath = getConfigPath(import.meta.url);
-        const projectRoot = getProjectRoot(import.meta.url);
+    const registryPath = getComponentsJsPath(import.meta.url);
 
-    if (!await fs.pathExists(configPath)) {
-        return {
-            warn: true,
-            message: 'Cannot check components (no config)',
-            suggestion: 'Run "slice init" first'
-        };
+    if (!await fs.pathExists(registryPath)) {
+        return { pass: true, message: 'No components registered (components.js not found)' };
     }
 
     try {
-        const config = await fs.readJson(configPath);
-        const componentPaths = config.paths?.components || {};
+        const validation = await validateComponentProps({ projectRoot: getProjectRoot(import.meta.url) });
+        const { blocking, advisory } = classifyValidation(validation);
 
-        let totalComponents = 0;
-        let componentIssues = 0;
-
-        for (const [category, { path: compPath }] of Object.entries(componentPaths)) {
-            const fullPath = getSrcPath(import.meta.url, compPath);
-
-            if (await fs.pathExists(fullPath)) {
-                const items = await fs.readdir(fullPath);
-
-                for (const item of items) {
-                    const itemPath = path.join(fullPath, item);
-                    const stat = await fs.stat(itemPath);
-
-                    if (stat.isDirectory()) {
-                        totalComponents++;
-
-                        // Check JS files
-                        const jsFile = path.join(itemPath, `${item}.js`);
-                        if (!await fs.pathExists(jsFile)) {
-                            componentIssues++;
-                        }
-                    }
-                }
-            }
+        if (blocking.length > 0) {
+            const componentCount = new Set(blocking.map((issue) => issue.component)).size;
+            return {
+                message: `${blocking.length} issue(s) in ${componentCount} component(s) block "slice build"`,
+                suggestion: blocking
+                    .slice(0, 5)
+                    .map(describeIssue)
+                    .join('\n') + (blocking.length > 5 ? `\n… ${blocking.length - 5} more (run "slice build" for the full list)` : ''),
+                issues: blocking
+            };
         }
 
-        if (componentIssues === 0) {
-            return {
-                pass: true,
-                message: `${totalComponents} components checked, all OK`
-            };
-        } else {
+        if (advisory.length > 0) {
             return {
                 warn: true,
-                message: `${componentIssues} component(s) have missing files`,
-                suggestion: 'Check your component directories'
+                message: `${validation.registeredCount} components, ${advisory.length} warning(s) — none block the build`,
+                suggestion: advisory
+                    .slice(0, 3)
+                    .map(describeIssue)
+                    .join('\n') + (advisory.length > 3 ? `\n… ${advisory.length - 3} more` : ''),
+                issues: advisory
             };
         }
-    } catch (error) {
+
         return {
-            warn: true,
-            message: `Cannot check components: ${error.message}`,
-            suggestion: 'Verify your project structure'
+            pass: true,
+            message: `${validation.registeredCount} components, ${validation.checkedCount} with static props: all valid`
         };
+    } catch (error) {
+        return { warn: true, message: `Cannot check components: ${error.message}` };
     }
-}
-
-/**
- * Lints component static props for common issues.
- * Uses the same Babel parsing as slice types generate.
- */
-async function checkComponentProps() {
-  const registryPath = getComponentsJsPath(import.meta.url);
-  if (!await fs.pathExists(registryPath)) {
-    return { pass: true, message: 'No components to check' };
-  }
-
-  try {
-    // Same validation `slice build` runs, so doctor and build agree exactly.
-    const { errors, warnings, checkedCount } = await validateComponentProps({
-      projectRoot: getProjectRoot(import.meta.url)
-    });
-
-    const issues = [
-      ...errors.map((e) => ({ ...e, severity: 'error' })),
-      ...warnings.map((w) => ({ ...w, severity: 'warning' }))
-    ];
-
-    if (issues.length === 0) {
-      return { pass: true, message: `${checkedCount} components checked, props look good` };
-    }
-
-    const componentCount = new Set(issues.map((i) => i.component)).size;
-    const errorNote = errors.length > 0 ? ` (${errors.length} would block "slice build")` : '';
-    return {
-      warn: true,
-      message: `${issues.length} prop issue(s) across ${componentCount} component(s)${errorNote}`,
-      suggestion: issues
-        .map((i) => `  [${i.severity}] ${i.component}.${i.prop}: ${i.message}`)
-        .join('\n'),
-      issues
-    };
-  } catch (error) {
-    return { warn: true, message: `Cannot check props: ${error.message}` };
-  }
 }
 
 /** Package root of a bare specifier: 'lodash/fp' -> 'lodash', '@s/p/x' -> '@s/p'. */
@@ -549,7 +507,6 @@ export {
     checkPort,
     checkDependencies,
     checkComponents,
-    checkComponentProps,
     checkExternalDependencies
 };
 
@@ -567,7 +524,6 @@ export default async function runDiagnostics() {
         { name: 'Package Manager', fn: checkPackageManagerSetup },
         { name: 'Dependencies', fn: checkDependencies },
         { name: 'Components', fn: checkComponents },
-        { name: 'Component Props', fn: checkComponentProps },
         { name: 'External Dependencies', fn: checkExternalDependencies }
     ];
 
@@ -637,7 +593,9 @@ export default async function runDiagnostics() {
         Print.newLine();
 
         if (issues > 0) {
-            Print.warning('Fix the issues above to ensure proper functionality');
+            Print.warning('Fix the issues above: they block "slice build" and would ship a broken project');
+            // A diagnostic command that always exits 0 cannot gate a pipeline.
+            process.exitCode = 1;
         } else {
             Print.info('Warnings are non-critical but should be addressed');
         }

@@ -24,9 +24,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `slicejs-components` repository (renamed from `slice.js_visual_library`).
 - `slicejs-web-framework` range is `^4.0.2` (was `^3.5.0`, which made a fresh global install resolve
   a 3.x runtime).
+- `slice doctor` and `slice build` now share one validation pass
+  (`commands/utils/ProjectValidation.js`): config rules, unparseable/unloadable component files and
+  prop definition errors block both, advisories only warn. Doctor's two component rows became one.
+- `slice doctor` exits 1 when a row fails (0 with only warnings), so `slice doctor && slice build`
+  is a usable gate.
 
 ### Fixed
 
+- `slice doctor` reported `0 components checked, props look good` for a component that does not
+  parse, while `slice build` blocked on it. Doctor now reports the same source errors.
+- `slice doctor` called a `sliceConfig` valid that `slice build` refuses to bundle
+  (`context.enabled` without `events.enabled`); the rule lives in one function now.
 - `slice init` no longer delegates to a `slicejs-cli` found by walking up from the current folder.
   Running `npx`/`pnpm dlx slicejs-cli@latest init` inside another Slice project used that project's
   CLI instead of the requested one.

@@ -2,6 +2,7 @@ import bundle from '../bundle/bundle.js';
 import buildProduction, { serveProductionBuild } from '../buildProduction/buildProduction.js';
 import { loadConfigSync } from '../utils/loadConfig.js';
 import { validateComponentProps } from '../types/types.js';
+import { validateConfigRules, classifyValidation, describeIssue } from '../utils/ProjectValidation.js';
 import { getProjectRoot, getDistPath } from '../utils/PathHelper.js';
 import { precompressDirectory } from '../utils/compressAssets.js';
 import Print from '../Print.js';
@@ -21,50 +22,38 @@ export default async function build(options = {}) {
 
   // Hard-fail before producing a bundle: ContextManager reactivity (setState →
   // watch/bind) is delivered through EventManager, and EventManager is only
-  // bundled when events.enabled is true. context on + events off would ship a
-  // bundle where every context watcher is silently dead — catch it here so the
-  // broken bundle never gets built.
+  // bundled when events.enabled is true. The rule lives in ProjectValidation so
+  // `slice doctor` reports the same thing instead of calling the config valid.
   const config = loadConfigSync(import.meta.url);
-  if (config?.context?.enabled && !config?.events?.enabled) {
-    Print.error('sliceConfig: context.enabled requires events.enabled.');
-    Print.info('ContextManager reactivity (setState → watch/bind) runs through EventManager, which is only bundled when events.enabled is true. Set "events": { "enabled": true } in sliceConfig.json.');
+  const configErrors = validateConfigRules(config);
+  if (configErrors.length > 0) {
+    for (const problem of configErrors) {
+      Print.error(`sliceConfig: ${problem.path} ${problem.message}`);
+    }
+    Print.info('Fix sliceConfig.json and run the build again.');
     process.exit(1);
   }
 
-  // Validate component static props before building (same checks as `slice
-  // doctor`). Definition errors fail the build so a broken component contract
-  // never ships; style issues warn but don't block. Skip with --no-validate.
+  // One validation pass for every registered component; `slice doctor` reports
+  // the same result. Blocking findings fail the build, advisories only warn.
+  // Skip with --no-validate.
   if (options.validate !== false) {
-    const { errors, warnings, sourceErrors, sourceWarnings } = await validateComponentProps({ projectRoot: getProjectRoot(import.meta.url) });
+    const validation = await validateComponentProps({ projectRoot: getProjectRoot(import.meta.url) });
+    const { blocking, advisory } = classifyValidation(validation);
 
-    // Source-level problems first: they cover every registered component,
-    // including ones no route reaches — which the bundler never sees at all.
-    if (sourceErrors.length > 0) {
-      Print.error(`Build blocked: ${sourceErrors.length} component source error(s) found.`);
-      for (const e of sourceErrors) {
-        Print.newLine();
-        Print.info(`  ${e.component}: ${e.message}`);
+    if (blocking.length > 0) {
+      Print.error(`Build blocked: ${blocking.length} component issue(s) found.`);
+      for (const issue of blocking) {
+        Print.info(`  ${describeIssue(issue)}`);
       }
       Print.newLine();
-      Print.info('Fix the components above. These files cannot be bundled or loaded as they are.');
+      Print.info('Fix the components above. Files that do not parse, have no default export or import a missing file cannot be bundled; prop errors would ship a broken contract.');
+      Print.info('Bypass with "slice build --no-validate" (not recommended).');
       process.exit(1);
     }
 
-    for (const w of sourceWarnings) {
-      Print.warning(`${w.component}: ${w.message}`);
-    }
-
-    for (const w of warnings) {
-      Print.warning(`Props: ${w.component}.${w.prop} — ${w.message}`);
-    }
-
-    if (errors.length > 0) {
-      Print.error(`Build blocked: ${errors.length} component prop error(s) found.`);
-      for (const e of errors) {
-        Print.info(`  ${e.component}.${e.prop} — ${e.message}`);
-      }
-      Print.info('Fix the component prop definitions above, or run "slice build --no-validate" to bypass (not recommended).');
-      process.exit(1);
+    for (const issue of advisory) {
+      Print.warning(describeIssue(issue));
     }
   }
 

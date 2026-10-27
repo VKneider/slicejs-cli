@@ -62,23 +62,44 @@ describe('doctor checks', () => {
     });
   });
 
-  test('checkComponents reports OK when every component folder has its .js', async () => {
+  test('checkComponents warns (never fails) on advice-only findings', async () => {
     await withTestProject(async () => {
+      // The test scaffold registers a subset of the demo components, so its
+      // slice.build() calls point at names that are not registered. That is
+      // advice: the build does not block on it.
       const r = await checkComponents();
-      assert.equal(r.pass, true);
-      assert.match(r.message, /components checked/);
+      assert.equal(r.pass, undefined);
+      assert.equal(r.warn, true);
+      assert.match(r.message, /none block the build/);
     });
   });
 
   test('checkComponents warns when a component folder lacks its .js file', async () => {
     await withTestProject(async (root) => {
-      // AppShell ships with AppShell.js; remove it to simulate a broken component.
+      // A folder in a component category is auto-registered by the scan, so a
+      // missing <Name>.js is a registration that cannot resolve. Advisory: the
+      // build only trips on it when something reaches the name.
       const broken = path.join(root, 'src', 'Components', 'AppComponents', 'Broken');
       await fs.ensureDir(broken); // directory with no Broken.js
       const r = await checkComponents();
       assert.equal(r.warn, true);
-      assert.match(r.message, /missing files/);
+      assert.match(r.message, /none block the build/);
+      assert.match(r.suggestion, /Broken/);
     });
+  });
+
+  test('checkComponents fails when the build would be blocked', async () => {
+    await withTestProject(async (root) => {
+      await fs.writeFile(
+        path.join(root, 'src', 'Components', 'Visual', 'Widget', 'Widget.js'),
+        "export default class Widget {\n  static props = { label: { type: 'nope' } }\n}\n"
+      );
+      const r = await checkComponents();
+      assert.equal(r.pass, undefined);
+      assert.equal(r.warn, undefined);
+      assert.match(r.message, /block "slice build"/);
+      assert.match(r.suggestion, /Widget\.label/);
+    }, { visualComponents: ['Widget'] });
   });
 });
 
