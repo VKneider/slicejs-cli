@@ -34,9 +34,19 @@ export async function loadFrameworkSeo(projectRoot) {
   }
 }
 
+/**
+ * Find the manifest. Apps that hand-write it keep it at the project root; a
+ * generated pipeline writes it inside the deployed public/ folder, which is
+ * where the framework server looks too.
+ */
 export function loadManifest(projectRoot) {
-  const file = path.join(projectRoot, MANIFEST_FILE);
-  if (!fs.existsSync(file)) return { file, manifest: null };
+  const candidates = [
+    path.join(projectRoot, MANIFEST_FILE),
+    path.join(projectRoot, 'src', 'public', MANIFEST_FILE),
+    path.join(projectRoot, 'dist', 'public', MANIFEST_FILE)
+  ];
+  const file = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!file) return { file: candidates[0], manifest: null };
   return { file, manifest: JSON.parse(fs.readFileSync(file, 'utf8')) };
 }
 

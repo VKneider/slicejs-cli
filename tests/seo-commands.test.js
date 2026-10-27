@@ -149,3 +149,15 @@ test('check reports a missing manifest', { skip }, async (t) => {
 
   assert.ok(result.errors.some((message) => /seo\.json not found/.test(message)));
 });
+
+test('the manifest is also found inside the deployed public folder', { skip }, async (t) => {
+  const projectRoot = makeProject(t, null);
+  fs.mkdirSync(path.join(projectRoot, 'src', 'public'), { recursive: true });
+  fs.writeFileSync(path.join(projectRoot, 'src', 'public', 'seo.json'), JSON.stringify(MANIFEST));
+
+  const result = await generateSeoFiles({ projectRoot, framework });
+
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.files[0].status, 'created');
+  assert.match(fs.readFileSync(sitemapPath(projectRoot), 'utf8'), /<loc>https:\/\/acme.dev\/pricing<\/loc>/);
+});
