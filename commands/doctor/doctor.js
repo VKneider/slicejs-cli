@@ -7,8 +7,8 @@ import Print from '../Print.js';
 import { getProjectRoot, getSrcPath, getApiPath, getConfigPath, getPath, getComponentsJsPath } from '../utils/PathHelper.js';
 import { resolvePackageManager, installCommand } from '../utils/PackageManager.js';
 import updateManager from '../utils/updateManager.js';
-import { parseComponentsRegistry, validateComponentProps } from '../types/types.js';
-import { validateConfigRules, classifyValidation, describeIssue } from '../utils/ProjectValidation.js';
+import { parseComponentsRegistry } from '../types/types.js';
+import { validateConfigRules, validateProject, classifyValidation, describeIssue } from '../utils/ProjectValidation.js';
 import { parse as parseModule } from '@babel/parser';
 import traverse from '@babel/traverse';
 import ExternalModuleBundler from '../utils/bundling/ExternalModuleBundler.js';
@@ -349,12 +349,12 @@ async function checkDependencies() {
 }
 
 /**
- * Components: registry, source and static props in one verdict.
+ * Components and routes: one verdict for everything the build validates statically.
  *
- * This is the pass `slice build` uses, classified by the same helper it uses.
- * It used to be two rows that disagreed with each other and with the build:
- * "Components" scanned folders, "Component Props" read only prop definitions and
- * dropped the source errors the build blocks on.
+ * The same pass `slice build` runs, classified by the same helper. It used to be
+ * two rows that disagreed with each other and with the build: "Components"
+ * scanned folders, "Component Props" read only prop definitions and dropped the
+ * source errors the build blocks on, and routes were never checked at all.
  */
 async function checkComponents() {
     const registryPath = getComponentsJsPath(import.meta.url);
@@ -364,13 +364,14 @@ async function checkComponents() {
     }
 
     try {
-        const validation = await validateComponentProps({ projectRoot: getProjectRoot(import.meta.url) });
+        const validation = await validateProject({ projectRoot: getProjectRoot(import.meta.url) });
         const { blocking, advisory } = classifyValidation(validation);
+        const summary = `${validation.registeredCount} components, ${validation.routeCount} routes`;
 
         if (blocking.length > 0) {
             const componentCount = new Set(blocking.map((issue) => issue.component)).size;
             return {
-                message: `${blocking.length} issue(s) in ${componentCount} component(s) block "slice build"`,
+                message: `${blocking.length} issue(s) in ${componentCount} file(s) block "slice build"`,
                 suggestion: blocking
                     .slice(0, 5)
                     .map(describeIssue)
@@ -382,7 +383,7 @@ async function checkComponents() {
         if (advisory.length > 0) {
             return {
                 warn: true,
-                message: `${validation.registeredCount} components, ${advisory.length} warning(s) — none block the build`,
+                message: `${summary}, ${advisory.length} warning(s) — none block the build`,
                 suggestion: advisory
                     .slice(0, 3)
                     .map(describeIssue)
@@ -393,7 +394,7 @@ async function checkComponents() {
 
         return {
             pass: true,
-            message: `${validation.registeredCount} components, ${validation.checkedCount} with static props: all valid`
+            message: `${summary}, ${validation.checkedCount} with static props: all valid`
         };
     } catch (error) {
         return { warn: true, message: `Cannot check components: ${error.message}` };
@@ -523,7 +524,7 @@ export default async function runDiagnostics() {
         { name: 'Port Availability', fn: checkPort },
         { name: 'Package Manager', fn: checkPackageManagerSetup },
         { name: 'Dependencies', fn: checkDependencies },
-        { name: 'Components', fn: checkComponents },
+        { name: 'Components & Routes', fn: checkComponents },
         { name: 'External Dependencies', fn: checkExternalDependencies }
     ];
 

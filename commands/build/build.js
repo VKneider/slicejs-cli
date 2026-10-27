@@ -1,8 +1,6 @@
 import bundle from '../bundle/bundle.js';
 import buildProduction, { serveProductionBuild } from '../buildProduction/buildProduction.js';
-import { loadConfigSync } from '../utils/loadConfig.js';
-import { validateComponentProps } from '../types/types.js';
-import { validateConfigRules, classifyValidation, describeIssue } from '../utils/ProjectValidation.js';
+import { validateProject, classifyValidation, describeIssue } from '../utils/ProjectValidation.js';
 import { getProjectRoot, getDistPath } from '../utils/PathHelper.js';
 import { precompressDirectory } from '../utils/compressAssets.js';
 import Print from '../Print.js';
@@ -20,41 +18,38 @@ export default async function build(options = {}) {
     return true;
   }
 
-  // Hard-fail before producing a bundle: ContextManager reactivity (setState →
-  // watch/bind) is delivered through EventManager, and EventManager is only
-  // bundled when events.enabled is true. The rule lives in ProjectValidation so
-  // `slice doctor` reports the same thing instead of calling the config valid.
-  const config = loadConfigSync(import.meta.url);
-  const configErrors = validateConfigRules(config);
-  if (configErrors.length > 0) {
-    for (const problem of configErrors) {
+  // One static pass: config rules, components and routes. `slice doctor`
+  // reports exactly this result, so a green doctor means the build's pre-flight
+  // passes. `--no-validate` skips the component findings; config and routes
+  // always run, because both produce a broken deployment rather than a style
+  // issue.
+  const validation = await validateProject({
+    projectRoot: getProjectRoot(import.meta.url),
+    skipComponents: options.validate === false
+  });
+  const { blocking, advisory } = classifyValidation(validation);
+
+  if (validation.configErrors.length > 0) {
+    for (const problem of validation.configErrors) {
       Print.error(`sliceConfig: ${problem.path} ${problem.message}`);
     }
     Print.info('Fix sliceConfig.json and run the build again.');
     process.exit(1);
   }
 
-  // One validation pass for every registered component; `slice doctor` reports
-  // the same result. Blocking findings fail the build, advisories only warn.
-  // Skip with --no-validate.
-  if (options.validate !== false) {
-    const validation = await validateComponentProps({ projectRoot: getProjectRoot(import.meta.url) });
-    const { blocking, advisory } = classifyValidation(validation);
-
-    if (blocking.length > 0) {
-      Print.error(`Build blocked: ${blocking.length} component issue(s) found.`);
-      for (const issue of blocking) {
-        Print.info(`  ${describeIssue(issue)}`);
-      }
-      Print.newLine();
-      Print.info('Fix the components above. Files that do not parse, have no default export or import a missing file cannot be bundled; prop errors would ship a broken contract.');
-      Print.info('Bypass with "slice build --no-validate" (not recommended).');
-      process.exit(1);
+  if (blocking.length > 0) {
+    Print.error(`Build blocked: ${blocking.length} issue(s) found.`);
+    for (const issue of blocking) {
+      Print.info(`  ${describeIssue(issue)}`);
     }
+    Print.newLine();
+    Print.info('Fix the entries above. Component files that do not parse, have no default export or import a missing file cannot be bundled; routes.js is served as-is, so a broken import stops the app from navigating.');
+    Print.info('Bypass the component checks with "slice build --no-validate" (not recommended).');
+    process.exit(1);
+  }
 
-    for (const issue of advisory) {
-      Print.warning(describeIssue(issue));
-    }
+  for (const issue of advisory) {
+    Print.warning(describeIssue(issue));
   }
 
   const success = await buildProduction({

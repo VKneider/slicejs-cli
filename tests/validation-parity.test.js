@@ -3,8 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'fs-extra';
 import path from 'node:path';
 import { withTestProject } from './helpers/setup.js';
-import { validateComponentProps } from '../commands/types/types.js';
-import { classifyValidation, validateConfigRules } from '../commands/utils/ProjectValidation.js';
+import { classifyValidation, validateConfigRules, validateProject } from '../commands/utils/ProjectValidation.js';
 import { checkComponents, checkConfig } from '../commands/doctor/doctor.js';
 
 // The contract this file freezes: whatever `slice build` blocks on, `slice
@@ -15,8 +14,15 @@ import { checkComponents, checkConfig } from '../commands/doctor/doctor.js';
 
 const WIDGET = (body) => path.join('src', 'Components', 'Visual', 'Widget', 'Widget.js');
 
+// The scaffold's routes.js points at demo components the trimmed registry does
+// not contain; tests that count advisories start from a route that resolves.
+const cleanRoutes = (root) => fs.writeFile(
+  path.join(root, 'src', 'routes.js'),
+  "const routes = [{ path: '/', component: 'Widget' }];\nexport default routes;\n"
+);
+
 async function verdicts(root) {
-  const validation = await validateComponentProps({ projectRoot: root });
+  const validation = await validateProject({ projectRoot: root });
   return {
     validation,
     ...classifyValidation(validation),
@@ -27,6 +33,12 @@ async function verdicts(root) {
 describe('doctor and build classify components the same way', () => {
   test('a clean project: no findings, doctor passes', async () => {
     await withTestProject(async (root) => {
+      // The scaffold's routes.js points at demo components the trimmed registry
+      // does not contain. A route that resolves keeps this case clean.
+      await fs.writeFile(
+        path.join(root, 'src', 'routes.js'),
+        "const routes = [{ path: '/', component: 'Widget' }];\nexport default routes;\n"
+      );
       const { blocking, advisory, row } = await verdicts(root);
       assert.deepEqual(blocking, []);
       assert.deepEqual(advisory, []);
@@ -83,6 +95,7 @@ describe('doctor and build classify components the same way', () => {
 
   test('type "any" is advice for both: build warns, doctor warns', async () => {
     await withTestProject(async (root) => {
+      await cleanRoutes(root);
       await fs.writeFile(
         path.join(root, WIDGET()),
         "export default class Widget {\n  static props = { label: { type: 'any' } }\n}\n"
@@ -97,6 +110,7 @@ describe('doctor and build classify components the same way', () => {
 
   test('building an unregistered component is advice for both', async () => {
     await withTestProject(async (root) => {
+      await cleanRoutes(root);
       await fs.writeFile(
         path.join(root, WIDGET()),
         "export default class Widget {\n  init() { slice.build('NotRegistered'); }\n}\n"
@@ -137,5 +151,44 @@ describe('config rules are shared with the build', () => {
     assert.equal(validateConfigRules({ context: { enabled: true }, events: { enabled: false } }).length, 1);
     assert.equal(validateConfigRules({ context: { enabled: true }, events: { enabled: true } }).length, 0);
     assert.equal(validateConfigRules({ context: { enabled: false } }).length, 0);
+  });
+});
+
+describe('routes.js is part of the same pass', () => {
+  const writeRoutes = (root, source) => fs.writeFile(path.join(root, 'src', 'routes.js'), source);
+
+  test('an unresolved import blocks the build and fails doctor', async () => {
+    await withTestProject(async (root) => {
+      // routes.js is served as-is: the bundler never resolves it, so this used
+      // to ship and break the router in the browser.
+      await writeRoutes(root, "import './Components/Visual/Ghost/Ghost.js';\nconst routes = [];\nexport default routes;\n");
+      const { blocking, row } = await verdicts(root);
+      assert.equal(blocking.length, 1);
+      assert.equal(blocking[0].kind, 'route');
+      assert.match(blocking[0].message, /cannot resolve/);
+      assert.equal(row.pass, undefined);
+      assert.match(row.message, /block "slice build"/);
+    }, { visualComponents: ['Widget'] });
+  });
+
+  test('a syntax error blocks the build and fails doctor', async () => {
+    await withTestProject(async (root) => {
+      await writeRoutes(root, 'const routes = [;\nexport default routes;\n');
+      const { blocking, row } = await verdicts(root);
+      assert.equal(blocking.length, 1);
+      assert.match(blocking[0].message, /Syntax error/);
+      assert.equal(row.pass, undefined);
+    }, { visualComponents: ['Widget'] });
+  });
+
+  test('a route pointing at an unregistered component is advice for both', async () => {
+    await withTestProject(async (root) => {
+      await writeRoutes(root, "const routes = [{ path: '/ghost', component: 'Ghost' }];\nexport default routes;\n");
+      const { blocking, advisory, row } = await verdicts(root);
+      assert.deepEqual(blocking, []);
+      assert.equal(advisory.length, 1);
+      assert.match(advisory[0].message, /not registered in components\.js/);
+      assert.equal(row.warn, true);
+    }, { visualComponents: ['Widget'] });
   });
 });

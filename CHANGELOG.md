@@ -29,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prop definition errors block both, advisories only warn. Doctor's two component rows became one.
 - `slice doctor` exits 1 when a row fails (0 with only warnings), so `slice doctor && slice build`
   is a usable gate.
+- `src/routes.js` is validated by the shared pass: a syntax error or an unresolved relative import
+  blocks `slice build` and `slice doctor` (the router loads that file as-is, so the bundle used to be
+  built while navigation was broken); a route whose `component` is not in `components.js` warns.
 
 ### Fixed
 
