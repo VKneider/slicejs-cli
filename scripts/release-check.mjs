@@ -15,6 +15,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { satisfies, rangeMismatch } from '../commands/utils/semver.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const argv = process.argv.slice(2);
@@ -45,48 +46,6 @@ function check(condition, message, detail) {
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 
 // ── versions ────────────────────────────────────────────────────────────────
-
-const parse = (value) => {
-  const match = String(value ?? '').trim().replace(/^[~^<>=v\s]+/, '').match(/^(\d+)\.(\d+)\.(\d+)/);
-  return match ? { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) } : null;
-};
-
-const compare = (a, b) => (a.major - b.major) || (a.minor - b.minor) || (a.patch - b.patch);
-
-/** `^`, `~`, exact and `>=`/`<` comparators, ANDed inside a range. */
-export function satisfies(range, version) {
-  const target = parse(version);
-  if (!target) return false;
-
-  return String(range).split('||').some((alternative) => {
-    const comparators = alternative.trim().split(/\s+/).filter(Boolean);
-    if (!comparators.length) return true;
-
-    return comparators.every((comparator) => {
-      if (comparator === '*' || comparator === 'x' || comparator === 'latest') return true;
-
-      const operator = (comparator.match(/^(\^|~|>=|<=|>|<|=)?/) || [])[1] || '';
-      const base = parse(comparator.slice(operator.length));
-      if (!base) return true; // an unknown form is not a reason to block a release
-
-      if (operator === '^') {
-        if (target.major !== base.major) return false;
-        if (base.major === 0 && target.minor !== base.minor) return false;
-        return compare(target, base) >= 0;
-      }
-      if (operator === '~') {
-        return target.major === base.major && target.minor === base.minor && compare(target, base) >= 0;
-      }
-
-      const diff = compare(target, base);
-      if (operator === '>=') return diff >= 0;
-      if (operator === '>') return diff > 0;
-      if (operator === '<=') return diff <= 0;
-      if (operator === '<') return diff < 0;
-      return diff === 0;
-    });
-  });
-}
 
 function npmView(spec) {
   const result = spawnSync('npm', ['view', spec, 'version'], {

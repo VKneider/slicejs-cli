@@ -8,7 +8,9 @@ import { getProjectRoot, getSrcPath, getApiPath, getConfigPath, getPath, getComp
 import { resolvePackageManager, installCommand } from '../utils/PackageManager.js';
 import updateManager from '../utils/updateManager.js';
 import { parseComponentsRegistry } from '../types/types.js';
-import { validateConfigRules, validateProject, classifyValidation, describeIssue } from '../utils/ProjectValidation.js';
+import { validateConfigRules, validateProject, validateServerEntry, classifyValidation, describeIssue } from '../utils/ProjectValidation.js';
+import { loadConfigSchema, validateAgainstSchema } from '../utils/sliceConfigSchema.js';
+import { rangeMismatch } from '../utils/semver.js';
 import { parse as parseModule } from '@babel/parser';
 import traverse from '@babel/traverse';
 import ExternalModuleBundler from '../utils/bundling/ExternalModuleBundler.js';
@@ -170,6 +172,24 @@ async function checkConfig() {
             };
         }
 
+        // The framework publishes a JSON Schema for this file and nothing read
+        // it. Type errors are silent killers: `"port": "3001"` makes listen()
+        // open a pipe, `"enabled": "false"` is truthy.
+        const schema = await loadConfigSchema(getProjectRoot(import.meta.url));
+        if (schema) {
+            const schemaIssues = validateAgainstSchema(config, schema);
+            if (schemaIssues.length > 0) {
+                return {
+                    pass: false,
+                    message: `sliceConfig.json does not match the published schema: ${schemaIssues[0].path} ${schemaIssues[0].message}`,
+                    suggestion: schemaIssues
+                        .slice(0, 5)
+                        .map((issue) => `${issue.path} ${issue.message}`)
+                        .join('\n') + (schemaIssues.length > 5 ? `\n… ${schemaIssues.length - 5} more` : '')
+                };
+            }
+        }
+
         // Same rules `slice build` applies before bundling. A config that passes
         // here but blocks the build is worse than no check at all.
         const ruleProblems = validateConfigRules(config);
@@ -323,6 +343,39 @@ async function checkDependencies() {
         const hasFramework = !!(hasFrameworkDep || hasFrameworkNode);
 
         if (hasFramework) {
+            // A declared range that does not accept the installed version is a
+            // reproducibility bug: the next clean install gets a different
+            // runtime. The CLI's own requirement matters more — a published CLI
+            // declaring ^3.5.0 while the app runs 4.x shipped a broken install.
+            const mismatches = [];
+            const installed = await fs.readJson(frameworkNodePath).catch(() => null);
+
+            if (installed?.version) {
+                const appRange = pkg.dependencies?.['slicejs-web-framework'] || pkg.devDependencies?.['slicejs-web-framework'];
+                const appMismatch = appRange ? rangeMismatch(appRange, installed.version) : null;
+                if (appMismatch) {
+                    mismatches.push(`package.json declares ${appMismatch}, but ${installed.version} is installed`);
+                }
+
+                const cliPkgPath = getPath(import.meta.url, 'node_modules', 'slicejs-cli', 'package.json');
+                const cliPkg = await fs.pathExists(cliPkgPath) ? await fs.readJson(cliPkgPath).catch(() => null) : null;
+                const cliRange = cliPkg?.dependencies?.['slicejs-web-framework'];
+                const cliMismatch = cliRange ? rangeMismatch(cliRange, installed.version) : null;
+                if (cliMismatch) {
+                    mismatches.push(`slicejs-cli@${cliPkg.version} requires slicejs-web-framework@${cliRange}, but ${installed.version} is installed`);
+                }
+            }
+
+            if (mismatches.length > 0) {
+                return {
+                    warn: true,
+                    message: `Version mismatch: ${mismatches[0]}`,
+                    suggestion: mismatches.length > 1
+                        ? mismatches.slice(1).join('\n')
+                        : 'Align the declared range with the installed version, or reinstall from the lockfile.'
+                };
+            }
+
             return {
                 pass: true,
                 message: 'Required framework dependency is installed'
@@ -399,6 +452,22 @@ async function checkComponents() {
     } catch (error) {
         return { warn: true, message: `Cannot check components: ${error.message}` };
     }
+}
+
+/**
+ * The deployment entrypoint. `slice build` bundles `src/` and never runs `api/`,
+ * so a syntax error there reached production as a 500.
+ */
+async function checkServerEntry() {
+    const { serverErrors, hasServer } = await validateServerEntry({ projectRoot: getProjectRoot(import.meta.url) });
+
+    if (!hasServer) return { pass: true, message: 'No api/index.js (static app)' };
+    if (serverErrors.length === 0) return { pass: true, message: 'api/index.js parses' };
+
+    return {
+        message: `api/index.js does not parse: ${serverErrors[0].message.split('\n')[0]}`,
+        suggestion: 'Fix the syntax error: the deploy fails on the same file.'
+    };
 }
 
 /** Package root of a bare specifier: 'lodash/fp' -> 'lodash', '@s/p/x' -> '@s/p'. */
@@ -508,6 +577,7 @@ export {
     checkPort,
     checkDependencies,
     checkComponents,
+    checkServerEntry,
     checkExternalDependencies
 };
 
@@ -525,6 +595,7 @@ export default async function runDiagnostics() {
         { name: 'Package Manager', fn: checkPackageManagerSetup },
         { name: 'Dependencies', fn: checkDependencies },
         { name: 'Components & Routes', fn: checkComponents },
+        { name: 'Server entry', fn: checkServerEntry },
         { name: 'External Dependencies', fn: checkExternalDependencies }
     ];
 

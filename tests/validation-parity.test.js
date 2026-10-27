@@ -192,3 +192,76 @@ describe('routes.js is part of the same pass', () => {
     }, { visualComponents: ['Widget'] });
   });
 });
+
+describe('categories and route params', () => {
+  test('a component registered under an unknown category blocks the build', async () => {
+    await withTestProject(async (root) => {
+      await fs.writeFile(
+        path.join(root, 'src', 'routes.js'),
+        "const routes = [{ path: '/', component: 'Widget' }];\nexport default routes;\n"
+      );
+      const registryPath = path.join(root, 'src', 'Components', 'components.js');
+      const registry = await fs.readFile(registryPath, 'utf8');
+      await fs.writeFile(registryPath, registry.replace(/const components = \{/, 'const components = {\n  "GhostComp": "Widgets",'));
+
+      const { blocking, row } = await verdicts(root);
+      assert.equal(blocking.length, 1);
+      assert.match(blocking[0].message, /no path in sliceConfig\.paths\.components/);
+      assert.equal(row.pass, undefined);
+    }, { visualComponents: ['Widget'] });
+  });
+
+  test('a registered component in a missing category folder blocks the build', async () => {
+    await withTestProject(async (root) => {
+      await fs.writeFile(
+        path.join(root, 'src', 'routes.js'),
+        "const routes = [{ path: '/', component: 'Widget' }];\nexport default routes;\n"
+      );
+      const configPath = path.join(root, 'src', 'sliceConfig.json');
+      const config = await fs.readJson(configPath);
+      config.paths.components.Widgets = { path: '/Components/Widgets', type: 'Visual' };
+      await fs.writeJson(configPath, config);
+
+      const registryPath = path.join(root, 'src', 'Components', 'components.js');
+      const registry = await fs.readFile(registryPath, 'utf8');
+      await fs.writeFile(registryPath, registry.replace(/const components = \{/, 'const components = {\n  "GhostComp": "Widgets",'));
+
+      const { blocking, row } = await verdicts(root);
+      assert.equal(blocking.length, 1, JSON.stringify(blocking));
+      assert.match(blocking[0].message, /Components[\\/]Widgets does not exist/);
+      assert.equal(row.pass, undefined);
+    }, { visualComponents: ['Widget'] });
+  });
+
+  test('an empty configured category with no folder is not a finding', async () => {
+    await withTestProject(async (root) => {
+      await fs.writeFile(
+        path.join(root, 'src', 'routes.js'),
+        "const routes = [{ path: '/', component: 'Widget' }];\nexport default routes;\n"
+      );
+      const configPath = path.join(root, 'src', 'sliceConfig.json');
+      const config = await fs.readJson(configPath);
+      config.paths.components.Future = { path: '/Components/Future', type: 'Visual' };
+      await fs.writeJson(configPath, config);
+
+      const { blocking, advisory } = await verdicts(root);
+      assert.deepEqual(blocking, []);
+      assert.deepEqual(advisory, [], 'a category nothing is registered under is harmless');
+    }, { visualComponents: ['Widget'] });
+  });
+
+  test('a ":param" route never matches, and is reported', async () => {
+    await withTestProject(async (root) => {
+      await fs.writeFile(
+        path.join(root, 'src', 'routes.js'),
+        "const routes = [{ path: '/producto/:id', component: 'Widget' }];\nexport default routes;\n"
+      );
+
+      const { blocking, advisory, row } = await verdicts(root);
+      assert.deepEqual(blocking, []);
+      assert.ok(advisory.some((issue) => /uses ":id"/.test(issue.message)));
+      assert.ok(advisory.some((issue) => /\$\{id\}/.test(issue.message)), 'and shows the fix');
+      assert.equal(row.warn, true);
+    }, { visualComponents: ['Widget'] });
+  });
+});

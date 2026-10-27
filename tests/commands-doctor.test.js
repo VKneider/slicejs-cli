@@ -11,6 +11,8 @@ import {
   checkComponents,
   checkPackageManagerSetup,
   checkExternalDependencies,
+  checkDependencies,
+  checkServerEntry,
 } from '../commands/doctor/doctor.js';
 
 describe('doctor checks', () => {
@@ -196,5 +198,91 @@ describe('checkPackageManagerSetup', () => {
       assert.match(r.message, /not installed locally/);
       assert.match(r.suggestion, /-D slicejs-cli/);
     } finally { await fs.remove(dir); }
+  });
+});
+
+describe('server entry, config schema and dependency skew', () => {
+  test('checkServerEntry passes when api/index.js parses', async () => {
+    await withTestProject(async () => {
+      const r = await checkServerEntry();
+      assert.equal(r.pass, true);
+      assert.match(r.message, /parses/);
+    });
+  });
+
+  test('checkServerEntry fails on a syntax error', async () => {
+    await withTestProject(async (root) => {
+      await fs.writeFile(path.join(root, 'api', 'index.js'), 'const broken = ;\n');
+      const r = await checkServerEntry();
+      assert.equal(r.pass, undefined);
+      assert.equal(r.warn, undefined);
+      assert.match(r.message, /does not parse/);
+    });
+  });
+
+  test('checkServerEntry passes for a static app with no api/index.js', async () => {
+    await withTestProject(async (root) => {
+      await fs.remove(path.join(root, 'api', 'index.js'));
+      const r = await checkServerEntry();
+      assert.equal(r.pass, true);
+      assert.match(r.message, /static app/);
+    });
+  });
+
+  test('checkConfig fails on a value that does not match the published schema', async () => {
+    await withTestProject(async (root) => {
+      const schemaDir = path.join(root, 'node_modules', 'slicejs-web-framework');
+      await fs.ensureDir(schemaDir);
+      await fs.writeJson(path.join(schemaDir, 'sliceConfig.schema.json'), {
+        type: 'object',
+        properties: {
+          server: { type: 'object', properties: { port: { type: 'number' } } }
+        }
+      });
+
+      const configPath = path.join(root, 'src', 'sliceConfig.json');
+      const config = await fs.readJson(configPath);
+      config.server = { ...(config.server || {}), port: '3001' };
+      await fs.writeJson(configPath, config);
+
+      const r = await checkConfig();
+      assert.equal(r.pass, false);
+      assert.match(r.message, /does not match the published schema/);
+      assert.match(r.suggestion, /sliceConfig\.server\.port/);
+    });
+  });
+
+  test('checkDependencies warns when the declared range rejects the installed version', async () => {
+    await withTestProject(async (root) => {
+      const pkgPath = path.join(root, 'package.json');
+      const pkg = (await fs.pathExists(pkgPath)) ? await fs.readJson(pkgPath) : { name: 'x' };
+      pkg.dependencies = { ...(pkg.dependencies || {}), 'slicejs-web-framework': '^3.5.0' };
+      await fs.writeJson(pkgPath, pkg);
+
+      const frameworkDir = path.join(root, 'node_modules', 'slicejs-web-framework');
+      await fs.ensureDir(frameworkDir);
+      await fs.writeJson(path.join(frameworkDir, 'package.json'), { name: 'slicejs-web-framework', version: '4.0.2' });
+
+      const r = await checkDependencies();
+      assert.equal(r.warn, true);
+      assert.match(r.message, /\^3\.5\.0/);
+      assert.match(r.message, /4\.0\.2/);
+    });
+  });
+
+  test('checkDependencies passes when the range accepts the installed version', async () => {
+    await withTestProject(async (root) => {
+      const pkgPath = path.join(root, 'package.json');
+      const pkg = (await fs.pathExists(pkgPath)) ? await fs.readJson(pkgPath) : { name: 'x' };
+      pkg.dependencies = { ...(pkg.dependencies || {}), 'slicejs-web-framework': '^4.0.2' };
+      await fs.writeJson(pkgPath, pkg);
+
+      const frameworkDir = path.join(root, 'node_modules', 'slicejs-web-framework');
+      await fs.ensureDir(frameworkDir);
+      await fs.writeJson(path.join(frameworkDir, 'package.json'), { name: 'slicejs-web-framework', version: '4.0.2' });
+
+      const r = await checkDependencies();
+      assert.equal(r.pass, true);
+    });
   });
 });

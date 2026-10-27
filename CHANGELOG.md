@@ -17,6 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   verdicts come from the same validator as `slice seo check`.
 - `scripts/release-check.mjs` (`npm run release:check`): packaging, unpublished-version, changelog
   and framework-range checks, so a release cannot ship a CLI that installs the wrong runtime.
+- `slice doctor` checks three more things: `Dependencies` reports a declared framework range that
+  rejects the installed version (or a CLI that requires one), `Configuration` validates the file
+  against the published `sliceConfig.schema.json`, and the new `Server entry` row parses
+  `api/index.js` (nothing had ever looked at it).
+- `slice build` and `slice doctor` block a component registered under a category that has no
+  `paths.components` entry, or in a category whose folder does not exist; both used to be skipped.
+- Routes written as `/producto/:id` are reported: Slice only compiles `${id}` patterns, so a
+  `:param` route is treated as a literal path and never matches.
+- `commands/utils/semver.js` holds the range check shared by `slice doctor` and `release-check`.
 
 ### Changed
 

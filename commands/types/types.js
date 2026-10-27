@@ -894,9 +894,41 @@ const validateComponentProps = async ({ projectRoot }) => {
     return entry?.path ? String(entry.path).replace(/^[/\\]+/, '') : null;
   };
 
+  // A configured category whose folder is missing. Reported once per category
+  // (per-component errors would bury the cause), and only when something is
+  // registered under it: an empty category in sliceConfig is harmless, but a
+  // registered component in a missing folder can never load.
+  const registeredByCategory = new Map();
+  for (const category of Object.values(registryMap)) {
+    registeredByCategory.set(category, (registeredByCategory.get(category) || 0) + 1);
+  }
+
+  const missingCategories = new Map();
+  for (const [category, entry] of Object.entries(componentPaths || {})) {
+    if (!entry?.path) continue;
+    if (!registeredByCategory.has(category)) continue;
+    const dir = joinRoot(projectRoot, 'src', String(entry.path).replace(/^[/\\]+/, ''));
+    if (!(await fs.pathExists(dir))) {
+      missingCategories.set(category, dir);
+      sourceErrors.push({
+        component: `paths.components.${category}`,
+        message: `${path.relative(projectRoot, dir)} does not exist. ${registeredByCategory.get(category)} component(s) are registered under "${category}" and cannot resolve until it is created.`
+      });
+    }
+  }
+
   for (const [componentName, category] of Object.entries(registryMap)) {
     const categoryPathValue = categoryPath(category);
-    if (!categoryPathValue) continue;
+    if (!categoryPathValue) {
+      // Registered under a category the config does not know: the path cannot be
+      // built, so slice.build(name) can never resolve it.
+      sourceErrors.push({
+        component: componentName,
+        message: `is registered under category "${category}", which has no path in sliceConfig.paths.components. slice.build("${componentName}") cannot resolve it.`
+      });
+      continue;
+    }
+    if (missingCategories.has(category)) continue; // one warning for the whole folder
 
     const componentFile = joinRoot(projectRoot, 'src', categoryPathValue, componentName, `${componentName}.js`);
     if (!(await fs.pathExists(componentFile))) {

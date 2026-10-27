@@ -1,6 +1,6 @@
 import bundle from '../bundle/bundle.js';
 import buildProduction, { serveProductionBuild } from '../buildProduction/buildProduction.js';
-import { validateProject, classifyValidation, describeIssue } from '../utils/ProjectValidation.js';
+import { validateProject, validateServerEntry, classifyValidation, describeIssue } from '../utils/ProjectValidation.js';
 import { getProjectRoot, getDistPath } from '../utils/PathHelper.js';
 import { precompressDirectory } from '../utils/compressAssets.js';
 import Print from '../Print.js';
@@ -27,7 +27,10 @@ export default async function build(options = {}) {
     projectRoot: getProjectRoot(import.meta.url),
     skipComponents: options.validate === false
   });
-  const { blocking, advisory } = classifyValidation(validation);
+  // The server entry is not part of the bundle, but a deploy with a broken
+  // api/index.js is a broken deploy: it joins the same blocking list.
+  const server = await validateServerEntry({ projectRoot: getProjectRoot(import.meta.url) });
+  const { blocking, advisory } = classifyValidation({ ...validation, ...server });
 
   if (validation.configErrors.length > 0) {
     for (const problem of validation.configErrors) {

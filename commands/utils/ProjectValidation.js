@@ -82,7 +82,25 @@ export async function validateRoutes({ projectRoot, registeredNames = new Set() 
         for (const property of node.properties) {
           if (property.type !== 'ObjectProperty' || property.computed) continue;
           const key = property.name ?? property.key?.name ?? property.key?.value;
-          if (key !== 'component' || property.value?.type !== 'StringLiteral') continue;
+          if (property.value?.type !== 'StringLiteral') continue;
+
+          // `:id` looks like a parameter and is never matched: the router only
+          // compiles patterns containing `${`.
+          if (key === 'path') {
+            const routePath = property.value.value;
+            const colon = routePath.match(/(?:^|\/):([A-Za-z_]\w*)/);
+            if (colon) {
+              routeWarnings.push({
+                component: 'routes.js',
+                message:
+                  `route "${routePath}" uses ":${colon[1]}", which Slice never matches. `
+                  + `It only compiles "\${${colon[1]}}" patterns, so this path is treated as a literal.`
+              });
+            }
+            continue;
+          }
+
+          if (key !== 'component') continue;
 
           routeCount += 1;
           const name = property.value.value;
@@ -101,6 +119,33 @@ export async function validateRoutes({ projectRoot, registeredNames = new Set() 
   } catch { /* the syntax check above already reported it */ }
 
   return { routeErrors, routeWarnings, routeCount };
+}
+
+/**
+ * `api/index.js` is the deployment entrypoint. `slice build` bundles `src/` and
+ * never executes it, so a syntax error there survived every check and surfaced
+ * as a 500 in production.
+ */
+export async function validateServerEntry({ projectRoot }) {
+  const file = path.join(projectRoot, 'api', 'index.js');
+
+  let source;
+  try {
+    source = await fs.readFile(file, 'utf8');
+  } catch {
+    return { serverErrors: [], serverWarnings: [], hasServer: false }; // static app
+  }
+
+  const syntax = describeSyntaxError(source, file);
+  if (!syntax.ok) {
+    return {
+      serverErrors: [{ component: 'api/index.js', message: `Syntax error at ${syntax.message}` }],
+      serverWarnings: [],
+      hasServer: true
+    };
+  }
+
+  return { serverErrors: [], serverWarnings: [], hasServer: true };
 }
 
 /** Config, components and routes in one result. Both commands start here. */
@@ -173,6 +218,11 @@ function readRegistry(projectRoot) {
  */
 export function classifyValidation(result = {}) {
   const blocking = [
+    ...(result.serverErrors || []).map((issue) => ({
+      kind: 'server',
+      component: issue.component,
+      message: issue.message
+    })),
     ...(result.sourceErrors || []).map((issue) => ({
       kind: 'source',
       component: issue.component,
@@ -192,6 +242,11 @@ export function classifyValidation(result = {}) {
   ];
 
   const advisory = [
+    ...(result.serverWarnings || []).map((issue) => ({
+      kind: 'server-warning',
+      component: issue.component,
+      message: issue.message
+    })),
     ...(result.sourceWarnings || []).map((issue) => ({
       kind: 'source-warning',
       component: issue.component,
