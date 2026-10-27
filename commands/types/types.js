@@ -413,6 +413,94 @@ const parseComponentsRegistry = (content, filePath) => {
   }
 };
 
+// The prop metadata the type generator has to read from the AST. Anything
+// computed (a constant, a function call) is invisible to it: the prop silently
+// degrades to `any` and loses autocomplete, with no error anywhere.
+const TYPE_METADATA_FIELDS = new Set(['type', 'allowedValues', 'schema', 'items']);
+
+
+/**
+ * Prop metadata written as an expression instead of a literal.
+ * @returns {{prop: string, field: string}[]}
+ */
+export const findComputedPropFields = (source) => {
+  let ast;
+  try {
+    ast = parse(source, { sourceType: 'module', plugins: ['classProperties'] });
+  } catch {
+    return []; // the syntax error is reported elsewhere
+  }
+
+  let propsObject = null;
+  const issues = [];
+  traverse.default(ast, {
+    ClassProperty(pathRef) {
+      const node = pathRef.node;
+      if (!node.static || keyNameFromAst(node.key) !== "props") return;
+      if (node.value?.type === "ObjectExpression") {
+        propsObject = node.value;
+      } else if (node.value) {
+        // `static props = SHARED`: nothing to read at all.
+        issues.push({ prop: "props", field: "metadata" });
+      }
+    }
+  });
+  if (!propsObject) return issues;
+  const isLiteral = (node) => literalValueFromAst(node) !== undefined || node?.type === 'NullLiteral';
+
+  const inspectConfig = (propPath, configNode) => {
+    if (configNode?.type !== 'ObjectExpression') {
+      issues.push({ prop: propPath, field: 'metadata' });
+      return;
+    }
+
+    for (const property of configNode.properties || []) {
+      if (property.type !== 'ObjectProperty') continue;
+      const field = keyNameFromAst(property.key);
+      if (!TYPE_METADATA_FIELDS.has(field)) continue;
+
+      const value = property.value;
+
+      if (field === 'type' && !isLiteral(value)) {
+        issues.push({ prop: propPath, field });
+        continue;
+      }
+
+      if (field === 'allowedValues' && !(value.type === 'ArrayExpression'
+        && (value.elements || []).every((element) => !element || isLiteral(element)))) {
+        issues.push({ prop: propPath, field });
+        continue;
+      }
+
+      if (field === 'schema' || field === 'items') {
+        if (value.type !== 'ObjectExpression') {
+          // A computed map (`schema: SHARED`, `items: FIELD`): say which path.
+          issues.push({ prop: `${propPath}.${field}`, field: 'metadata' });
+          continue;
+        }
+
+        if (field === 'items') {
+          // `items` is a single prop config, not a map of them.
+          inspectConfig(`${propPath}.items`, value);
+          continue;
+        }
+
+        for (const nested of value.properties || []) {
+          if (nested.type !== 'ObjectProperty') continue;
+          inspectConfig(`${propPath}.${keyNameFromAst(nested.key)}`, nested.value);
+        }
+      }
+    }
+  };
+
+  for (const property of propsObject.properties || []) {
+    if (property.type !== 'ObjectProperty') continue;
+    inspectConfig(keyNameFromAst(property.key), property.value);
+  }
+
+  return issues;
+};
+
 const extractStaticPropsFromSource = (source, filePath) => {
   let ast;
   try {
@@ -823,6 +911,13 @@ const loadComponentStaticProps = async ({ projectRoot, registryMap }) => {
     } else {
       componentPropsMap[componentName] = { [DYNAMIC_FALLBACK_PROP]: { type: 'any', required: false } };
     }
+
+    // Anything computed in the metadata is invisible to this generator: warn
+    // instead of silently emitting `any`.
+    for (const issue of findComputedPropFields(source)) {
+      const field = issue.field === 'metadata' ? 'definition' : issue.field;
+      Print.warning(`${componentName}.${issue.prop}: ${field} is computed, not a literal — the generated type falls back to any`);
+    }
   }
 
   if (skippedCount > 0) {
@@ -1000,6 +1095,19 @@ const validateComponentProps = async ({ projectRoot }) => {
     if (!props) continue;
     checkedCount++;
 
+    // A computed value (`type: TYPE`, `allowedValues: SIZES`) is invisible to the
+    // extractor: the prop silently becomes `any`. Say why, instead of the
+    // generic "uses type any".
+    const computedFields = findComputedPropFields(source);
+    for (const issue of computedFields) {
+      const field = issue.field === 'metadata' ? 'definition' : issue.field;
+      warnings.push({
+        component: componentName,
+        prop: issue.prop,
+        message: `${field} is computed, not a literal. slice types generate reads the AST and cannot resolve it, so the prop degrades to any. Inline the value.`
+      });
+    }
+
     for (const [prop, meta] of Object.entries(props)) {
       const err = (message) => errors.push({ component: componentName, prop, message });
       const warn = (message) => warnings.push({ component: componentName, prop, message });
@@ -1016,7 +1124,8 @@ const validateComponentProps = async ({ projectRoot }) => {
         }
       }
 
-      if (meta.type === 'any') warn('uses type "any" — specify a concrete type');
+      const typeIsComputed = computedFields.some((issue) => issue.prop === prop && issue.field === 'type');
+      if (meta.type === 'any' && !typeIsComputed) warn('uses type "any" — specify a concrete type');
       if (meta.required && meta.type !== 'boolean') warn('is required but has no default value');
     }
   }

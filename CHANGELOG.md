@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Routes written as `/producto/:id` are reported: Slice only compiles `${id}` patterns, so a
   `:param` route is treated as a literal path and never matches.
 - `commands/utils/semver.js` holds the range check shared by `slice doctor` and `release-check`.
+- Prop metadata written as an expression (`type: TYPE_STRING`, `allowedValues: SIZES`, `schema: SHARED`,
+  or `static props = SHARED`) is reported by `slice types generate`, `slice build` and `slice doctor`.
+  The generator reads the AST, so those props silently became `any` with no warning anywhere.
 - `slice setup lint` adds linting to an existing project: installs `eslint` and `slicejs-cli` when
   missing, writes `eslint.config.js` only if there is none, and adds `lint`/`lint:fix` scripts.
   Idempotent, `--dry-run` available, never overwrites a config or script. `slice init` prints it as
