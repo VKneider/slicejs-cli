@@ -899,7 +899,15 @@ const validateComponentProps = async ({ projectRoot }) => {
     if (!categoryPathValue) continue;
 
     const componentFile = joinRoot(projectRoot, 'src', categoryPathValue, componentName, `${componentName}.js`);
-    if (!(await fs.pathExists(componentFile))) continue;
+    if (!(await fs.pathExists(componentFile))) {
+      // Registered but not on disk: the router and slice.build() resolve the
+      // same path, so the name can never load. It used to be skipped silently.
+      sourceErrors.push({
+        component: componentName,
+        message: `registered in components.js but ${path.relative(projectRoot, componentFile)} does not exist. slice.build("${componentName}") cannot load it.`
+      });
+      continue;
+    }
 
     let source;
     try { source = await fs.readFile(componentFile, 'utf8'); } catch { continue; }
