@@ -37,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   missing, writes `eslint.config.js` only if there is none, and adds `lint`/`lint:fix` scripts.
   Idempotent, `--dry-run` available, never overwrites a config or script. `slice init` prints it as
   a next step instead of installing ESLint for everyone.
+- `slice lint` refreshes `src/slice-build.generated.d.ts` (and the event manifest) before running
+  ESLint, when the project has a `slice:types` script or the file already exists. One command
+  verifies the project: the editor never reads stale declarations. `--no-types` opts out.
 - `slice lint` runs the project's ESLint, and the shared flat config ships as
   `slicejs-cli/eslint-config.js` (default = app/browser, `nodeConfig` = tooling). It does not
   duplicate build/doctor rules.

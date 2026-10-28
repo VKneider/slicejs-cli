@@ -739,6 +739,7 @@ sliceClient
   .command("lint [paths...]")
   .description("Run ESLint in this project")
   .option("--fix", "Apply automatic fixes")
+  .option("--no-types", "Do not refresh the generated declarations")
   .action(async (paths, options) => {
     await runWithVersionCheck(async () => {
       await lintCommand({ paths, fix: options.fix }, getProjectRoot(import.meta.url));
