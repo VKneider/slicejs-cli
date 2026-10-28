@@ -3704,35 +3704,6 @@ if (window.slice && window.slice.controller) {
   }
 
   /**
-   * Creates a default bundle config file if none exists
-   */
-  async createDefaultBundleConfig() {
-    const defaultConfigPath = path.join(this.bundlesPath, 'bundle.config.js');
-
-    // Only create if it doesn't exist
-    if (await fs.pathExists(defaultConfigPath)) {
-      return;
-    }
-
-    await fs.ensureDir(path.dirname(defaultConfigPath));
-
-    const defaultConfig = `/**
- * Slice.js Bundle Configuration
- * Default empty configuration - no bundles available
- * Run 'slice build' to generate optimized bundles
- */
-
-// No bundles available - using individual component loading
-export const SLICE_BUNDLE_CONFIG = null;
-
-// No auto-initialization needed for default config
-`;
-
-    await fs.writeFile(defaultConfigPath, defaultConfig, 'utf-8');
-    console.log(`✓ Default bundle config created: ${defaultConfigPath}`);
-  }
-
-  /**
    * Generates JavaScript module for direct import
    */
   generateBundleConfigJS(config) {

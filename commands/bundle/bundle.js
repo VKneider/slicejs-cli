@@ -20,10 +20,6 @@ export default async function bundle(options = {}) {
     // Validate that it's a Slice.js project
     await validateProject(projectRoot);
 
-    // Create default bundle config if needed
-    const bundleGenerator = new BundleGenerator(import.meta.url, null);
-    await bundleGenerator.createDefaultBundleConfig();
-
     // Phase 1: Analysis
     Print.buildProgress('Analyzing project...');
     const analyzer = new DependencyAnalyzer(import.meta.url);
@@ -156,16 +152,24 @@ export async function cleanBundles() {
   try {
     Print.title('🧹 Cleaning bundles...');
 
+    // Checked before any early return: a project that upgraded and never rebuilt
+    // only has the old folder, and that is the case the hint exists for.
+    if (await fs.pathExists(legacyPath)) {
+      Print.info('Found a legacy src/bundles folder. Bundles live in dist/bundles now; remove it when convenient.');
+    }
+
     if (!await fs.pathExists(bundlesPath)) {
       Print.warning('No bundles found to clean');
       return;
     }
 
     const files = await fs.readdir(bundlesPath);
-    const generated = [
-      ...files.filter((file) => file.startsWith('slice-bundle.')),
-      ...['bundle.config.json', 'bundle.config.js'].filter((file) => files.includes(file))
-    ];
+    // Includes the .br/.gz siblings `slice build --compress` writes; leaving them
+    // behind keeps the server answering /bundles/bundle.config.json from a stale
+    // precompressed copy.
+    const generated = files.filter(
+      (file) => file.startsWith('slice-bundle.') || file.startsWith('bundle.config.')
+    );
 
     if (generated.length === 0) {
       Print.warning('No bundles found to clean');
@@ -181,10 +185,6 @@ export async function cleanBundles() {
     // something else the project put there.
     if ((await fs.readdir(bundlesPath)).length === 0) {
       await fs.remove(bundlesPath);
-    }
-
-    if (await fs.pathExists(legacyPath)) {
-      Print.info('Found a legacy src/bundles folder. Bundles live in dist/bundles now; remove it when convenient.');
     }
 
     Print.newLine();

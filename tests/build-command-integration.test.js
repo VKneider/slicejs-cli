@@ -20,6 +20,7 @@ describe('slice build (full pipeline: buildProduction + bundle -> dist)', () => 
 
       const bundlesDir = path.join(dist, 'bundles');
       assert.ok(await fs.pathExists(bundlesDir), 'dist/bundles should exist');
+      assert.equal(await fs.pathExists(path.join(root, 'src', 'bundles')), false, 'bundles never land in src/');
 
       const bundleFiles = (await fs.readdir(bundlesDir)).filter(
         (f) => f.startsWith('slice-bundle.') && f.endsWith('.js')
@@ -38,18 +39,24 @@ describe('slice build (full pipeline: buildProduction + bundle -> dist)', () => 
 });
 
 describe('bundle clean / info subcommands', () => {
-  test('cleanBundles removes slice-bundle.* files and the config', async () => {
+  test('cleanBundles removes slice-bundle.* files and the config, including compressed siblings', async () => {
     await withTestProject(async (root) => {
-      const src = path.join(root, 'src');
-      await fs.writeFile(path.join(src, 'slice-bundle.critical.js'), '// x');
-      await fs.writeFile(path.join(src, 'slice-bundle.home.js'), '// x');
-      await fs.writeFile(path.join(src, 'bundle.config.json'), '{}');
+      const bundles = path.join(root, 'dist', 'bundles');
+      await fs.ensureDir(bundles);
+      await fs.writeFile(path.join(bundles, 'slice-bundle.critical.js'), '// x');
+      await fs.writeFile(path.join(bundles, 'slice-bundle.critical.js.br'), 'x');
+      await fs.writeFile(path.join(bundles, 'slice-bundle.home.js'), '// x');
+      await fs.writeFile(path.join(bundles, 'bundle.config.json'), '{}');
+      await fs.writeFile(path.join(bundles, 'bundle.config.json.gz'), 'x');
 
       await cleanBundles();
 
-      assert.equal(await fs.pathExists(path.join(src, 'slice-bundle.critical.js')), false);
-      assert.equal(await fs.pathExists(path.join(src, 'slice-bundle.home.js')), false);
-      assert.equal(await fs.pathExists(path.join(src, 'bundle.config.json')), false);
+      assert.equal(await fs.pathExists(path.join(bundles, 'slice-bundle.critical.js')), false);
+      assert.equal(await fs.pathExists(path.join(bundles, 'slice-bundle.critical.js.br')), false);
+      assert.equal(await fs.pathExists(path.join(bundles, 'slice-bundle.home.js')), false);
+      assert.equal(await fs.pathExists(path.join(bundles, 'bundle.config.json')), false);
+      assert.equal(await fs.pathExists(path.join(bundles, 'bundle.config.json.gz')), false);
+      assert.equal(await fs.pathExists(bundles), false, 'an emptied bundle folder is removed');
     });
   });
 
@@ -74,7 +81,8 @@ describe('bundle clean / info subcommands', () => {
         },
         bundles: { critical: { components: ['A'], size: 1024 }, routes: {} },
       };
-      await fs.writeJson(path.join(root, 'src', 'bundle.config.json'), cfg);
+      await fs.ensureDir(path.join(root, 'dist', 'bundles'));
+      await fs.writeJson(path.join(root, 'dist', 'bundles', 'bundle.config.json'), cfg);
       await assert.doesNotReject(() => bundleInfo());
     });
   });
