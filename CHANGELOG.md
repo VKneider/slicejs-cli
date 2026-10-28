@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.4.0] - 2026-10-28
+
 ### Added
 
 - `CHANGELOG.md` with Keep a Changelog format.
@@ -38,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `slice typecheck` runs the project's own TypeScript over the jsconfig that `slice types generate`
   maintains. ESLint does not type-check; this does. `slice setup lint --with-types` installs
   TypeScript and adds the script.
+- `slice typecheck` covers `src/App/**/*.js` and `src/routes.js` in addition to the components, so a
+  registered event emitted from the app entry is checked too. The generator writes
+  `slice-runtime.generated.d.ts` so the entry's `/Slice/Slice.js` import resolves without tsc
+  following the framework's untyped source.
 - `slice doctor` reports four more advisories: component CSS selectors not scoped under the
   component tag (doctor-only, so build logs stay clean), a `destroy()`/`dispose()`/`teardown()` method
   the controller never calls, a `window`/`document` listener with no `removeEventListener` in the same
@@ -57,9 +63,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   duplicate build/doctor rules.
 - `slice build` and `slice doctor` block `id`, `sliceId` and `singleton` declared in `static props`:
   the runtime strips them as build directives, so the prop can never reach the component.
+- `slice init` writes a `.gitignore` (`node_modules/`, `dist/`, local `.env` files) when the project
+  has none. A fresh project's first `git add .` used to stage the dependencies and every build.
 
 ### Changed
 
+- Bundles have one home: `dist/bundles`. The generator and `bundle()` defaulted to `src/bundles`, and
+  `slice build clean` / `slice build info` read `src/bundle.config.json`, a file nothing wrote, so
+  they never found anything. Clean also removes the `.br`/`.gz` siblings of a `--compress` build and
+  keeps a folder that still holds unrelated files; info reads the real config.
 - Pointed the component registry and the Slice.js Components documentation catalog at the new
   `slicejs-components` repository (renamed from `slice.js_visual_library`).
 - `slicejs-web-framework` range is `^4.0.2` (was `^3.5.0`, which made a fresh global install resolve
@@ -78,6 +90,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `slice lint --no-types` was wired but dropped the flag before calling the command, so it refreshed
+  the declarations anyway. The refresh now also reports `reset_jsconfig`, `tsconfig_exists` and
+  `editor_config_error` instead of changing the file silently.
+- The shared config applied the browser globals to every file and only *added* Node globals to
+  `api/`/`scripts/`, so `document` in the server passed lint. Browser and framework globals are now
+  scoped to `src/`; a folder that mixes both opts in with the exported `nodeGlobals`/`sliceGlobals`.
+- `slice build --analyze` wrote `dist/bundles/bundle.config.js` before returning; analysis-only runs
+  no longer create output.
 - `getLocalComponents()` referenced `componentsPath` from inside its `catch`, so it threw a
   ReferenceError exactly when the local registry could not be read (found by the new lint config).
 - `slice init` writes `allowBuilds` for `esbuild` as well as `slicejs-cli`. The framework always ships
@@ -287,6 +307,7 @@ scripts keep working.
 - **`slice update` / `slice upgrade` commands**: Removed from CLI and documentation.
 - **`postinstall` lifecycle hook**: `post.js` deleted, `"postinstall"` script removed from `package.json`.
 
-[Unreleased]: https://github.com/VKneider/slicejs-cli/compare/v4.3.0...HEAD
+[Unreleased]: https://github.com/VKneider/slicejs-cli/compare/v4.4.0...HEAD
+[4.4.0]: https://github.com/VKneider/slicejs-cli/releases/tag/v4.4.0
 [4.3.0]: https://github.com/VKneider/slicejs-cli/releases/tag/v4.3.0
 [3.6.5]: https://github.com/VKneider/slicejs-cli/releases/tag/v3.6.5
