@@ -1,6 +1,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import os from 'node:os';
 import fs from 'node:fs';
 import { createTestProject, cleanupTestProject } from './helpers/setup.js';
 
@@ -41,6 +42,25 @@ describe('getProjectRoot', () => {
       assert.ok(fs.existsSync(root), `resolved path should exist: ${root}`);
     } finally {
       process.env.INIT_CWD = prev;
+    }
+  });
+
+  test('prefers a project cwd over a non-project INIT_CWD (monorepo script)', async () => {
+    const prevInitCwd = process.env.INIT_CWD;
+    const prevCwd = process.cwd();
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'slice-workspace-'));
+    try {
+      // pnpm --filter runs the script inside the package but sets INIT_CWD to the
+      // workspace root, which has no src/ or api/ of its own.
+      process.env.INIT_CWD = workspaceRoot;
+      process.chdir(tmpRoot);
+
+      const { getProjectRoot } = await import('../commands/utils/PathHelper.js');
+      assert.equal(path.resolve(getProjectRoot(import.meta.url)), path.resolve(tmpRoot));
+    } finally {
+      process.chdir(prevCwd);
+      process.env.INIT_CWD = prevInitCwd;
+      fs.rmSync(workspaceRoot, { recursive: true, force: true });
     }
   });
 });

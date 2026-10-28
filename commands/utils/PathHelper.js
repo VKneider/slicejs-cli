@@ -13,13 +13,25 @@ function candidates(moduleUrl) {
   ]
 }
 
+const PROJECT_MARKERS = ['src', 'api', 'sliceConfig.json']
+
+function looksLikeProject(dir) {
+  return PROJECT_MARKERS.some((marker) => fs.pathExistsSync(path.join(dir, marker)))
+}
+
 function resolveProjectRoot(moduleUrl) {
   const initCwd = process.env.INIT_CWD
+  const cwd = process.cwd()
+
+  // npm/pnpm set INIT_CWD to the directory the command was invoked from. In a
+  // monorepo that is the workspace root, which is not this project: keep INIT_CWD
+  // when it identifies a project, otherwise prefer a cwd that does.
   if (initCwd && fs.pathExistsSync(initCwd)) {
+    if (looksLikeProject(initCwd)) return initCwd
+    if (cwd && fs.pathExistsSync(cwd) && looksLikeProject(cwd)) return cwd
     return initCwd
   }
 
-  const cwd = process.cwd()
   if (cwd && fs.pathExistsSync(cwd)) {
     return cwd
   }
