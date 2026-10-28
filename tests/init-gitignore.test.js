@@ -28,6 +28,9 @@ test('creates a .gitignore that ignores dependencies and the build output', asyn
   const text = await read(dir);
   assert.match(text, /^node_modules\/$/m);
   assert.match(text, /^dist\/$/m);
+  assert.match(text, /^\.env$/m);
+  assert.match(text, /^\.env\.\*$/m);
+  assert.match(text, /^!\.env\.example$/m);
 });
 
 test('leaves an existing .gitignore untouched', async (t) => {

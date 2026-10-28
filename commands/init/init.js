@@ -103,6 +103,11 @@ node_modules/
 
 # Production build output (slice build)
 dist/
+
+# Local environment overrides
+.env
+.env.*
+!.env.example
 `;
 
 /**
