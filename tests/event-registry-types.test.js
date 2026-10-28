@@ -15,8 +15,9 @@ import {
 test('payloadToTs translates the mini-schema', () => {
   assert.equal(payloadToTs(null), 'void');
   assert.equal(payloadToTs('string'), 'string');
-  assert.equal(payloadToTs({ id: 'number', name: 'string' }), '{ id: number; name: string }');
-  assert.equal(payloadToTs({ flag: { type: 'boolean' } }), '{ flag: boolean }');
+  // Fields are optional: an emitter may send a subset of the declared payload.
+  assert.equal(payloadToTs({ id: 'number', name: 'string' }), '{ id?: number; name?: string }');
+  assert.equal(payloadToTs({ flag: { type: 'boolean' } }), '{ flag?: boolean }');
 });
 
 test('collectEventRegistry resolves inline and imported catalogs', async () => {
@@ -79,7 +80,7 @@ test('generateDeclarationContent emits SliceEventRegistry + conditional signatur
   assert.ok(decl.includes('export interface SliceEventRegistry {'));
   // Double-quoted: event names go through JSON.stringify so a name containing
   // a quote cannot terminate the string early.
-  assert.ok(decl.includes('"user:login": { id: number };'));
+  assert.ok(decl.includes('"user:login": { id?: number };'));
   assert.ok(decl.includes('"cart:cleared": void;'));
   // conditional-type signature (not a permissive string-fallback overload)
   assert.ok(decl.includes('SliceEventArgs<K>'));

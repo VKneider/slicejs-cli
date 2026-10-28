@@ -252,6 +252,8 @@ test('ensureEditorConfigForTypes creates jsconfig when missing', async () => {
     const jsconfig = JSON.parse(fs.readFileSync(jsconfigPath, 'utf8'));
     assert.equal(Array.isArray(jsconfig.include), true);
     assert.equal(jsconfig.include.includes('src/Components/**/*.js'), true);
+    assert.equal(jsconfig.include.includes('src/App/**/*.js'), true);
+    assert.equal(jsconfig.include.includes('src/routes.js'), true);
     assert.equal(jsconfig.include.includes('src/**/*.d.ts'), true);
     assert.equal(jsconfig.include.includes('api/**/*.js'), false);
     assert.equal(jsconfig.include.includes('tests/**/*.js'), false);
@@ -260,9 +262,28 @@ test('ensureEditorConfigForTypes creates jsconfig when missing', async () => {
     assert.equal(jsconfig.compilerOptions.strictNullChecks, false);
     assert.equal(jsconfig.compilerOptions.noImplicitAny, false);
     assert.equal(jsconfig.compilerOptions.strict, false);
+    assert.equal(jsconfig.compilerOptions.paths, undefined, 'the runtime import is resolved by its declaration, not by following the framework source');
     assert.equal(Array.isArray(jsconfig.exclude), true);
     assert.equal(jsconfig.exclude.includes('src/libs/**'), true);
     assert.equal(jsconfig.exclude.includes('tests/**'), true);
+  } finally {
+    await cleanupTestProject(tmpRoot);
+  }
+});
+
+test('generateTypesFile writes a declaration for the runtime import', async () => {
+  const tmpRoot = await createTestProject();
+  const outputFile = path.join(tmpRoot, 'src', 'slice-build.generated.d.ts');
+
+  try {
+    const result = await generateTypesFile({ projectRoot: tmpRoot, outputPath: outputFile });
+
+    const shim = path.join(tmpRoot, 'src', 'slice-runtime.generated.d.ts');
+    assert.equal(result.runtimeShimPath, shim);
+    assert.equal(fs.existsSync(shim), true);
+    const text = fs.readFileSync(shim, 'utf8');
+    assert.match(text, /declare module '\*\/Slice\/Slice\.js'/);
+    assert.match(text, /export default Slice;/);
   } finally {
     await cleanupTestProject(tmpRoot);
   }
@@ -330,6 +351,8 @@ test('ensureEditorConfigForTypes augments existing jsconfig include list', async
 
     const jsconfig = JSON.parse(fs.readFileSync(jsconfigPath, 'utf8'));
     assert.equal(jsconfig.include.includes('src/Components/**/*.js'), true);
+    assert.equal(jsconfig.include.includes('src/App/**/*.js'), true);
+    assert.equal(jsconfig.include.includes('src/routes.js'), true);
     assert.equal(jsconfig.include.includes('src/**/*.d.ts'), true);
     assert.equal(jsconfig.include.includes('src/**/*.js'), false);
     assert.equal(jsconfig.include.includes('api/**/*.js'), false);
