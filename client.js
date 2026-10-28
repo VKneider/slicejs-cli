@@ -768,6 +768,7 @@ sliceClient
   .command("typecheck")
   .description("Type-check the project with its own TypeScript (jsconfig.json)")
   .option("-p, --project <path>", "Config file (default: jsconfig.json, then tsconfig.json)")
+  .option("--no-types", "Do not refresh the generated declarations")
   .action(async (options) => {
     await runWithVersionCheck(async () => {
       await typecheckCommand(options, getProjectRoot(import.meta.url));

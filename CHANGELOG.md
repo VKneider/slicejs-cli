@@ -30,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so `slice lint` and `slice typecheck` work immediately after one command.
 - `slice lint` creates the `jsconfig.json` when it is missing (it refreshed the `.d.ts` but not the
   config tsc needs).
+- `slice typecheck` refreshes the generated declarations before compiling (the registry changes with
+  every `slice get`, and a stale map produced false "not assignable to keyof" errors); `--no-types`
+  opts out.
+- `slice setup lint --with-types` also writes the `slice:types` script, so a project set up later
+  matches the one `slice init` creates.
 - `slice typecheck` runs the project's own TypeScript over the jsconfig that `slice types generate`
   maintains. ESLint does not type-check; this does. `slice setup lint --with-types` installs
   TypeScript and adds the script.

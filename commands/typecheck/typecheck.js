@@ -10,6 +10,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import Print from '../Print.js';
+import { refreshGeneratedTypes } from '../lint/types.js';
 
 /** The project's own tsc, or null when TypeScript is not installed. */
 export function resolveTypeScript(projectRoot) {
@@ -33,6 +34,18 @@ export function resolveProjectConfig(projectRoot, explicit = null) {
 }
 
 export default async function typecheckCommand(options = {}, projectRoot) {
+  // Check the declarations that exist now, not the ones from before the last
+  // `slice get`: the registry changed, so the .d.ts has to follow.
+  if (options.types !== false) {
+    try {
+      const types = await refreshGeneratedTypes(projectRoot);
+      if (types.status === 'created') Print.info(`Generated types: ${path.relative(projectRoot, types.file)}`);
+      else if (types.status === 'updated') Print.info(`Refreshed generated types: ${path.relative(projectRoot, types.file)}`);
+    } catch (error) {
+      Print.warning('Could not refresh the generated types:', error.message);
+    }
+  }
+
   const tsc = resolveTypeScript(projectRoot);
   if (!tsc) {
     Print.error('TypeScript is not installed in this project.');

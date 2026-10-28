@@ -26,6 +26,8 @@ const LINT_SCRIPTS = {
 };
 
 const TYPE_SCRIPTS = {
+  // Same command init writes, so a project set up later has the script too.
+  'slice:types': 'node ./node_modules/slicejs-cli/client.js types generate',
   typecheck: 'slice typecheck'
 };
 

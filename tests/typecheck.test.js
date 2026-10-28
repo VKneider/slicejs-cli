@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { withTestProject } from './helpers/setup.js';
 import { resolveProjectConfig, resolveTypeScript } from '../commands/typecheck/typecheck.js';
 import { payloadToTs, runGenerateTypes } from '../commands/types/types.js';
 
@@ -97,4 +98,24 @@ test('the generated jsconfig type-checks modern JS and skips specs', async (t) =
   assert.deepEqual(jsconfig.compilerOptions.lib, ['ES2022', 'DOM', 'DOM.Iterable']);
   assert.equal(jsconfig.compilerOptions.noEmit, true);
   assert.ok(jsconfig.exclude.includes('**/*.spec.js'));
+});
+
+test('typecheck refreshes stale declarations first', async () => {
+  await withTestProject(async (root) => {
+    await fs.outputJson(path.join(root, 'node_modules', 'typescript', 'package.json'), { name: 'typescript', version: '5.0.0' });
+    await fs.outputFile(path.join(root, 'node_modules', 'typescript', 'bin', 'tsc'), 'process.exit(0);\n');
+    await fs.writeJson(path.join(root, 'jsconfig.json'), { compilerOptions: { checkJs: true } });
+    await fs.outputFile(path.join(root, 'src', 'slice-build.generated.d.ts'), '// stale\n');
+
+    const result = spawnSync(process.execPath, [CLIENT, 'typecheck'], {
+      cwd: root,
+      encoding: 'utf-8',
+      env: { ...process.env, INIT_CWD: root, SLICE_NO_LOCAL_DELEGATION: '1', NO_COLOR: '1' }
+    });
+
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(`${result.stdout}${result.stderr}`, /Refreshed generated types/);
+    const declaration = await fs.readFile(path.join(root, 'src', 'slice-build.generated.d.ts'), 'utf8');
+    assert.match(declaration, /WidgetProps/);
+  }, { visualComponents: ['Widget'] });
 });

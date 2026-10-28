@@ -120,6 +120,7 @@ test('--with-types installs TypeScript and adds the typecheck script', async (t)
   assert.match(commands[0], /typescript/);
   const pkg = await fs.readJson(path.join(dir, 'package.json'));
   assert.equal(pkg.scripts.typecheck, 'slice typecheck');
+  assert.match(pkg.scripts['slice:types'], /types generate/);
   assert.ok(result.actions.some((action) => action.kind === 'install'));
 });
 
