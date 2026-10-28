@@ -34,7 +34,7 @@ export default class BundleGenerator {
     this.analysisData = analysisData || { components: [], routes: [], metrics: {} };
     this.srcPath = getSrcPath(moduleUrl);
     this.distPath = getDistPath(moduleUrl);
-    this.output = options.output || 'src';
+    this.output = options.output || 'dist';
     this.bundlesPath = this.output === 'dist'
       ? path.join(this.distPath, 'bundles')
       : path.join(this.srcPath, 'bundles');
@@ -3707,7 +3707,7 @@ if (window.slice && window.slice.controller) {
    * Creates a default bundle config file if none exists
    */
   async createDefaultBundleConfig() {
-    const defaultConfigPath = path.join(this.srcPath, 'bundles', 'bundle.config.js');
+    const defaultConfigPath = path.join(this.bundlesPath, 'bundle.config.js');
 
     // Only create if it doesn't exist
     if (await fs.pathExists(defaultConfigPath)) {

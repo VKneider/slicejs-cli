@@ -4,7 +4,7 @@ import fs from 'fs-extra';
 import DependencyAnalyzer from '../utils/bundling/DependencyAnalyzer.js';
 import BundleGenerator from '../utils/bundling/BundleGenerator.js';
 import Print from '..//Print.js';
-import { getProjectRoot, getSrcPath } from '../utils/PathHelper.js';
+import { getProjectRoot, getSrcPath, getDistPath } from '../utils/PathHelper.js';
 
 /**
  * Main bundling command
@@ -47,7 +47,7 @@ export default async function bundle(options = {}) {
     const generator = new BundleGenerator(import.meta.url, analysisData, {
       minify: !!options.minify,
       obfuscate: !!options.obfuscate,
-      output: options.output || 'src',
+      output: options.output || 'dist',
       strictExternal: !!options.strictExternal,
       sourcemap: !!options.sourcemap,
       hashFilenames: !!options.hashFilenames
@@ -150,33 +150,45 @@ function printSummary(result, startTime) {
  * Subcommand: Clean bundles
  */
 export async function cleanBundles() {
-  const srcPath = getSrcPath(import.meta.url);
+  const bundlesPath = getDistPath(import.meta.url, 'bundles');
+  const legacyPath = getSrcPath(import.meta.url, 'bundles');
 
   try {
     Print.title('🧹 Cleaning bundles...');
 
-    const files = await fs.readdir(srcPath);
-    const bundleFiles = files.filter(f => f.startsWith('slice-bundle.'));
-
-    if (bundleFiles.length === 0) {
+    if (!await fs.pathExists(bundlesPath)) {
       Print.warning('No bundles found to clean');
       return;
     }
 
-    for (const file of bundleFiles) {
-      await fs.remove(path.join(srcPath, file));
-      console.log(`   ✓ Deleted: ${file}`);
+    const files = await fs.readdir(bundlesPath);
+    const generated = [
+      ...files.filter((file) => file.startsWith('slice-bundle.')),
+      ...['bundle.config.json', 'bundle.config.js'].filter((file) => files.includes(file))
+    ];
+
+    if (generated.length === 0) {
+      Print.warning('No bundles found to clean');
+      return;
     }
 
-    // Remove config
-    const configPath = getSrcPath(import.meta.url, 'bundle.config.json');
-    if (await fs.pathExists(configPath)) {
-      await fs.remove(configPath);
-      console.log(`   ✓ Deleted: bundle.config.json`);
+    for (const file of generated) {
+      await fs.remove(path.join(bundlesPath, file));
+      console.log(`   ✓ Deleted: bundles/${file}`);
+    }
+
+    // Only remove the folder when this command emptied it: dist/bundles may hold
+    // something else the project put there.
+    if ((await fs.readdir(bundlesPath)).length === 0) {
+      await fs.remove(bundlesPath);
+    }
+
+    if (await fs.pathExists(legacyPath)) {
+      Print.info('Found a legacy src/bundles folder. Bundles live in dist/bundles now; remove it when convenient.');
     }
 
     Print.newLine();
-    Print.success(`${bundleFiles.length} files deleted`);
+    Print.success(`${generated.length} files deleted`);
 
   } catch (error) {
     Print.error('Error cleaning bundles:', error.message);
@@ -189,12 +201,12 @@ export async function cleanBundles() {
  * Subcommand: Bundle information
  */
 export async function bundleInfo() {
-  const configPath = getSrcPath(import.meta.url, 'bundle.config.json');
+  const configPath = getDistPath(import.meta.url, 'bundles', 'bundle.config.json');
 
   try {
     if (!await fs.pathExists(configPath)) {
       Print.warning('Bundle configuration not found');
-      Print.info('Run "slice bundle" to generate bundles');
+      Print.info('Run "slice build" to generate bundles');
       return;
     }
 
