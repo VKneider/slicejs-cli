@@ -75,7 +75,7 @@ describe('loadConfig', () => {
       const fs = await import('node:fs/promises');
       const path = await import('node:path');
       const destPath = path.join(tmpDir, 'src', 'sliceConfig.json');
-      try { await fs.unlink(destPath); } catch {}
+      try { await fs.unlink(destPath); } catch { /* intentional: the file may not exist */ }
       const { loadConfig } = await import('../commands/getComponent/getComponent.js');
       const config = await loadConfig();
       assert.equal(config, null);

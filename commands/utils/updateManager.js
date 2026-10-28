@@ -49,7 +49,7 @@ export class UpdateManager {
             try {
                 const { stdout } = await execAsync('npm config get prefix');
                 globalPrefix = stdout.toString().trim();
-            } catch {}
+            } catch { /* intentional: no npm prefix on this platform */ }
             const globalNodeModules = globalPrefix ? path.join(globalPrefix, 'node_modules') : '';
             if (globalNodeModules && cliRoot.startsWith(globalNodeModules)) {
                 return { type: 'global', cliRoot, projectRoot, packageManager: 'npm' };

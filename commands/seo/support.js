@@ -29,7 +29,8 @@ export async function loadFrameworkSeo(projectRoot) {
   } catch (error) {
     throw new Error(
       `Cannot load the framework SEO module from ${projectRoot} ` +
-      `(${error.message}). Update slicejs-web-framework to a version that ships api/framework/seo.js.`
+      `(${error.message}). Update slicejs-web-framework to a version that ships api/framework/seo.js.`,
+      { cause: error }
     );
   }
 }

@@ -90,10 +90,8 @@ class ComponentRegistry {
       // Filter only Visual and Service components
       this.componentsRegistry = this.filterOfficialComponents(allComponents);
 
-      Print.success('Component registry loaded successfully');
-
-    } catch (error) {
-      throw error;
+      Print.success('Component registry loaded successfully');} catch (error) {
+      throw new Error(`Could not load the component registry: ${error.message}`, { cause: error });
     }
   }
 

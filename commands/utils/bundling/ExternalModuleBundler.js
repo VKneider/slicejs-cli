@@ -191,10 +191,10 @@ export default class ExternalModuleBundler {
         try {
           result = await this.runEsbuild(this.buildVirtualEntry(specifier, false));
         } catch (retryError) {
-          throw new Error(`Could not bundle external dependency "${specifier}": ${this.formatEsbuildError(retryError)}`);
+          throw new Error(`Could not bundle external dependency "${specifier}": ${this.formatEsbuildError(retryError)}`, { cause: retryError });
         }
       } else {
-        throw new Error(`Could not bundle external dependency "${specifier}": ${this.formatEsbuildError(error)}`);
+        throw new Error(`Could not bundle external dependency "${specifier}": ${this.formatEsbuildError(error)}`, { cause: error });
       }
     }
 

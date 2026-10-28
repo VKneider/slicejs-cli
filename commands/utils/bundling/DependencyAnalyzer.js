@@ -169,7 +169,7 @@ export default class DependencyAnalyzer {
 
       return config;
     } catch (error) {
-      throw new Error(`Could not parse components.js: ${error.message}`);
+      throw new Error(`Could not parse components.js: ${error.message}`, { cause: error });
     }
   }
 

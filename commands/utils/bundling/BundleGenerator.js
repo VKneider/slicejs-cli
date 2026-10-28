@@ -1171,7 +1171,7 @@ export default class BundleGenerator {
         console.warn(`Warning: Failed to write ${tmpPath}:`, writeError.message);
       }
       const message = error?.message ? `${error.message}.` : 'Unknown Terser error.';
-      throw new Error(`Terser failed for ${fileName}: ${message} Saved bundle to ${tmpPath}`);
+      throw new Error(`Terser failed for ${fileName}: ${message} Saved bundle to ${tmpPath}`, { cause: error });
     }
 
     return { code: result.code || bundleContent, map: wantMap ? (result.map || null) : null };
@@ -1248,7 +1248,8 @@ export default class BundleGenerator {
       const detail = error.message || 'unknown parse error';
       throw new Error(
         `Generated bundle "${fileName}" is not valid JavaScript: ${detail}.${where}`
-        + ` This is a bundler bug, not a problem with your source. Saved bundle to ${savedPath}`
+        + ` This is a bundler bug, not a problem with your source. Saved bundle to ${savedPath}`,
+          { cause: error }
       );
     }
   }
@@ -3357,7 +3358,7 @@ if (window.slice && window.slice.controller) {
   parseImportsWithFallbackScanner(code) {
     const entries = [];
     const importRegex = /\bimport\b/g;
-    let match = null;
+    let match;
 
     while ((match = importRegex.exec(code)) !== null) {
       const start = match.index;

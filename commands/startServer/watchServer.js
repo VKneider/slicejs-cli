@@ -13,7 +13,7 @@ export default function setupWatcher(serverProcess, onRestart) {
 
     const watcher = chokidar.watch(['api/**/*'], {
         ignored: [
-            /(^|[\/\\])\../,  // hidden files
+            /(^|[/\\])\../,  // hidden files
             '**/node_modules/**',
             '**/dist/**',
             '**/bundles/**',

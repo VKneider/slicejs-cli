@@ -313,7 +313,7 @@ async function minifyJavaScript(srcPath, distPath) {
     // parse, say so against the developer's source instead.
     const diagnosis = describeSyntaxError(content, srcPath);
     if (!diagnosis.ok) {
-      throw new Error(`Syntax error at ${diagnosis.message}\nFix the source above.`);
+      throw new Error(`Syntax error at ${diagnosis.message}\nFix the source above.`, { cause: minifyError });
     }
     throw minifyError;
   }

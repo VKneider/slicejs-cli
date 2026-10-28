@@ -77,7 +77,7 @@ class Validations {
             if (!match) return false;
             const components = JSON.parse(match[1]);
 
-            return components.hasOwnProperty(componentName);
+            return Object.hasOwn(components, componentName);
 
         } catch (error) {
             Print.error(`Error checking component existence: ${error.message}`);

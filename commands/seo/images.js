@@ -241,7 +241,7 @@ async function startDevServer(projectRoot) {
     await waitForServer(baseUrl);
   } catch (error) {
     child.kill();
-    throw new Error(`${error.message}\n${output}`);
+    throw new Error(`${error.message}\n${output}`, { cause: error });
   }
   return { baseUrl, stop: () => child.kill() };
 }

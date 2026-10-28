@@ -411,7 +411,7 @@ const parseComponentsRegistry = (content, filePath) => {
   try {
     return JSON.parse(match[1]);
   } catch (parseError) {
-    throw new Error(`Failed to parse components registry in ${filePath}: ${parseError.message}`);
+    throw new Error(`Failed to parse components registry in ${filePath}: ${parseError.message}`, { cause: parseError });
   }
 };
 
@@ -1189,7 +1189,7 @@ const generateTypesFile = async ({ projectRoot, outputPath }) => {
   try {
     registryContent = await fs.readFile(registryPath, 'utf8');
   } catch (readError) {
-    throw new Error(`Cannot read components registry at ${registryPath}: ${readError.message}`);
+    throw new Error(`Cannot read components registry at ${registryPath}: ${readError.message}`, { cause: readError });
   }
   const registryMap = parseComponentsRegistry(registryContent, registryPath);
 
