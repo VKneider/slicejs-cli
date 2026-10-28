@@ -10,6 +10,7 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import Print from '../Print.js';
 import { installCommand, resolvePackageManager } from '../utils/PackageManager.js';
+import { runGenerateTypes } from '../types/types.js';
 
 export const ESLINT_CONFIG_FILE = 'eslint.config.js';
 
@@ -93,6 +94,20 @@ export async function setupLint({ projectRoot, dryRun = false, withTypes = false
     }
   }
 
+  // With TypeScript installed, generate the declarations and the jsconfig so
+  // `slice typecheck` works immediately. Only when the project has components.
+  if (withTypes && !dryRun && await fs.pathExists(path.join(projectRoot, 'src', 'Components', 'components.js'))) {
+    try {
+      await runGenerateTypes({
+        projectRoot,
+        outputPath: path.join(projectRoot, 'src', 'slice-build.generated.d.ts')
+      });
+      actions.push({ kind: 'types', detail: 'src/slice-build.generated.d.ts + jsconfig.json' });
+    } catch (error) {
+      actions.push({ kind: 'types-failed', detail: error.message });
+    }
+  }
+
   return { ok: true, actions, dryRun };
 }
 
@@ -118,6 +133,8 @@ export default async function setupLintCommand(options = {}, projectRoot) {
     if (action.kind === 'install') Print.info(`Install devDependencies: ${action.detail}`);
     else if (action.kind === 'write') Print.success(`Created ${action.detail}`);
     else if (action.kind === 'scripts') Print.success(`Added scripts: ${action.detail}`);
+    else if (action.kind === 'types') Print.success(`Generated declarations: ${action.detail}`);
+    else if (action.kind === 'types-failed') Print.warning(`Could not generate the declarations: ${action.detail}`);
     else Print.info(action.detail);
   }
 

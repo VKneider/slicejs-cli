@@ -38,6 +38,11 @@ test('the declarations are regenerated in place and reported', async () => {
     const content = await fs.readFile(output, 'utf8');
     assert.match(content, /SliceComponentPropsMap/, 'the real declarations were written');
 
+    // Without this, slice typecheck has nothing to point tsc at.
+    const jsconfig = await fs.readJson(path.join(root, 'jsconfig.json'));
+    assert.equal(jsconfig.compilerOptions.target, 'ES2022');
+    assert.equal(jsconfig.compilerOptions.checkJs, true);
+
     const second = await refreshGeneratedTypes(root);
     assert.equal(second.status, 'unchanged');
   }, { visualComponents: ['Widget'] });

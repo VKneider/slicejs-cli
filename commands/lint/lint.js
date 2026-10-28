@@ -31,6 +31,8 @@ export default async function lintCommand(options = {}, projectRoot) {
       if (types.status === 'created') Print.info(`Generated types: ${path.relative(projectRoot, types.file)}`);
       else if (types.status === 'updated') Print.info(`Updated generated types: ${path.relative(projectRoot, types.file)}`);
       else if (types.status === 'skipped') Print.info('Types: not configured in this project, skipped.');
+      if (types.jsconfig === 'created_jsconfig') Print.info('Created jsconfig.json for type-checking.');
+      else if (types.jsconfig === 'updated_jsconfig') Print.info('Updated jsconfig.json for type-checking.');
     } catch (error) {
       Print.error('Could not refresh the generated types:', error.message);
       process.exitCode = 1;

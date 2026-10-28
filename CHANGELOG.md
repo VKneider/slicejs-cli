@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Routes written as `/producto/:id` are reported: Slice only compiles `${id}` patterns, so a
   `:param` route is treated as a literal path and never matches.
 - `commands/utils/semver.js` holds the range check shared by `slice doctor` and `release-check`.
+- `slice setup lint --with-types` now also generates the first declarations and the `jsconfig.json`,
+  so `slice lint` and `slice typecheck` work immediately after one command.
+- `slice lint` creates the `jsconfig.json` when it is missing (it refreshed the `.d.ts` but not the
+  config tsc needs).
 - `slice typecheck` runs the project's own TypeScript over the jsconfig that `slice types generate`
   maintains. ESLint does not type-check; this does. `slice setup lint --with-types` installs
   TypeScript and adds the script.

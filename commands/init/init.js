@@ -484,7 +484,7 @@ export default async function initializeProject(options = {}) {
         console.log(`  ${packageManager} run browse  - View available components`);
         console.log(`  ${packageManager} run get -- Button - Install specific components`);
         console.log(`  ${packageManager} run sync    - Update all components to latest versions`);
-        console.log(`  slice setup lint - Add ESLint with the shared Slice config`);
+        console.log(`  slice setup lint --with-types - ESLint, type checking and the generated types`);
 
     } catch (error) {
         Print.error('Unexpected error initializing project:', error.message);

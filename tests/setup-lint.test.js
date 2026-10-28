@@ -122,3 +122,18 @@ test('--with-types installs TypeScript and adds the typecheck script', async (t)
   assert.equal(pkg.scripts.typecheck, 'slice typecheck');
   assert.ok(result.actions.some((action) => action.kind === 'install'));
 });
+
+test('--with-types generates the declarations and the jsconfig', async (t) => {
+  const dir = await project(t, { withTools: false });
+  await fs.outputFile(
+    path.join(dir, 'src', 'Components', 'components.js'),
+    'const components = {};\n\nexport default components;\n'
+  );
+
+  const result = await setupLint({ projectRoot: dir, withTypes: true, runInstall: async () => {} });
+
+  assert.ok(result.actions.some((action) => action.kind === 'types'), JSON.stringify(result.actions));
+  assert.ok(await fs.pathExists(path.join(dir, 'src', 'slice-build.generated.d.ts')));
+  const jsconfig = await fs.readJson(path.join(dir, 'jsconfig.json'));
+  assert.equal(jsconfig.compilerOptions.target, 'ES2022');
+});

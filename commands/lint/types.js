@@ -5,7 +5,7 @@
 
 import fs from 'fs-extra';
 import path from 'node:path';
-import { generateTypesFile } from '../types/types.js';
+import { generateTypesFile, ensureEditorConfigForTypes } from '../types/types.js';
 
 export const DEFAULT_TYPES_OUTPUT = path.join('src', 'slice-build.generated.d.ts');
 
@@ -42,9 +42,14 @@ export async function refreshGeneratedTypes(projectRoot, output = DEFAULT_TYPES_
   const result = await generateTypesFile({ projectRoot, outputPath: file });
   const after = await fs.readFile(file, 'utf8').catch(() => null);
 
+  // Without this the declarations exist but `slice typecheck` has nothing to
+  // point tsc at (its error message tells you to run types generate).
+  const jsconfig = await ensureEditorConfigForTypes({ projectRoot, outputPath: file });
+
   return {
     status: before === null ? 'created' : before === after ? 'unchanged' : 'updated',
     file,
-    components: result.componentsProcessed
+    components: result.componentsProcessed,
+    jsconfig: jsconfig.mode
   };
 }
