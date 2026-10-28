@@ -98,6 +98,27 @@ function ensureAllowBuildEntry(lines, packageName) {
     return next;
 }
 
+const GITIGNORE_TEMPLATE = `# Dependencies
+node_modules/
+
+# Production build output (slice build)
+dist/
+`;
+
+/**
+ * Writes a .gitignore for a new project. An existing file is never touched:
+ * `slice init` can run inside a folder that already has history, and silently
+ * replacing its ignore rules would be worse than leaving them alone.
+ * Exported for tests (init-gitignore.test.js).
+ */
+export async function ensureGitignore(projectRoot) {
+    const gitignorePath = path.join(projectRoot, '.gitignore');
+    if (await fs.pathExists(gitignorePath)) return null;
+
+    await fs.writeFile(gitignorePath, GITIGNORE_TEMPLATE, 'utf8');
+    return gitignorePath;
+}
+
 // Create the project manifest BEFORE any install runs. Without a package.json in
 // the project folder, npm/pnpm walk up the directory tree looking for the nearest
 // manifest and anchor node_modules (and the dependency entry) OUTSIDE the project.
@@ -166,6 +187,7 @@ export default async function initializeProject(options = {}) {
         // 0. CREATE PROJECT MANIFEST FIRST — must exist before any install so the
         // package manager anchors node_modules inside the project folder.
         await ensureProjectManifest(projectRoot, packageManager);
+        await ensureGitignore(projectRoot);
 
         const fwSpinner = ora('Ensuring latest Slice framework...').start();
         let latestVersion = null;
