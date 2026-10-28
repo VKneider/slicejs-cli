@@ -95,8 +95,9 @@ describe('event names and payload keys', () => {
       { 'toast:show': { payload: { 'my-key': 'string', ok: 'boolean' } } }
     );
     assertValidTypeScript(declaration, 'payload keys');
-    assert.match(declaration, /"my-key": string/);
-    assert.match(declaration, /ok: boolean/, 'an ordinary key stays bare');
+    // Payload fields are optional: emitters routinely send a subset.
+    assert.match(declaration, /"my-key"\?: string/);
+    assert.match(declaration, /ok\?: boolean/, 'an ordinary key stays bare');
   });
 
   test('an event name containing a quote does not break the string', () => {
