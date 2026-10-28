@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Routes written as `/producto/:id` are reported: Slice only compiles `${id}` patterns, so a
   `:param` route is treated as a literal path and never matches.
 - `commands/utils/semver.js` holds the range check shared by `slice doctor` and `release-check`.
+- `slice typecheck` runs the project's own TypeScript over the jsconfig that `slice types generate`
+  maintains. ESLint does not type-check; this does. `slice setup lint --with-types` installs
+  TypeScript and adds the script.
 - `slice doctor` reports four more advisories: component CSS selectors not scoped under the
   component tag (doctor-only, so build logs stay clean), a `destroy()`/`dispose()`/`teardown()` method
   the controller never calls, a `window`/`document` listener with no `removeEventListener` in the same

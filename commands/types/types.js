@@ -145,7 +145,7 @@ const payloadToTs = (payload) => {
         } else if (value && typeof value === 'object' && typeof value.type === 'string') {
           tsType = PAYLOAD_TYPE_MAP[value.type.toLowerCase()] || 'unknown';
         }
-        return `${tsPropertyKey(key)}: ${tsType}`;
+        return `${tsPropertyKey(key)}?: ${tsType}`;
       })
       .join('; ');
     return inner.length > 0 ? `{ ${inner} }` : 'Record<string, unknown>';
@@ -603,14 +603,19 @@ const DYNAMIC_FALLBACK_PROP = '__dynamicPropsFallback';
 const DEFAULT_EDITOR_COMPILER_OPTIONS = {
   allowJs: true,
   checkJs: true,
+  noEmit: true,
+  target: 'ES2022',
+  lib: ['ES2022', 'DOM', 'DOM.Iterable'],
+  module: 'ESNext',
+  moduleResolution: 'Bundler',
   strict: false,
   noImplicitAny: false,
   strictNullChecks: false,
-  maxNodeModuleJsDepth: 2
+  skipLibCheck: true
 };
 
 const DEFAULT_EDITOR_INCLUDE = ['src/Components/**/*.js', 'src/**/*.d.ts'];
-const DEFAULT_EDITOR_EXCLUDE = ['node_modules', 'dist', 'src/libs/**', 'tests/**'];
+const DEFAULT_EDITOR_EXCLUDE = ['node_modules', 'dist', 'src/libs/**', 'tests/**', '**/*.spec.js'];
 const NOISY_INCLUDE_PATTERNS = new Set(['src/**/*.js', 'api/**/*.js', 'tests/**/*.js']);
 
 // Vendored static assets live under src/public/. Exclude them from type-check
@@ -1310,6 +1315,13 @@ const ensureEditorConfigForTypes = async ({ projectRoot, outputPath }) => {
       : {};
 
     let compilerOptionsChanged = false;
+
+    // Our old default made tsc check inside node_modules; drop it when it is
+    // still the generated value, so typecheck stays fast.
+    if (compilerOptions.maxNodeModuleJsDepth === 2) {
+      delete compilerOptions.maxNodeModuleJsDepth;
+      compilerOptionsChanged = true;
+    }
     for (const [key, value] of Object.entries(DEFAULT_EDITOR_COMPILER_OPTIONS)) {
       if (compilerOptions[key] === undefined) {
         compilerOptions[key] = value;

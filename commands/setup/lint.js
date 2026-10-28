@@ -24,6 +24,10 @@ const LINT_SCRIPTS = {
   'lint:fix': 'slice lint --fix'
 };
 
+const TYPE_SCRIPTS = {
+  typecheck: 'slice typecheck'
+};
+
 const hasLocalPackage = (projectRoot, name) => fs.pathExistsSync(
   path.join(projectRoot, 'node_modules', name, 'package.json')
 );
@@ -32,7 +36,7 @@ const hasLocalPackage = (projectRoot, name) => fs.pathExistsSync(
  * Inspects, installs and writes. `runInstall` is injectable so the tests do not
  * touch the network.
  */
-export async function setupLint({ projectRoot, dryRun = false, runInstall = null }) {
+export async function setupLint({ projectRoot, dryRun = false, withTypes = false, runInstall = null }) {
   const packagePath = path.join(projectRoot, 'package.json');
   if (!(await fs.pathExists(packagePath))) {
     return {
@@ -47,7 +51,8 @@ export async function setupLint({ projectRoot, dryRun = false, runInstall = null
   const actions = [];
 
   // 1. The tools the config and the command need, as devDependencies.
-  const missing = ['eslint', 'slicejs-cli'].filter((name) => !hasLocalPackage(projectRoot, name));
+  const required = withTypes ? ['eslint', 'slicejs-cli', 'typescript'] : ['eslint', 'slicejs-cli'];
+  const missing = required.filter((name) => !hasLocalPackage(projectRoot, name));
   if (missing.length > 0) {
     const command = installCommand(packageManager, missing.join(' '), { dev: true });
     actions.push({ kind: 'install', detail: command });
@@ -71,7 +76,8 @@ export async function setupLint({ projectRoot, dryRun = false, runInstall = null
   // 3. Scripts, without clobbering what the project already wires.
   const scripts = { ...(pkg.scripts || {}) };
   const scriptChanges = [];
-  for (const [name, command] of Object.entries(LINT_SCRIPTS)) {
+  const wanted = withTypes ? { ...LINT_SCRIPTS, ...TYPE_SCRIPTS } : LINT_SCRIPTS;
+  for (const [name, command] of Object.entries(wanted)) {
     if (scripts[name] === undefined) {
       scripts[name] = command;
       scriptChanges.push({ name, command });
@@ -95,7 +101,7 @@ export default async function setupLintCommand(options = {}, projectRoot) {
 
   let result;
   try {
-    result = await setupLint({ projectRoot, dryRun });
+    result = await setupLint({ projectRoot, dryRun, withTypes: Boolean(options.withTypes) });
   } catch (error) {
     Print.error('slice setup lint:', error.message);
     process.exitCode = 1;

@@ -24,6 +24,7 @@ import validations from "./commands/Validations.js";
 import Print from "./commands/Print.js";
 import build from './commands/build/build.js';
 import lintCommand from './commands/lint/lint.js';
+import typecheckCommand from './commands/typecheck/typecheck.js';
 import setupLintCommand from './commands/setup/lint.js';
 import { runGenerateTypes } from './commands/types/types.js';
 import { runDocsGet, runDocsList, runDocsSearch } from './commands/docs/docs.js';
@@ -754,9 +755,22 @@ setupCommand
   .command("lint")
   .description("Install ESLint and add the shared Slice config")
   .option("--dry-run", "Show what would change, write nothing")
+  .option("--with-types", "Also install TypeScript and add a typecheck script")
   .action(async (options) => {
     await runWithVersionCheck(async () => {
       await setupLintCommand(options, getProjectRoot(import.meta.url));
+    });
+  });
+
+// TYPECHECK COMMAND - the compiler step. ESLint does not type-check; this runs
+// the project tsc over the jsconfig that `slice types generate` maintains.
+sliceClient
+  .command("typecheck")
+  .description("Type-check the project with its own TypeScript (jsconfig.json)")
+  .option("-p, --project <path>", "Config file (default: jsconfig.json, then tsconfig.json)")
+  .action(async (options) => {
+    await runWithVersionCheck(async () => {
+      await typecheckCommand(options, getProjectRoot(import.meta.url));
     });
   });
 

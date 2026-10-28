@@ -110,3 +110,15 @@ test('fails clearly outside a project', async (t) => {
   assert.equal(result.ok, false);
   assert.match(result.error, /package\.json/);
 });
+
+test('--with-types installs TypeScript and adds the typecheck script', async (t) => {
+  const dir = await project(t);
+
+  const commands = [];
+  const result = await setupLint({ projectRoot: dir, withTypes: true, runInstall: async (command) => commands.push(command) });
+
+  assert.match(commands[0], /typescript/);
+  const pkg = await fs.readJson(path.join(dir, 'package.json'));
+  assert.equal(pkg.scripts.typecheck, 'slice typecheck');
+  assert.ok(result.actions.some((action) => action.kind === 'install'));
+});
