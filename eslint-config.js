@@ -91,17 +91,20 @@ const base = (globalsForEnv) => [
   { ignores }
 ];
 
+/** Node globals, for a repo that mixes an app with Node tooling in one config. */
+export const nodeGlobals = { ...globals.node };
+
 /** App preset: browser + framework globals for `src/`, Node for the server side. */
 export const appConfig = [
   ...base(sliceGlobals),
   {
     // The server entry and build scripts are Node, not browser code.
-    files: ['api/**/*.js', 'scripts/**/*.js', '*.config.js'],
+    files: ['api/**/*.{js,mjs,cjs}', 'scripts/**/*.{js,mjs,cjs}', '*.config.{js,mjs,cjs}'],
     languageOptions: { globals: { ...globals.node } }
   },
   {
     // Specs and e2e helpers run in Node, and Playwright exposes `page`/`browser`.
-    files: ['**/*.spec.js', 'tests/**/*.js', 'playwright/**/*.js'],
+    files: ['**/*.spec.js', 'tests/**/*.{js,mjs,cjs}', 'playwright/**/*.{js,mjs,cjs}'],
     languageOptions: {
       globals: {
         ...globals.node,
