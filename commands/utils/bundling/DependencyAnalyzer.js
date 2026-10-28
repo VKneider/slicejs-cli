@@ -304,7 +304,9 @@ export default class DependencyAnalyzer {
   }
 
   getEnabledStructuralComponents(config) {
-    const enabled = new Set(['Controller', 'Router', 'StylesManager']);
+    // Translator is always created by Slice.js (with `enabled: false` it loads nothing and
+    // slice.t() returns the key), so it ships with the core like the Router.
+    const enabled = new Set(['Controller', 'Router', 'StylesManager', 'Translator']);
 
     if (config?.logger?.enabled) {
       enabled.add('Logger');
