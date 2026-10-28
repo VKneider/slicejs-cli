@@ -76,6 +76,14 @@ test('the server entry and build scripts get Node globals', async () => {
   assert.deepEqual(rulesOf(browserCode), ['no-undef'], 'src/ stays browser-only');
 });
 
+test('browser globals do not leak into the server side', async () => {
+  const server = await lint('document.body; window.location;', { filePath: 'api/index.js' });
+  assert.deepEqual(rulesOf(server), ['no-undef', 'no-undef']);
+
+  const script = await lint('window.location;', { filePath: 'scripts/copy.js' });
+  assert.deepEqual(rulesOf(script), ['no-undef']);
+});
+
 test('vendored agent folders are ignored', async () => {
   const eslint = new ESLint({ cwd: process.cwd(), overrideConfigFile: true, overrideConfig: appConfig });
 

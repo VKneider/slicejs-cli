@@ -10,7 +10,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import Print from '../Print.js';
-import { refreshGeneratedTypes } from '../lint/types.js';
+import { runTypeRefresh } from '../lint/lint.js';
+import { reportTypesRefresh } from '../lint/types.js';
 
 /** The project's own tsc, or null when TypeScript is not installed. */
 export function resolveTypeScript(projectRoot) {
@@ -38,9 +39,8 @@ export default async function typecheckCommand(options = {}, projectRoot) {
   // `slice get`: the registry changed, so the .d.ts has to follow.
   if (options.types !== false) {
     try {
-      const types = await refreshGeneratedTypes(projectRoot);
-      if (types.status === 'created') Print.info(`Generated types: ${path.relative(projectRoot, types.file)}`);
-      else if (types.status === 'updated') Print.info(`Refreshed generated types: ${path.relative(projectRoot, types.file)}`);
+      const types = await runTypeRefresh(projectRoot, options);
+      if (types) reportTypesRefresh(types, projectRoot);
     } catch (error) {
       Print.warning('Could not refresh the generated types:', error.message);
     }

@@ -4,6 +4,7 @@ import fs from 'fs-extra';
 import path from 'node:path';
 import { withTestProject } from './helpers/setup.js';
 import { refreshGeneratedTypes, usesGeneratedTypes, DEFAULT_TYPES_OUTPUT } from '../commands/lint/types.js';
+import { runTypeRefresh } from '../commands/lint/lint.js';
 
 // `slice lint` refreshes the generated declarations before linting, so the
 // editor never reads a stale `.d.ts`. This is the only "types" step in the
@@ -33,7 +34,7 @@ test('the declarations are regenerated in place and reported', async () => {
 
     const first = await refreshGeneratedTypes(root);
     assert.equal(first.status, 'updated');
-    assert.ok(first.components >= 0);
+    assert.ok(first.components > 0, 'the registry had components to type');
 
     const content = await fs.readFile(output, 'utf8');
     assert.match(content, /SliceComponentPropsMap/, 'the real declarations were written');
@@ -60,9 +61,28 @@ test('a missing declaration file is created', async () => {
   }, { visualComponents: ['Widget'] });
 });
 
-test('the lint command exposes the opt-out', async () => {
-  const client = await fs.readFile(path.join(process.cwd(), 'client.js'), 'utf8');
-  assert.match(client, /\.option\("--no-types"/);
+test('--no-types skips the refresh and leaves the declarations untouched', async () => {
+  await withTestProject(async (root) => {
+    const output = path.join(root, DEFAULT_TYPES_OUTPUT);
+    await fs.outputFile(output, '// stale\n');
+
+    const result = await runTypeRefresh(root, { types: false });
+
+    assert.equal(result, null);
+    assert.equal(await fs.readFile(output, 'utf8'), '// stale\n');
+  }, { visualComponents: ['Widget'] });
+});
+
+test('without the flag the refresh runs before linting', async () => {
+  await withTestProject(async (root) => {
+    const output = path.join(root, DEFAULT_TYPES_OUTPUT);
+    await fs.outputFile(output, '// stale\n');
+
+    const result = await runTypeRefresh(root, {});
+
+    assert.equal(result.status, 'updated');
+    assert.match(await fs.readFile(output, 'utf8'), /SliceComponentPropsMap/);
+  }, { visualComponents: ['Widget'] });
 });
 
 test('a script without a component registry is skipped', async () => {

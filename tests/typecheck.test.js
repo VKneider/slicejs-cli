@@ -114,7 +114,7 @@ test('typecheck refreshes stale declarations first', async () => {
     });
 
     assert.equal(result.status, 0, result.stdout + result.stderr);
-    assert.match(`${result.stdout}${result.stderr}`, /Refreshed generated types/);
+    assert.match(`${result.stdout}${result.stderr}`, /Updated generated types/);
     const declaration = await fs.readFile(path.join(root, 'src', 'slice-build.generated.d.ts'), 'utf8');
     assert.match(declaration, /WidgetProps/);
   }, { visualComponents: ['Widget'] });

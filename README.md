@@ -113,6 +113,9 @@ allowBuilds:
 | `slice component create` | Create a local component |
 | `slice skill add` | Install the Slice.js Claude Code skill into `.claude/skills/` |
 | `slice doctor` | Run project diagnostics |
+| `slice lint` | Run ESLint with the shared Slice config |
+| `slice typecheck` | Type-check with the project's TypeScript |
+| `slice setup lint` | Add ESLint (and `--with-types` for typecheck) |
 | `slice postinstall` | Configure npm scripts (alternative to postinstall) |
 
 ## Claude Code skill (`slice skill`)

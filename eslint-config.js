@@ -78,7 +78,7 @@ const ignores = [
   'src/Components/components.js'
 ];
 
-const base = (globalsForEnv) => [
+const base = (globalsForEnv = {}) => [
   js.configs.recommended,
   {
     languageOptions: {
@@ -96,7 +96,13 @@ export const nodeGlobals = { ...globals.node };
 
 /** App preset: browser + framework globals for `src/`, Node for the server side. */
 export const appConfig = [
-  ...base(sliceGlobals),
+  ...base(),
+  {
+    // App code runs in the browser and sees the framework globals. Scoped, so a
+    // server file does not quietly get `document`/`window` as defined globals.
+    files: ['src/**/*.{js,mjs,cjs}'],
+    languageOptions: { globals: sliceGlobals }
+  },
   {
     // The server entry and build scripts are Node, not browser code.
     files: ['api/**/*.{js,mjs,cjs}', 'scripts/**/*.{js,mjs,cjs}', '*.config.{js,mjs,cjs}'],

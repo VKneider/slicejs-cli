@@ -9,7 +9,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import Print from '../Print.js';
-import { refreshGeneratedTypes } from './types.js';
+import { refreshGeneratedTypes, reportTypesRefresh } from './types.js';
 
 /** Path to the project's eslint binary, or null when it is not installed. */
 export function resolveEslint(projectRoot) {
@@ -22,17 +22,19 @@ export function resolveEslint(projectRoot) {
   }
 }
 
+/** Refresh declarations unless the caller opted out with `--no-types`. */
+export async function runTypeRefresh(projectRoot, options = {}) {
+  if (options.types === false) return null;
+  return refreshGeneratedTypes(projectRoot);
+}
+
 export default async function lintCommand(options = {}, projectRoot) {
   // One command verifies the project: refresh the declarations the editor reads
   // before running ESLint, so they can never go stale. --no-types opts out.
   if (options.types !== false) {
     try {
-      const types = await refreshGeneratedTypes(projectRoot);
-      if (types.status === 'created') Print.info(`Generated types: ${path.relative(projectRoot, types.file)}`);
-      else if (types.status === 'updated') Print.info(`Updated generated types: ${path.relative(projectRoot, types.file)}`);
-      else if (types.status === 'skipped') Print.info('Types: not configured in this project, skipped.');
-      if (types.jsconfig === 'created_jsconfig') Print.info('Created jsconfig.json for type-checking.');
-      else if (types.jsconfig === 'updated_jsconfig') Print.info('Updated jsconfig.json for type-checking.');
+      const types = await runTypeRefresh(projectRoot, options);
+      if (types) reportTypesRefresh(types, projectRoot);
     } catch (error) {
       Print.error('Could not refresh the generated types:', error.message);
       process.exitCode = 1;

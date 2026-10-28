@@ -743,7 +743,7 @@ sliceClient
   .option("--no-types", "Do not refresh the generated declarations")
   .action(async (paths, options) => {
     await runWithVersionCheck(async () => {
-      await lintCommand({ paths, fix: options.fix }, getProjectRoot(import.meta.url));
+      await lintCommand({ paths, fix: options.fix, types: options.types }, getProjectRoot(import.meta.url));
     });
   });
 
@@ -896,6 +896,9 @@ Common Usage Examples:
   slice component create         - Create new local component
   slice list                     - List all local components
   slice doctor                   - Run project diagnostics
+  slice lint                     - Run ESLint with the shared Slice config
+  slice typecheck                - Type-check with the project's TypeScript
+  slice setup lint               - Add ESLint (and --with-types for typecheck)
   slice types generate           - Generate TypeScript typings for slice.build
   slice skill add                - Install the Slice.js Claude Code skill
   slice postinstall              - Configure npm scripts in package.json

@@ -5,6 +5,7 @@
 
 import fs from 'fs-extra';
 import path from 'node:path';
+import Print from '../Print.js';
 import { generateTypesFile, ensureEditorConfigForTypes } from '../types/types.js';
 
 export const DEFAULT_TYPES_OUTPUT = path.join('src', 'slice-build.generated.d.ts');
@@ -50,6 +51,35 @@ export async function refreshGeneratedTypes(projectRoot, output = DEFAULT_TYPES_
     status: before === null ? 'created' : before === after ? 'unchanged' : 'updated',
     file,
     components: result.componentsProcessed,
-    jsconfig: jsconfig.mode
+    jsconfig: jsconfig.mode,
+    jsconfigReason: jsconfig.reason,
+    jsconfigError: jsconfig.errorMessage
   };
+}
+
+/** Explain what the refresh did, including the jsconfig decisions it took. */
+export function reportTypesRefresh(types, projectRoot) {
+  if (types.status === 'created') Print.info(`Generated types: ${path.relative(projectRoot, types.file)}`);
+  else if (types.status === 'updated') Print.info(`Updated generated types: ${path.relative(projectRoot, types.file)}`);
+  else if (types.status === 'skipped') Print.info('Types: not configured in this project, skipped.');
+
+  switch (types.jsconfig) {
+    case 'created_jsconfig':
+      Print.info('Created jsconfig.json for type-checking.');
+      break;
+    case 'updated_jsconfig':
+      Print.info('Updated jsconfig.json for type-checking.');
+      break;
+    case 'reset_jsconfig':
+      Print.warning(`Rewrote jsconfig.json (${types.jsconfigReason || 'unreadable or invalid'}).`);
+      break;
+    case 'tsconfig_exists':
+      Print.info('Using tsconfig.json; the generated declarations are not added to it.');
+      break;
+    case 'editor_config_error':
+      Print.warning('Could not update jsconfig.json:', types.jsconfigError || 'unknown error');
+      break;
+    default:
+      break;
+  }
 }
