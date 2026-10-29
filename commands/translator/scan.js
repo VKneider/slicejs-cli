@@ -32,8 +32,27 @@ export async function loadTemplateRules(projectRoot) {
   return import(pathToFileURL(file).href);
 }
 
-const ATTRIBUTE = /([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+/**
+ * Resolve the framework's `content.js` (copy resolver + validator). Returns null when the
+ * installed framework is older and does not ship it, so content validation degrades to the
+ * file-existence check instead of failing the whole command.
+ */
+export async function loadContentRules(projectRoot) {
+  const candidates = [
+    path.join(projectRoot, 'node_modules', 'slicejs-web-framework', 'Slice', 'Components', 'Structural', 'Translator', 'content.js')
+  ];
+  try {
+    const entry = require.resolve('slicejs-web-framework');
+    candidates.push(path.resolve(path.dirname(entry), '..', 'Slice', 'Components', 'Structural', 'Translator', 'content.js'));
+  } catch {
+    // not installed next to the CLI either
+  }
+  const file = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!file) return null;
+  return import(pathToFileURL(file).href);
+}
 
+const ATTRIBUTE = /([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
 function parseAttributes(source) {
   const attributes = {};
   for (const match of String(source ?? '').matchAll(ATTRIBUTE)) {
@@ -77,15 +96,30 @@ export function scanHtml(html, rules, where = '') {
   return entries;
 }
 
-/** `slice.t('key')`, `slice.t.ref('key')`, `slice.translator.t('key')`, and local helpers
- *  named `tr()`/`translate()` (the common wrapper around `slice.t`). */
+/** `slice.t('key')`, `slice.t.ref('key')`, `slice.t.list('key')`, `slice.t.ref.list('key')`,
+ *  `slice.translator.t('key')`, and local helpers named `tr()`/`translate()`. */
 export function scanJs(source, where = '') {
   const entries = [];
-  const pattern = /(?:slice\.t\.ref|(?:slice(?:\.translator)?|translator)\.(?:t|ref)|(?<![.\w$])(?:\$t|tr|translate))\(\s*(['"])([^'"]+)\1/g;
+  const pattern = /(?:slice\.t\.ref\.list|slice\.t\.list|slice\.t\.ref|(?:slice(?:\.translator)?|translator)\.(?:refList|t|ref|list)|(?<![.\w$])(?:\$t|tr|translate))\(\s*(['"])([^'"]+)\1/g;
   for (const match of String(source).matchAll(pattern)) {
-    entries.push({ key: match[2], where, kind: 'code' });
+    const call = match[0];
+    entries.push({
+      key: match[2],
+      where,
+      kind: /\.list\s*\(/.test(call) || /\.refList\s*\(/.test(call) ? 'list' : 'code'
+    });
   }
   return entries;
+}
+
+/** `slice.t.content('name')`: a content document, not a dictionary key. */
+export function scanContentCalls(source, where = '') {
+  const calls = [];
+  const pattern = /(?:slice\.t|slice\.translator|translator)\.content\(\s*(['"])([^'"]+)\1/g;
+  for (const match of String(source).matchAll(pattern)) {
+    calls.push({ name: match[2], where });
+  }
+  return calls;
 }
 
 /** Raw `href="/path"` inside an anchor (they lose the locale with routing on). */
@@ -135,6 +169,7 @@ export async function collectProject(projectRoot, options = {}) {
   const entries = [];
   const rawHrefs = [];
   const templates = [];
+  const contentCalls = [];
   for (const file of sourceFiles(projectRoot)) {
     const where = path.relative(projectRoot, file);
     const content = fs.readFileSync(file, 'utf8');
@@ -144,13 +179,16 @@ export async function collectProject(projectRoot, options = {}) {
       for (const href of scanRawHrefs(content)) rawHrefs.push({ where, href });
     } else {
       entries.push(...scanJs(content, where));
+      contentCalls.push(...scanContentCalls(content, where));
     }
   }
 
   const config = readTranslatorConfig(projectRoot);
   const dictionaries = config?.enabled ? readDictionaries(projectRoot, config) : {};
+  const content = config?.enabled ? readContentDocuments(projectRoot, config) : { documents: {}, errors: [] };
+  const contentRules = options.contentRules || await loadContentRules(projectRoot);
 
-  return { rules, config, dictionaries, entries, rawHrefs, templates };
+  return { rules, config, dictionaries, entries, rawHrefs, templates, contentCalls, content, contentRules };
 }
 
 export function readTranslatorConfig(projectRoot) {
@@ -206,8 +244,46 @@ export function readDictionaries(projectRoot, config) {
   return dictionaries;
 }
 
-export function lookup(dictionary, key) {
-  let node = dictionary;
+/**
+ * Every content document under `<path>/content/` (`src` wins over `dist`). Names are the
+ * file paths without `.json`, using `/` (`teaching`, `teaching/pr2`).
+ * @param {string} projectRoot
+ * @param {{ path?: string }} config
+ * @returns {{ documents: Record<string, any>, errors: string[] }}
+ */
+export function readContentDocuments(projectRoot, config) {
+  const folder = String(config.path || '/locales').replace(/^\/+|\/+$/g, '') || 'locales';
+  const documents = {};
+  const errors = [];
+
+  for (const base of ['src', 'dist']) {
+    const root = path.join(projectRoot, base, folder, 'content');
+    if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) continue;
+
+    const walk = (directory) => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        const full = path.join(directory, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!entry.name.endsWith('.json')) continue;
+        const name = path.relative(root, full).split(path.sep).join('/').slice(0, -5);
+        try {
+          documents[name] = JSON.parse(fs.readFileSync(full, 'utf8'));
+        } catch (error) {
+          errors.push(`invalid content document ${path.relative(projectRoot, full)}: ${error.message}`);
+        }
+      }
+    };
+    walk(root);
+    if (Object.keys(documents).length > 0 || errors.length > 0) break;
+  }
+
+  return { documents, errors };
+}
+
+export function lookup(dictionary, key) {  let node = dictionary;
   for (const part of String(key).split('.')) {
     if (!node || typeof node !== 'object' || !Object.prototype.hasOwnProperty.call(node, part)) return undefined;
     node = node[part];
@@ -233,7 +309,7 @@ const paramsOf = (text) => new Set([...String(text).matchAll(/\{([A-Za-z_$][\w$]
  * The rules of the feature: missing key per locale, plural without `other`, params that
  * differ between locales, dead keys and raw links that lose the locale.
  */
-export function checkTranslations({ entries, dictionaries, config, rawHrefs = [], reportUnused = false }) {
+export function checkTranslations({ entries, dictionaries, config, rawHrefs = [], reportUnused = false, content = { documents: {}, errors: [] }, contentCalls = [], contentRules = null }) {
   const errors = [];
   const warnings = [];
   const locales = config?.enabled
@@ -258,11 +334,21 @@ export function checkTranslations({ entries, dictionaries, config, rawHrefs = []
     // Library defaults (`slice.*`) are registered by the component itself in the
     // translator's defaults layer; the app is not required to copy them.
     if (entry.key.startsWith('slice.')) continue;
-    const id = `${entry.key}|${entry.attribute || ''}`;
+    const id = `${entry.kind || 'code'}|${entry.key}|${entry.attribute || ''}`;
     if (seen.has(id)) continue;
     seen.add(id);
 
     const where = `${entry.where}${entry.attribute ? ` (${entry.attribute})` : ''}`;
+    if (entry.kind === 'list') {
+      for (const locale of locales) {
+        const value = lookup(dictionaries[locale], entry.key)
+          ?? lookup(dictionaries[config.fallbackLocale], entry.key);
+        if (value === undefined) errors.push(`missing list "${entry.key}" in "${locale}" (${where})`);
+        else if (!Array.isArray(value)) errors.push(`"${entry.key}" in "${locale}" is not a list (${where})`);
+      }
+      continue;
+    }
+
     const texts = {};
     for (const locale of locales) {
       const value = lookup(dictionaries[locale], entry.key)
@@ -289,6 +375,25 @@ export function checkTranslations({ entries, dictionaries, config, rawHrefs = []
         for (const param of actual) {
           if (!expected.has(param)) warnings.push(`"${entry.key}" (${locale}) uses {${param}} which ${withText[0][0]} does not (${where})`);
         }
+      }
+    }
+  }
+
+  // Content documents: a `slice.t.content('name')` needs `locales/content/name.json`,
+  // and every `copy` needs a branch for each locale with the same shape.
+  const contentLocales = [...new Set([...locales, config.fallbackLocale].filter(Boolean))];
+  const missingDocuments = new Set();
+  for (const { name, where } of contentCalls) {
+    if (content.documents[name] === undefined && !missingDocuments.has(name)) {
+      missingDocuments.add(name);
+      errors.push(`missing content document "${name}" (${where})`);
+    }
+  }
+  for (const error of content.errors || []) errors.push(error);
+  if (contentRules && typeof contentRules.validateContentDocument === 'function') {
+    for (const [name, document] of Object.entries(content.documents || {})) {
+      for (const issue of contentRules.validateContentDocument(document, contentLocales)) {
+        errors.push(`content/${name}.json${issue.path ? `: ${issue.path}` : ''}: ${issue.message}`);
       }
     }
   }
@@ -333,6 +438,7 @@ export async function checkProject(projectRoot, options = {}) {
     config: collected.config,
     entries: collected.entries,
     locales,
-    dictionaryCount: Object.keys(collected.dictionaries).length
+    dictionaryCount: Object.keys(collected.dictionaries).length,
+    contentCount: Object.keys(collected.content?.documents || {}).length
   };
 }

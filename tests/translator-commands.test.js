@@ -7,6 +7,7 @@ import {
   checkProject,
   checkTranslations,
   loadTemplateRules,
+  scanContentCalls,
   scanHtml,
   scanJs,
   scanRawHrefs
@@ -68,6 +69,29 @@ test('scanRawHrefs only reports app paths', () => {
     '<a href="/pricing">x</a><a href="https://acme.dev">y</a><a href="//cdn/z">z</a><a href="#top">t</a>'
   );
   assert.deepEqual(hrefs, ['/pricing']);
+});
+
+test('scanJs marks lists and scanContentCalls reads content document names', () => {
+  const entries = scanJs(
+    [
+      "slice.t.list('roles');",
+      "slice.t.ref.list('roles');",
+      "translator.list('skills');",
+      "translator.refList('skills');",
+      "slice.t('home.title');",
+      "slice.t.content('experience');"
+    ].join('\n'),
+    'Component.js'
+  );
+
+  assert.deepEqual(
+    entries.map((entry) => [entry.key, entry.kind]),
+    [['roles', 'list'], ['roles', 'list'], ['skills', 'list'], ['skills', 'list'], ['home.title', 'code']]
+  );
+  assert.deepEqual(scanContentCalls("slice.t.content('experience'); slice.t.content(\"teaching\");", 'Component.js'), [
+    { name: 'experience', where: 'Component.js' },
+    { name: 'teaching', where: 'Component.js' }
+  ]);
 });
 
 const BASE_CONFIG = {
@@ -170,6 +194,66 @@ test('schema: if/then, minLength, uniqueItems and additionalProperties are enfor
   assert.ok(issues.some((issue) => /duplicated/.test(issue.message)));
   assert.ok(issues.some((issue) => /not a known option/.test(issue.message)));
   assert.deepEqual(validateAgainstSchema({ enabled: false, locales: ['es'] }, schema), []);
+});
+
+test('checkTranslations accepts lists of messages and records, and rejects a non-list', () => {
+  const { errors } = checkTranslations({
+    config: BASE_CONFIG,
+    entries: [
+      { key: 'roles', where: 'Home.js', kind: 'list' },
+      { key: 'single', where: 'Home.js', kind: 'list' },
+      { key: 'missing', where: 'Home.js', kind: 'list' }
+    ],
+    dictionaries: {
+      es: { roles: ['Profesor', 'Ingeniero'], single: 'No es una lista' },
+      en: { roles: ['Professor', 'Engineer'], single: ['One'] }
+    }
+  });
+
+  assert.ok(errors.some((error) => /"single" in "es" is not a list/.test(error)));
+  assert.ok(errors.some((error) => /missing list "missing" in "es"/.test(error)));
+  assert.ok(errors.some((error) => /missing list "missing" in "en"/.test(error)));
+});
+
+test('checkProject validates content documents and referenced names', { skip }, async (t) => {
+  const root = makeProject(t, {
+    config: { translator: BASE_CONFIG },
+    files: {
+      'Components/Home/Home.html': '<h1 data-t="home.title"></h1>',
+      'Components/Home/Home.js': "export const load = () => slice.t.content('experience');",
+      'locales/es.json': JSON.stringify({ home: { title: 'Inicio' } }),
+      'locales/en.json': JSON.stringify({ home: { title: 'Home' } }),
+      'locales/content/experience.json': JSON.stringify({
+        records: [
+          {
+            id: 1,
+            copy: {
+              es: { position: 'Ingeniero', responsibilities: ['A', 'B'] },
+              en: { position: 'Engineer', responsibilities: ['A', 'B'] }
+            }
+          }
+        ]
+      })
+    }
+  });
+
+  const result = await checkProject(root);
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.contentCount, 1);
+
+  const contentFile = path.join(root, 'src', 'locales', 'content', 'experience.json');
+  const document = JSON.parse(fs.readFileSync(contentFile, 'utf8'));
+  delete document.records[0].copy.es;
+  fs.writeFileSync(contentFile, JSON.stringify(document));
+  const brokenCopy = await checkProject(root);
+  assert.ok(brokenCopy.errors.some((error) => /content\/experience\.json: records\[0\]\.copy: copy is missing "es"/.test(error)));
+
+  fs.writeFileSync(
+    path.join(root, 'src', 'Components', 'Home', 'Home.js'),
+    "export const load = () => slice.t.content('missing');"
+  );
+  const missingDocument = await checkProject(root);
+  assert.ok(missingDocument.errors.some((error) => /missing content document "missing"/.test(error)));
 });
 
 test('checkProject reads templates, js and dictionaries from the project', { skip }, async (t) => {

@@ -53,12 +53,17 @@ async function checkTranslatorConfiguration() {
     if (result.warnings.length) {
         return {
             warn: true,
-            message: `${result.entries.length} key(s) x ${result.locales.length} locale(s), ${result.warnings.length} warning(s): ${result.warnings[0]}`,
+            message: `${result.entries.length} key(s) x ${result.locales.length} locale(s)${contentSuffix(result)}, ${result.warnings.length} warning(s): ${result.warnings[0]}`,
             suggestion: 'Run `slice translator check` for the full list'
         };
     }
 
-    return { pass: true, message: `${result.entries.length} key(s) across ${result.locales.length} locale(s)` };
+    return { pass: true, message: `${result.entries.length} key(s) across ${result.locales.length} locale(s)${contentSuffix(result)}` };
+}
+
+/** `, 2 content document(s)` when the app has content documents. */
+function contentSuffix(result) {
+    return result.contentCount ? `, ${result.contentCount} content document(s)` : '';
 }
 
 /**

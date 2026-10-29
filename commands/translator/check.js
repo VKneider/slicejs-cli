@@ -22,7 +22,8 @@ export default async function checkCommand(options = {}, projectRoot) {
 
     Print.success(
       `Translator OK: ${result.entries.length} key reference(s) across ${result.locales.length} locale(s)` +
-      ` (${result.dictionaryCount} dictionaries).`
+      ` (${result.dictionaryCount} dictionaries` +
+      `${result.contentCount ? `, ${result.contentCount} content document(s)` : ''}).`
     );
   } catch (error) {
     Print.error('slice translator check failed:', error.message);

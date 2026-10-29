@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `slice translator check` understands `slice.t.list()` / `slice.t.ref.list()`: a list key must exist
+  in every locale and be an array.
+- `slice translator check` validates content documents: every `slice.t.content('name')` must have a
+  file at `src/locales/content/name.json`, and each `copy` must have a branch for every locale, the
+  same shape across branches, and no empty strings.
+
 ## [4.4.0] - 2026-10-28
 
 ### Added
