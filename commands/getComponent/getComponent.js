@@ -186,11 +186,9 @@ filterOfficialComponents(allComponents) {
           // Logical routing components only need JS
           if (['Route', 'MultiRoute', 'Link'].includes(name)) {
             files = [`${name}.js`];
-          } else if (name === 'Icon') {
-            // Icon component needs font files to render glyphs
-            files = [`${name}.js`, `${name}.html`, `${name}.css`, 'slc.eot', 'slc.woff2', 'slc.woff', 'slc.ttf', 'slc.svg'];
           } else {
-            // Normal visual components need JS, HTML, CSS
+            // Normal visual components need JS, HTML, CSS (Icon draws inline SVG; its
+            // icons.generated.js arrives as a relative import, like any helper).
             files = [`${name}.js`, `${name}.html`, `${name}.css`];
           }
         } else {
@@ -504,8 +502,9 @@ filterOfficialComponents(allComponents) {
     try {
       content = await fetchWithRetry(url, 3, 500, false);
     } catch (error) {
-      Print.warning(`Could not download helper module '${repoRelPath}' — ${error.message}`);
-      return;
+      // A component whose helper is missing installs as a broken import. Fail the install
+      // instead of printing "installed successfully".
+      throw new Error(`Could not download helper module '${repoRelPath}': ${error.message}`, { cause: error });
     }
 
     await fs.ensureDir(path.dirname(localPath));

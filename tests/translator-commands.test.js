@@ -12,6 +12,7 @@ import {
   scanRawHrefs
 } from '../commands/translator/scan.js';
 import { initTranslatorFiles } from '../commands/translator/init.js';
+import { validateAgainstSchema } from '../commands/utils/sliceConfigSchema.js';
 
 const rules = await loadTemplateRules(process.cwd());
 const skip = rules ? false : 'needs slicejs-web-framework (Translator/dom.js)';
@@ -51,12 +52,15 @@ test('scanJs reads slice.t, slice.t.ref and translator.ref, and ignores other ob
       "const c = translator.t('plural.count', { count });",
       "const d = other.t('not.ours');",
       "const e = tr('lab.nav.overview', 'Overview');",
-      "const f = translator.ref('menu.home');"
+      "const f = translator.ref('menu.home');",
+      "const g = $t('home.title');",
+      "const h = el.translate('not.ours');",
+      "const i = chart.tr('not.ours');"
     ].join('\n'),
     'Component.js'
   );
 
-  assert.deepEqual(entries.map((entry) => entry.key), ['orders.title', 'orders.save', 'plural.count', 'lab.nav.overview', 'menu.home']);
+  assert.deepEqual(entries.map((entry) => entry.key), ['orders.title', 'orders.save', 'plural.count', 'lab.nav.overview', 'menu.home', 'home.title']);
 });
 
 test('scanRawHrefs only reports app paths', () => {
@@ -134,6 +138,38 @@ test('init adds the block and creates dictionaries without overwriting them', (t
   assert.equal(second.files.find((entry) => entry.file.endsWith('es.json')).status, 'exists');
   assert.match(fs.readFileSync(path.join(root, 'src', 'locales', 'es.json'), 'utf8'), /Inicio/);
   assert.equal(second.files.find((entry) => entry.file.endsWith('sliceConfig.json')).status, 'unchanged');
+});
+
+test('init does not re-enable a deliberately disabled translator', (t) => {
+  const root = makeProject(t, {
+    config: { translator: { enabled: false, defaultLocale: 'es', locales: ['es'] } }
+  });
+
+  const result = initTranslatorFiles({ projectRoot: root, locales: ['es'], defaultLocale: 'es' });
+  assert.deepEqual(result.errors, []);
+
+  const config = JSON.parse(fs.readFileSync(path.join(root, 'src', 'sliceConfig.json'), 'utf8'));
+  assert.equal(config.translator.enabled, false);
+});
+
+test('schema: if/then, minLength, uniqueItems and additionalProperties are enforced', () => {
+  const schema = {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      enabled: { type: 'boolean' },
+      defaultLocale: { type: 'string', minLength: 1 },
+      locales: { type: 'array', uniqueItems: true, items: { type: 'string' } }
+    },
+    if: { properties: { enabled: { const: true } }, required: ['enabled'] },
+    then: { required: ['defaultLocale'] }
+  };
+
+  const issues = validateAgainstSchema({ enabled: true, locales: ['es', 'es'], nope: 1 }, schema);
+  assert.ok(issues.some((issue) => /defaultLocale/.test(issue.path)));
+  assert.ok(issues.some((issue) => /duplicated/.test(issue.message)));
+  assert.ok(issues.some((issue) => /not a known option/.test(issue.message)));
+  assert.deepEqual(validateAgainstSchema({ enabled: false, locales: ['es'] }, schema), []);
 });
 
 test('checkProject reads templates, js and dictionaries from the project', { skip }, async (t) => {

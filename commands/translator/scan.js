@@ -81,7 +81,7 @@ export function scanHtml(html, rules, where = '') {
  *  named `tr()`/`translate()` (the common wrapper around `slice.t`). */
 export function scanJs(source, where = '') {
   const entries = [];
-  const pattern = /(?:slice\.t\.ref|(?:slice(?:\.translator)?|translator)\.(?:t|ref)|\b(?:tr|translate))\(\s*(['"])([^'"]+)\1/g;
+  const pattern = /(?:slice\.t\.ref|(?:slice(?:\.translator)?|translator)\.(?:t|ref)|(?<![.\w$])(?:\$t|tr|translate))\(\s*(['"])([^'"]+)\1/g;
   for (const match of String(source).matchAll(pattern)) {
     entries.push({ key: match[2], where, kind: 'code' });
   }
@@ -159,8 +159,8 @@ export function readTranslatorConfig(projectRoot) {
     if (!fs.existsSync(file)) continue;
     try {
       return JSON.parse(fs.readFileSync(file, 'utf8')).translator || null;
-    } catch {
-      return null;
+    } catch (error) {
+      throw new Error(`invalid ${folder}/sliceConfig.json: ${error.message}`);
     }
   }
   return null;

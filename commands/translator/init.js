@@ -38,7 +38,8 @@ export function initTranslatorFiles(options = {}) {
   const translator = existing
     ? {
       ...existing,
-      enabled: true,
+      // Re-running init must not turn a deliberately disabled translator back on.
+      enabled: existing.enabled !== undefined ? existing.enabled : true,
       defaultLocale: existing.defaultLocale || defaultLocale,
       locales: declared,
       path: existing.path || localePath
