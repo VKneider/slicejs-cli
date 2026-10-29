@@ -182,7 +182,7 @@ const withTranslator = (root, { missingInEnglish = false } = {}) => {
       fallbackLocale: 'es',
       locales: ['es', 'en'],
       path: '/locales',
-      routing: 'prefix-except-default'
+      localePrefix: 'except-default'
     }
   }));
   fs.mkdirSync(path.join(root, 'src', 'locales'), { recursive: true });

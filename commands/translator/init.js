@@ -50,7 +50,7 @@ export function initTranslatorFiles(options = {}) {
       path: localePath,
       saveLocally: true,
       useBrowserLocale: true,
-      routing: false
+      localePrefix: false
     };
   const next = { ...config, translator };
 

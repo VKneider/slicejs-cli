@@ -177,9 +177,29 @@ export function readDictionaries(projectRoot, config) {
   const dictionaries = {};
   for (const locale of [...new Set(locales)]) {
     for (const base of ['src', 'dist']) {
-      const file = path.join(projectRoot, base, folder, `${locale}.json`);
-      if (!fs.existsSync(file)) continue;
-      dictionaries[locale] = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const root = path.join(projectRoot, base, folder);
+      const file = path.join(root, `${locale}.json`);
+      const namespaceDir = path.join(root, locale);
+      if (!fs.existsSync(file) && !fs.existsSync(namespaceDir)) continue;
+      let messages = {};
+      if (fs.existsSync(file)) {
+        try {
+          messages = JSON.parse(fs.readFileSync(file, 'utf8'));
+        } catch (error) {
+          throw new Error(`invalid translator dictionary ${path.join(base, folder, `${locale}.json`)}: ${error.message}`);
+        }
+      }
+      if (fs.existsSync(namespaceDir) && fs.statSync(namespaceDir).isDirectory()) {
+        for (const name of fs.readdirSync(namespaceDir)) {
+          if (!name.endsWith('.json')) continue;
+          try {
+            messages[name.slice(0, -5)] = JSON.parse(fs.readFileSync(path.join(namespaceDir, name), 'utf8'));
+          } catch (error) {
+            throw new Error(`invalid translator dictionary ${path.join(base, folder, locale, name)}: ${error.message}`);
+          }
+        }
+      }
+      dictionaries[locale] = messages;
       break;
     }
   }
@@ -223,6 +243,15 @@ export function checkTranslations({ entries, dictionaries, config, rawHrefs = []
   if (!config?.enabled) {
     return { errors: ['translator is not enabled in sliceConfig.json: run `slice translator init`'], warnings };
   }
+  if (typeof config.defaultLocale !== 'string' || !config.defaultLocale.trim()) {
+    return {
+      errors: ['translator.enabled is true but defaultLocale is missing: the runtime stays disabled (set "defaultLocale" or "enabled": false)'],
+      warnings
+    };
+  }
+  if (locales.length === 0) {
+    return { errors: ['translator has no locales configured'], warnings };
+  }
 
   const seen = new Set();
   for (const entry of entries) {
@@ -236,7 +265,8 @@ export function checkTranslations({ entries, dictionaries, config, rawHrefs = []
     const where = `${entry.where}${entry.attribute ? ` (${entry.attribute})` : ''}`;
     const texts = {};
     for (const locale of locales) {
-      const value = lookup(dictionaries[locale], entry.key);
+      const value = lookup(dictionaries[locale], entry.key)
+        ?? lookup(dictionaries[config.fallbackLocale], entry.key);
       if (value === undefined) {
         errors.push(`missing "${entry.key}" in "${locale}" (${where})`);
         continue;
@@ -279,7 +309,7 @@ export function checkTranslations({ entries, dictionaries, config, rawHrefs = []
     if (unused.length > 20) warnings.push(`…and ${unused.length - 20} more unused keys`);
   }
 
-  if (config.routing) {
+  if (config.localePrefix) {
     for (const { where, href } of rawHrefs) {
       warnings.push(`raw href="${href}" in ${where} loses the locale: use slice.router.href()`);
     }

@@ -95,7 +95,9 @@ export function selectRoutes(manifest, only = null) {
  */
 export function cardTargets(manifest, translator = null, only = null) {
   const wanted = only ? new Set(String(only).split(',').map((item) => item.trim())) : null;
-  const locales = translator?.enabled ? translator.locales : [null];
+  const locales = translator?.enabled
+    ? (translator.localePrefix ? translator.locales : [translator.defaultLocale])
+    : [null];
   const targets = [];
 
   for (const { route, meta } of selectRoutes(manifest, null)) {
@@ -456,7 +458,7 @@ export async function generateImages(options = {}) {
           runner: runnerModule
         });
         const rawTitle = translator?.enabled
-          ? frameworkSeo?.resolveSeoText?.(target.meta.title, (key, params) => translator.t(target.locale, key, params))
+          ? frameworkSeo?.resolveSeoText?.(target.meta.title, (key, params) => translator.t(target.locale || translator.defaultLocale, key, params))
           : target.meta.title;
         const title = typeof rawTitle === 'string' && rawTitle ? rawTitle : target.route;
         const card = await encodeCard(cardPage, {

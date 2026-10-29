@@ -44,9 +44,29 @@ export async function loadSeoTranslator(projectRoot, framework) {
   const dictionaries = {};
   for (const locale of [...new Set(locales)]) {
     for (const base of ['src', 'dist']) {
-      const file = path.join(projectRoot, base, folder, `${locale}.json`);
-      if (!fs.existsSync(file)) continue;
-      dictionaries[locale] = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const root = path.join(projectRoot, base, folder);
+      const file = path.join(root, `${locale}.json`);
+      const namespaceDir = path.join(root, locale);
+      if (!fs.existsSync(file) && !fs.existsSync(namespaceDir)) continue;
+      let messages = {};
+      if (fs.existsSync(file)) {
+        try {
+          messages = JSON.parse(fs.readFileSync(file, 'utf8'));
+        } catch (error) {
+          throw new Error(`invalid translator dictionary ${path.join(base, folder, `${locale}.json`)}: ${error.message}`);
+        }
+      }
+      if (fs.existsSync(namespaceDir) && fs.statSync(namespaceDir).isDirectory()) {
+        for (const name of fs.readdirSync(namespaceDir)) {
+          if (!name.endsWith('.json')) continue;
+          try {
+            messages[name.slice(0, -5)] = JSON.parse(fs.readFileSync(path.join(namespaceDir, name), 'utf8'));
+          } catch (error) {
+            throw new Error(`invalid translator dictionary ${path.join(base, folder, locale, name)}: ${error.message}`);
+          }
+        }
+      }
+      dictionaries[locale] = messages;
       break;
     }
   }

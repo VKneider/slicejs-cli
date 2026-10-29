@@ -72,7 +72,7 @@ const BASE_CONFIG = {
   fallbackLocale: 'es',
   locales: ['es', 'en'],
   path: '/locales',
-  routing: false
+  localePrefix: false
 };
 
 const DICTIONARIES = {
@@ -99,7 +99,7 @@ test('checkTranslations reports a key missing in one locale and a broken plural'
 
 test('checkTranslations warns on param drift, unused keys and raw links with routing', () => {
   const { warnings } = checkTranslations({
-    config: { ...BASE_CONFIG, routing: 'prefix-except-default' },
+    config: { ...BASE_CONFIG, localePrefix: 'except-default' },
     entries: [{ key: 'greeting', where: 'Home.html' }],
     dictionaries: {
       es: { greeting: 'Hola, {name}', unused: 'x' },
@@ -152,6 +152,12 @@ test('checkProject reads templates, js and dictionaries from the project', { ski
   assert.deepEqual(result.locales, ['es', 'en']);
 
   fs.writeFileSync(path.join(root, 'src', 'locales', 'en.json'), JSON.stringify({ home: { title: 'Home' } }));
+  const fallbackOnly = await checkProject(root);
+  // The key is missing in `en` but the configured fallback (`es`) answers, as at runtime.
+  assert.deepEqual(fallbackOnly.errors, []);
+
+  fs.writeFileSync(path.join(root, 'src', 'locales', 'es.json'), JSON.stringify({ home: { title: 'Inicio' } }));
   const broken = await checkProject(root);
+  assert.ok(broken.errors.some((error) => /missing "home\.save" in "es"/.test(error)));
   assert.ok(broken.errors.some((error) => /missing "home\.search\.placeholder" in "en"/.test(error)));
 });
