@@ -167,9 +167,9 @@ test('the manifest is also found inside the deployed public folder', { skip }, a
 const TRANSLATED_MANIFEST = {
   version: 1,
   origin: 'https://acme.dev',
-  defaults: { titleTemplate: { t: 'seo.titleTemplate' } },
+  defaults: { titleSuffix: { t: 'seo.titleSuffix' } },
   routes: {
-    '/': { title: { t: 'home.title' }, titleTemplate: '%s' },
+    '/': { title: { t: 'home.title' }, titleSuffix: false },
     '/pricing': { title: { t: 'pricing.title' } }
   }
 };
@@ -187,12 +187,12 @@ const withTranslator = (root, { missingInEnglish = false } = {}) => {
   }));
   fs.mkdirSync(path.join(root, 'src', 'locales'), { recursive: true });
   fs.writeFileSync(path.join(root, 'src', 'locales', 'es.json'), JSON.stringify({
-    seo: { titleTemplate: '%s | Acme' },
+    seo: { titleSuffix: ' | Acme' },
     home: { title: 'Inicio' },
     pricing: { title: 'Precios' }
   }));
   fs.writeFileSync(path.join(root, 'src', 'locales', 'en.json'), JSON.stringify({
-    seo: { titleTemplate: '%s | Acme' },
+    seo: { titleSuffix: ' | Acme' },
     home: { title: 'Home' },
     pricing: missingInEnglish ? {} : { title: 'Pricing' }
   }));

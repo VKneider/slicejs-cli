@@ -11,7 +11,7 @@ import { checkSeoConfiguration } from '../commands/doctor/doctor.js';
 const MANIFEST = (origin = 'https://acme.dev') => ({
   version: 1,
   origin,
-  defaults: { titleTemplate: '%s' },
+  defaults: { titleSuffix: false },
   routes: {
     '/': { title: 'Home' },
     '/about': { title: 'About' },
