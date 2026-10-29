@@ -12,6 +12,8 @@ import runDiagnostics from "./commands/doctor/doctor.js";
 import seoCheck from "./commands/seo/check.js";
 import seoSitemap from "./commands/seo/sitemap.js";
 import seoImages from "./commands/seo/images.js";
+import translatorCheck from "./commands/translator/check.js";
+import translatorInit from "./commands/translator/init.js";
 import versionChecker from "./commands/utils/VersionChecker.js";
 import updateManager from "./commands/utils/updateManager.js";
 import fs from "fs";
@@ -816,6 +818,35 @@ seoCommand
   .action(async (options) => {
     await runWithVersionCheck(async () => {
       await seoImages(options, getProjectRoot(import.meta.url));
+    });
+  });
+
+// TRANSLATOR COMMANDS - dictionaries, data-t templates and key() props.
+const translatorCommand = sliceClient
+  .command("translator")
+  .alias("i18n")
+  .description("Translator helpers: scaffold the locale files and check every key");
+
+translatorCommand
+  .command("init")
+  .description("Add the translator block to sliceConfig.json and create src/locales/<locale>.json")
+  .option("--locales <list>", "comma-separated locales", "en")
+  .option("--default <locale>", "default locale (default: the first of --locales)")
+  .option("--path <path>", "dictionary folder served by the app", "/locales")
+  .option("--dry-run", "show what would change, write nothing")
+  .action(async (options) => {
+    await runWithVersionCheck(async () => {
+      await translatorInit(options, getProjectRoot(import.meta.url));
+    });
+  });
+
+translatorCommand
+  .command("check")
+  .description("Verify every data-t / slice.t() key exists in every locale")
+  .option("--unused", "also report dictionary keys no template or call uses")
+  .action(async (options) => {
+    await runWithVersionCheck(async () => {
+      await translatorCheck(options, getProjectRoot(import.meta.url));
     });
   });
 

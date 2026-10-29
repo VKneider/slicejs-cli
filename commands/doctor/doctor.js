@@ -14,8 +14,52 @@ import { rangeMismatch } from '../utils/semver.js';
 import { parse as parseModule } from '@babel/parser';
 import traverse from '@babel/traverse';
 import ExternalModuleBundler from '../utils/bundling/ExternalModuleBundler.js';
-import { loadFrameworkSeo, loadManifest } from '../seo/support.js';
+import { loadFrameworkSeo, loadManifest, loadSeoTranslator } from '../seo/support.js';
 import { loadRoutes } from '../seo/check.js';
+import { checkProject as checkTranslatorProject } from '../translator/scan.js';
+
+/**
+ * Translator: is it configured, and does every key on the page exist in every locale?
+ * Same scan as `slice translator check`, so the row and the command cannot disagree.
+ */
+async function checkTranslatorConfiguration() {
+    const projectRoot = getProjectRoot(import.meta.url);
+
+    let result;
+    try {
+        result = await checkTranslatorProject(projectRoot);
+    } catch (error) {
+        return {
+            message: `Translator check could not run: ${error.message}`,
+            suggestion: 'Update slicejs-web-framework (the template rules live in Translator/dom.js)'
+        };
+    }
+
+    if (!result.config?.enabled) {
+        return {
+            warn: true,
+            message: 'Not configured: data-t and slice.t() fall back to the key',
+            suggestion: 'Run `slice translator init`'
+        };
+    }
+
+    if (result.errors.length) {
+        return {
+            message: `${result.errors.length} problem(s): ${result.errors[0]}`,
+            suggestion: result.errors.length > 1 ? `${result.errors[1]} (run \`slice translator check\`)` : 'Run `slice translator check`'
+        };
+    }
+
+    if (result.warnings.length) {
+        return {
+            warn: true,
+            message: `${result.entries.length} key(s) x ${result.locales.length} locale(s), ${result.warnings.length} warning(s): ${result.warnings[0]}`,
+            suggestion: 'Run `slice translator check` for the full list'
+        };
+    }
+
+    return { pass: true, message: `${result.entries.length} key(s) across ${result.locales.length} locale(s)` };
+}
 
 /**
  * SEO: is it configured, and is it safe to deploy?
@@ -58,9 +102,11 @@ async function checkSeoConfiguration() {
     }
 
     const routes = await loadRoutes(projectRoot).catch(() => []);
+    const translator = await loadSeoTranslator(projectRoot, framework);
     const { errors, warnings } = framework.validateSeoManifest(manifest, {
         routes,
-        publicDir: path.join(projectRoot, 'src', 'public')
+        publicDir: path.join(projectRoot, 'src', 'public'),
+        translator
     });
 
     // The sitemap is a committed artifact, so a stale one is a deploy problem.
@@ -69,7 +115,7 @@ async function checkSeoConfiguration() {
         const origin = framework.normalizeOrigin(manifest.origin);
         if (!fs.existsSync(sitemapFile)) {
             warnings.push('sitemap.xml is missing: run `slice seo sitemap`');
-        } else if (origin && fs.readFileSync(sitemapFile, 'utf8') !== framework.buildSitemap({ manifest, origin })) {
+        } else if (origin && fs.readFileSync(sitemapFile, 'utf8') !== framework.buildSitemap({ manifest, origin, translator })) {
             warnings.push('sitemap.xml is out of date: run `slice seo sitemap`');
         }
     }
@@ -574,6 +620,7 @@ export {
     checkDirectoryStructure,
     checkConfig,
     checkSeoConfiguration,
+    checkTranslatorConfiguration,
     checkPort,
     checkDependencies,
     checkComponents,
@@ -591,6 +638,7 @@ export default async function runDiagnostics() {
         { name: 'Project Structure', fn: checkDirectoryStructure },
         { name: 'Configuration', fn: checkConfig },
         { name: 'SEO', fn: checkSeoConfiguration },
+        { name: 'Translator', fn: checkTranslatorConfiguration },
         { name: 'Port Availability', fn: checkPort },
         { name: 'Package Manager', fn: checkPackageManagerSetup },
         { name: 'Dependencies', fn: checkDependencies },

@@ -1,0 +1,156 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {
+  checkProject,
+  checkTranslations,
+  loadTemplateRules,
+  scanHtml,
+  scanJs,
+  scanRawHrefs
+} from '../commands/translator/scan.js';
+import { initTranslatorFiles } from '../commands/translator/init.js';
+
+const rules = await loadTemplateRules(process.cwd());
+const skip = rules ? false : 'needs slicejs-web-framework (Translator/dom.js)';
+
+const makeProject = (t, { config = null, files = {} } = {}) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'slice-translator-cli-'));
+  fs.mkdirSync(path.join(root, 'src', 'Components'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'src', 'sliceConfig.json'), JSON.stringify(config || { translator: {} }, null, 2));
+  for (const [file, content] of Object.entries(files)) {
+    const target = path.join(root, 'src', file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, content);
+  }
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  return root;
+};
+
+test('scanHtml reuses the framework rules: text, attribute keys and params', { skip }, () => {
+  const entries = scanHtml(
+    '<input data-t="home.search" placeholder aria-label />\n<p data-t="cart.items" data-t-count="3"></p>',
+    rules,
+    'template.html'
+  );
+
+  assert.deepEqual(
+    entries.map((entry) => entry.key),
+    ['home.search.placeholder', 'home.search.ariaLabel', 'cart.items']
+  );
+  assert.deepEqual(entries[2].params, ['count']);
+});
+
+test('scanJs reads slice.t and translator.key, and ignores other objects', { skip }, () => {
+  const entries = scanJs(
+    [
+      "const a = slice.t('orders.title');",
+      "const b = slice.translator.key('orders.save');",
+      "const c = translator.t('plural.count', { count });",
+      "const d = other.t('not.ours');",
+      "const e = tr('lab.nav.overview', 'Overview');"
+    ].join('\n'),
+    'Component.js'
+  );
+
+  assert.deepEqual(entries.map((entry) => entry.key), ['orders.title', 'orders.save', 'plural.count', 'lab.nav.overview']);
+});
+
+test('scanRawHrefs only reports app paths', () => {
+  const hrefs = scanRawHrefs(
+    '<a href="/pricing">x</a><a href="https://acme.dev">y</a><a href="//cdn/z">z</a><a href="#top">t</a>'
+  );
+  assert.deepEqual(hrefs, ['/pricing']);
+});
+
+const BASE_CONFIG = {
+  enabled: true,
+  defaultLocale: 'es',
+  fallbackLocale: 'es',
+  locales: ['es', 'en'],
+  path: '/locales',
+  routing: false
+};
+
+const DICTIONARIES = {
+  es: { home: { title: 'Inicio' }, cart: { count: { one: '{count} artículo', other: '{count} artículos' } }, unused: 'x' },
+  en: { home: { title: 'Home' }, cart: { count: { one: '{count} item', other: '{count} items' } }, unused: 'x' }
+};
+
+test('checkTranslations reports a key missing in one locale and a broken plural', () => {
+  const { errors } = checkTranslations({
+    config: BASE_CONFIG,
+    entries: [
+      { key: 'home.title', where: 'Home.html' },
+      { key: 'cart.count', where: 'Cart.html' },
+      { key: 'only.es', where: 'Home.html' }
+    ],
+    dictionaries: {
+      es: { ...DICTIONARIES.es, onlyEs: 'solo', broken: { one: 'uno' } },
+      en: DICTIONARIES.en
+    }
+  });
+
+  assert.ok(errors.some((error) => /missing "only\.es" in "en"/.test(error)));
+});
+
+test('checkTranslations warns on param drift, unused keys and raw links with routing', () => {
+  const { warnings } = checkTranslations({
+    config: { ...BASE_CONFIG, routing: 'prefix-except-default' },
+    entries: [{ key: 'greeting', where: 'Home.html' }],
+    dictionaries: {
+      es: { greeting: 'Hola, {name}', unused: 'x' },
+      en: { greeting: 'Hello' }
+    },
+    rawHrefs: [{ where: 'Home.html', href: '/pricing' }],
+    reportUnused: true
+  });
+
+  assert.ok(warnings.some((warning) => /missing \{name\}/.test(warning)));
+  assert.ok(warnings.some((warning) => /unused key "unused"/.test(warning)));
+  assert.ok(warnings.some((warning) => /raw href="\/pricing"/.test(warning)));
+});
+
+test('init adds the block and creates dictionaries without overwriting them', (t) => {
+  const root = makeProject(t, { config: { themeManager: { enabled: true } } });
+  const first = initTranslatorFiles({ projectRoot: root, locales: ['es', 'en'], defaultLocale: 'es' });
+
+  assert.deepEqual(first.errors, []);
+  const config = JSON.parse(fs.readFileSync(path.join(root, 'src', 'sliceConfig.json'), 'utf8'));
+  assert.equal(config.translator.enabled, true);
+  assert.equal(config.translator.defaultLocale, 'es');
+  assert.deepEqual(config.translator.locales, ['es', 'en']);
+  assert.equal(config.themeManager.enabled, true, 'unrelated config survives');
+  assert.ok(fs.existsSync(path.join(root, 'src', 'locales', 'es.json')));
+  assert.ok(fs.existsSync(path.join(root, 'src', 'locales', 'en.json')));
+
+  fs.writeFileSync(path.join(root, 'src', 'locales', 'es.json'), '{ "home": { "title": "Inicio" } }\n');
+  const second = initTranslatorFiles({ projectRoot: root, locales: ['es', 'en'], defaultLocale: 'es' });
+
+  assert.deepEqual(second.errors, []);
+  assert.equal(second.files.find((entry) => entry.file.endsWith('es.json')).status, 'exists');
+  assert.match(fs.readFileSync(path.join(root, 'src', 'locales', 'es.json'), 'utf8'), /Inicio/);
+  assert.equal(second.files.find((entry) => entry.file.endsWith('sliceConfig.json')).status, 'unchanged');
+});
+
+test('checkProject reads templates, js and dictionaries from the project', { skip }, async (t) => {
+  const root = makeProject(t, {
+    config: { translator: BASE_CONFIG },
+    files: {
+      'Components/Home/Home.html': '<h1 data-t="home.title"></h1><input data-t="home.search" placeholder />',
+      'Components/Home/Home.js': "export const label = slice.t('home.save');",
+      'locales/es.json': JSON.stringify({ home: { title: 'Inicio', save: 'Guardar', search: { placeholder: 'Buscar' } } }),
+      'locales/en.json': JSON.stringify({ home: { title: 'Home', save: 'Save', search: { placeholder: 'Search' } } })
+    }
+  });
+
+  const result = await checkProject(root);
+  assert.deepEqual(result.errors, []);
+  assert.deepEqual(result.locales, ['es', 'en']);
+
+  fs.writeFileSync(path.join(root, 'src', 'locales', 'en.json'), JSON.stringify({ home: { title: 'Home' } }));
+  const broken = await checkProject(root);
+  assert.ok(broken.errors.some((error) => /missing "home\.search\.placeholder" in "en"/.test(error)));
+});

@@ -2,7 +2,7 @@
 id: "0003"
 title: "slice translator, and multilingual slice seo"
 repo: "slicejs-cli"
-status: proposed
+status: done
 area: cli
 priority: medium
 created: 2026-10-28
@@ -179,3 +179,9 @@ errors.
 - 2026-10-28 — The CLI imports the framework's rules (template keys, SEO validation, sitemap) instead
   of re-implementing them, as with `validateSeoManifest` in 0001.
 - 2026-10-28 — No `extract`: templates carry keys only (framework 0003).
+- 2026-10-28 — Implemented: `slice translator init` (config block + dictionaries, never overwrites),
+  `slice translator check` (templates, `data-t-*`, `slice.t()`/`key()`/`tr()` calls, missing keys per
+  locale, plural `other`, param drift, raw hrefs), a **Translator** row in `doctor`, and locale-aware
+  `seo sitemap`/`seo check`/`seo images` (one card per route and locale, keyed by the localized URL).
+  The template rules come from the framework's `Translator/dom.js`; unused-key reporting is opt-in
+  (`--unused`) because keys reached through app helpers are invisible to the scan.
