@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `slice translator check` validates content documents: every `slice.t.content('name')` must have a
   file at `src/locales/content/name.json`, and each `copy` must have a branch for every locale, the
   same shape across branches, and no empty strings.
+- `slice seo sitemap` expands a `${param}` route's `sitemap.paths` into one URL per published value
+  and locale, with the usual alternates; `slice seo check` rejects a value missing a parameter.
 
 ## [4.4.0] - 2026-10-28
 
