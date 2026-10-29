@@ -43,19 +43,20 @@ test('scanHtml reuses the framework rules: text, attribute keys and params', { s
   assert.deepEqual(entries[2].params, ['count']);
 });
 
-test('scanJs reads slice.t and translator.key, and ignores other objects', { skip }, () => {
+test('scanJs reads slice.t, slice.t.ref and translator.ref, and ignores other objects', { skip }, () => {
   const entries = scanJs(
     [
       "const a = slice.t('orders.title');",
-      "const b = slice.translator.key('orders.save');",
+      "const b = slice.t.ref('orders.save');",
       "const c = translator.t('plural.count', { count });",
       "const d = other.t('not.ours');",
-      "const e = tr('lab.nav.overview', 'Overview');"
+      "const e = tr('lab.nav.overview', 'Overview');",
+      "const f = translator.ref('menu.home');"
     ].join('\n'),
     'Component.js'
   );
 
-  assert.deepEqual(entries.map((entry) => entry.key), ['orders.title', 'orders.save', 'plural.count', 'lab.nav.overview']);
+  assert.deepEqual(entries.map((entry) => entry.key), ['orders.title', 'orders.save', 'plural.count', 'lab.nav.overview', 'menu.home']);
 });
 
 test('scanRawHrefs only reports app paths', () => {

@@ -68,7 +68,7 @@ Reads the dictionaries, then collects every **key in use**:
 | Source | Found as |
 | --- | --- |
 | Component templates (`*.html`) | `data-t="key"` → `key` (text) and `key.<attribute>` for each translatable attribute present (the same rule the framework applies, imported from it) |
-| Component and app code (`*.js`) | `slice.t('key')`, `slice.translator.t('key')`, `slice.translator.key('key')` with a string literal |
+| Component and app code (`*.js`) | `slice.t('key')`, `slice.t('key')`, `slice.t.ref('key')` with a string literal |
 | `seo.json` and `routes.js` `metadata` | `{ "t": "key" }` fields |
 | `App/index.html` | `data-t` |
 
@@ -180,7 +180,7 @@ errors.
   of re-implementing them, as with `validateSeoManifest` in 0001.
 - 2026-10-28 — No `extract`: templates carry keys only (framework 0003).
 - 2026-10-28 — Implemented: `slice translator init` (config block + dictionaries, never overwrites),
-  `slice translator check` (templates, `data-t-*`, `slice.t()`/`key()`/`tr()` calls, missing keys per
+  `slice translator check` (templates, `data-t-*`, `slice.t()`/`t.ref()`/`tr()` calls, missing keys per
   locale, plural `other`, param drift, raw hrefs), a **Translator** row in `doctor`, and locale-aware
   `seo sitemap`/`seo check`/`seo images` (one card per route and locale, keyed by the localized URL).
   The template rules come from the framework's `Translator/dom.js`; unused-key reporting is opt-in

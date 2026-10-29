@@ -77,21 +77,23 @@ export function scanHtml(html, rules, where = '') {
   return entries;
 }
 
-/** `slice.t('key')`, `slice.translator.t('key')`, `translator.key('key')`, and local helpers
+/** `slice.t('key')`, `slice.t.ref('key')`, `slice.translator.t('key')`, and local helpers
  *  named `tr()`/`translate()` (the common wrapper around `slice.t`). */
 export function scanJs(source, where = '') {
   const entries = [];
-  const pattern = /(?:(?:slice(?:\.translator)?|translator)\.(?:t|key)|\b(?:tr|translate))\(\s*(['"])([^'"]+)\1/g;
+  const pattern = /(?:slice\.t\.ref|(?:slice(?:\.translator)?|translator)\.(?:t|ref)|\b(?:tr|translate))\(\s*(['"])([^'"]+)\1/g;
   for (const match of String(source).matchAll(pattern)) {
     entries.push({ key: match[2], where, kind: 'code' });
   }
   return entries;
 }
 
-/** Raw `href="/path"` inside a template (they lose the locale with routing on). */
+/** Raw `href="/path"` inside an anchor (they lose the locale with routing on). */
 export function scanRawHrefs(html) {
   const hrefs = [];
-  for (const match of String(html).matchAll(/\bhref\s*=\s*(['"])(\/[^'"]*)\1/g)) {
+  for (const tag of String(html).matchAll(/<a\b[^>]*>/gi)) {
+    const match = /\bhref\s*=\s*(['"])(\/[^'"]*)\1/i.exec(tag[0]);
+    if (!match) continue;
     const href = match[2];
     if (href.startsWith('//') || href.startsWith('{{')) continue;
     hrefs.push(href);
@@ -224,6 +226,9 @@ export function checkTranslations({ entries, dictionaries, config, rawHrefs = []
 
   const seen = new Set();
   for (const entry of entries) {
+    // Library defaults (`slice.*`) are registered by the component itself in the
+    // translator's defaults layer; the app is not required to copy them.
+    if (entry.key.startsWith('slice.')) continue;
     const id = `${entry.key}|${entry.attribute || ''}`;
     if (seen.has(id)) continue;
     seen.add(id);
