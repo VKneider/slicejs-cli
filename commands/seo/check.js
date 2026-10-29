@@ -14,7 +14,8 @@ import {
   MANIFEST_FILE,
   SITEMAP_FILE,
   loadFrameworkSeo,
-  loadManifest
+  loadManifest,
+  loadSeoTranslator
 } from './support.js';
 
 export async function loadRoutes(projectRoot) {
@@ -42,9 +43,11 @@ export async function checkSeo(options = {}) {
   }
 
   const routes = options.routes || await loadRoutes(projectRoot);
+  const translator = options.translator ?? await loadSeoTranslator(projectRoot, framework);
   const { errors, warnings } = framework.validateSeoManifest(manifest, {
     routes,
-    publicDir: path.join(projectRoot, 'src', 'public')
+    publicDir: path.join(projectRoot, 'src', 'public'),
+    translator
   });
 
   let sitemap = 'ok';
@@ -57,7 +60,7 @@ export async function checkSeo(options = {}) {
       errors.push(`${SITEMAP_FILE} is missing: run \`slice seo sitemap\``);
     } else {
       const origin = framework.normalizeOrigin(manifest.origin);
-      const expected = origin ? framework.buildSitemap({ manifest, origin }) : null;
+      const expected = origin ? framework.buildSitemap({ manifest, origin, translator }) : null;
       if (expected !== null && fs.readFileSync(file, 'utf8') !== expected) {
         sitemap = 'drifted';
         errors.push(`${SITEMAP_FILE} is out of date: run \`slice seo sitemap\``);

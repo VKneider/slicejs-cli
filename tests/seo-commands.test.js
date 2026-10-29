@@ -161,3 +161,64 @@ test('the manifest is also found inside the deployed public folder', { skip }, a
   assert.equal(result.files[0].status, 'created');
   assert.match(fs.readFileSync(sitemapPath(projectRoot), 'utf8'), /<loc>https:\/\/acme.dev\/pricing<\/loc>/);
 });
+
+// -- Translator (framework feature 0003) -----------------------------
+
+const TRANSLATED_MANIFEST = {
+  version: 1,
+  origin: 'https://acme.dev',
+  defaults: { titleTemplate: { t: 'seo.titleTemplate' } },
+  routes: {
+    '/': { title: { t: 'home.title' }, titleTemplate: '%s' },
+    '/pricing': { title: { t: 'pricing.title' } }
+  }
+};
+
+const withTranslator = (root, { missingInEnglish = false } = {}) => {
+  fs.writeFileSync(path.join(root, 'src', 'sliceConfig.json'), JSON.stringify({
+    translator: {
+      enabled: true,
+      defaultLocale: 'es',
+      fallbackLocale: 'es',
+      locales: ['es', 'en'],
+      path: '/locales',
+      routing: 'prefix-except-default'
+    }
+  }));
+  fs.mkdirSync(path.join(root, 'src', 'locales'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'src', 'locales', 'es.json'), JSON.stringify({
+    seo: { titleTemplate: '%s | Acme' },
+    home: { title: 'Inicio' },
+    pricing: { title: 'Precios' }
+  }));
+  fs.writeFileSync(path.join(root, 'src', 'locales', 'en.json'), JSON.stringify({
+    seo: { titleTemplate: '%s | Acme' },
+    home: { title: 'Home' },
+    pricing: missingInEnglish ? {} : { title: 'Pricing' }
+  }));
+  return root;
+};
+
+test('translator: the sitemap lists every locale with alternates', { skip }, async (t) => {
+  const projectRoot = withTranslator(makeProject(t, TRANSLATED_MANIFEST));
+
+  const result = await generateSeoFiles({ projectRoot, framework });
+
+  assert.deepEqual(result.errors, []);
+  const xml = fs.readFileSync(sitemapPath(projectRoot), 'utf8');
+  assert.equal((xml.match(/<url>/g) || []).length, 4);
+  assert.match(xml, /<loc>https:\/\/acme.dev\/pricing<\/loc>/);
+  assert.match(xml, /<loc>https:\/\/acme.dev\/en\/pricing<\/loc>/);
+  assert.match(xml, /hreflang="en" href="https:\/\/acme.dev\/en\/pricing"/);
+  assert.match(xml, /hreflang="x-default" href="https:\/\/acme.dev\/pricing"/);
+  assert.match(xml, /xmlns:xhtml=/);
+});
+
+test('translator: a { t } key missing in one locale blocks the sitemap', { skip }, async (t) => {
+  const projectRoot = withTranslator(makeProject(t, TRANSLATED_MANIFEST), { missingInEnglish: true });
+
+  const result = await generateSeoFiles({ projectRoot, framework });
+
+  assert.ok(result.errors.some((error) => /missing translation "pricing\.title" for "en"/.test(error)));
+  assert.equal(fs.existsSync(sitemapPath(projectRoot)), false);
+});

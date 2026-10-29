@@ -14,6 +14,7 @@ import {
   buildRobotsTxt,
   loadFrameworkSeo,
   loadManifest,
+  loadSeoTranslator,
   writeFileConfirmed
 } from './support.js';
 
@@ -33,7 +34,8 @@ export async function generateSeoFiles(options = {}) {
   }
 
   const { errors, warnings } = framework.validateSeoManifest(manifest, {
-    publicDir: path.join(projectRoot, 'src', 'public')
+    publicDir: path.join(projectRoot, 'src', 'public'),
+    translator: await loadSeoTranslator(projectRoot, framework)
   });
 
   // A sitemap written with localhost URLs is a deploy bug, not a warning.
@@ -43,11 +45,12 @@ export async function generateSeoFiles(options = {}) {
   if (errors.length) return { errors, warnings, files: [] };
 
   const origin = framework.normalizeOrigin(manifest.origin);
+  const translator = await loadSeoTranslator(projectRoot, framework);
   const files = [];
 
   files.push(await writeFileConfirmed(
     path.join(projectRoot, SITEMAP_FILE),
-    framework.buildSitemap({ manifest, origin }),
+    framework.buildSitemap({ manifest, origin, translator }),
     { yes, dryRun, confirm }
   ));
 

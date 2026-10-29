@@ -270,6 +270,10 @@ export default class DependencyAnalyzer {
       this.addFrameworkFileComponent('ContextManagerDebugger', 'ContextManager');
     }
 
+    if (enabledStructural.has('TranslatorDebugger')) {
+      this.addFrameworkFileComponent('TranslatorDebugger', 'Translator');
+    }
+
     if (enabledStructural.has('ThemeManager')) {
       this.addFrameworkFileComponent('ThemeManager', path.join('StylesManager', 'ThemeManager'));
     }
@@ -334,6 +338,10 @@ export default class DependencyAnalyzer {
 
     if (config?.context?.ui?.enabled) {
       enabled.add('ContextManagerDebugger');
+    }
+
+    if (config?.translator?.ui?.enabled) {
+      enabled.add('TranslatorDebugger');
     }
 
     if (config?.themeManager?.enabled) {

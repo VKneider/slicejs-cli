@@ -12,6 +12,48 @@ export const MANIFEST_FILE = 'seo.json';
 export const SITEMAP_FILE = path.join('src', 'public', 'sitemap.xml');
 export const ROBOTS_FILE = path.join('src', 'public', 'robots.txt');
 
+/**
+ * The app's translator (config + dictionaries) as the framework's SEO context, or null
+ * for a single-language app / an older framework. `src` wins over `dist`: the CLI reads
+ * the authoring copy.
+ */
+export async function loadSeoTranslator(projectRoot, framework) {
+  let translator = null;
+  for (const folder of ['src', 'dist']) {
+    const file = path.join(projectRoot, folder, 'sliceConfig.json');
+    if (!fs.existsSync(file)) continue;
+    try {
+      translator = JSON.parse(fs.readFileSync(file, 'utf8')).translator || null;
+    } catch {
+      translator = null;
+    }
+    if (translator) break;
+  }
+
+  if (translator?.enabled !== true || typeof framework?.buildTranslatorContext !== 'function') {
+    return null;
+  }
+
+  const folder = String(translator.path || '/locales').replace(/^\/+|\/+$/g, '') || 'locales';
+  const locales = [
+    translator.defaultLocale,
+    ...(Array.isArray(translator.locales) ? translator.locales : []),
+    translator.fallbackLocale
+  ].filter((value) => typeof value === 'string' && value);
+
+  const dictionaries = {};
+  for (const locale of [...new Set(locales)]) {
+    for (const base of ['src', 'dist']) {
+      const file = path.join(projectRoot, base, folder, `${locale}.json`);
+      if (!fs.existsSync(file)) continue;
+      dictionaries[locale] = JSON.parse(fs.readFileSync(file, 'utf8'));
+      break;
+    }
+  }
+
+  return framework.buildTranslatorContext(translator, dictionaries);
+}
+
 export const resolveRoot = (moduleUrl) => getProjectRoot(moduleUrl);
 
 /**

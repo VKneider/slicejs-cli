@@ -15,7 +15,7 @@ import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import Print from '../Print.js';
-import { loadManifest, writeFileConfirmed } from './support.js';
+import { loadFrameworkSeo, loadManifest, loadSeoTranslator, writeFileConfirmed } from './support.js';
 
 const CARD = { width: 1200, height: 630 };
 const DEVICE_SCALE = 2;
@@ -86,6 +86,27 @@ export function selectRoutes(manifest, only = null) {
     })
     .map(([route, meta]) => ({ route, meta }))
     .sort((a, b) => a.route.localeCompare(b.route));
+}
+
+/**
+ * One card target per route — or per route and locale when the translator puts the locale
+ * in the URL. `url` is both what the browser captures and the key in the cards manifest,
+ * so the server can pick the card for the exact page it is serving.
+ */
+export function cardTargets(manifest, translator = null, only = null) {
+  const wanted = only ? new Set(String(only).split(',').map((item) => item.trim())) : null;
+  const locales = translator?.enabled ? translator.locales : [null];
+  const targets = [];
+
+  for (const { route, meta } of selectRoutes(manifest, null)) {
+    for (const locale of locales) {
+      const url = translator?.enabled ? translator.localize(route, locale) : route;
+      if (wanted && !wanted.has(route) && !wanted.has(url)) continue;
+      targets.push({ route, url, locale, meta });
+    }
+  }
+
+  return targets;
 }
 
 /** Neutral 1200×630 card. `template` replaces it entirely. */
@@ -358,8 +379,22 @@ export async function generateImages(options = {}) {
     ...(options.selector ? { selector: options.selector } : {}),
     ...(options.outDir || options.out ? { outDir: options.outDir || options.out } : {})
   };
-  const routes = selectRoutes(manifest, only);
-  if (!routes.length) {
+
+  // The translator is optional: an older framework, or a project that has not enabled it,
+  // yields one single-language target per route and the old manifest keys.
+  let frameworkSeo = options.framework || null;
+  let translator = options.translator ?? null;
+  if (translator === null) {
+    try {
+      frameworkSeo = frameworkSeo || await loadFrameworkSeo(projectRoot);
+      translator = await loadSeoTranslator(projectRoot, frameworkSeo);
+    } catch {
+      translator = null;
+    }
+  }
+
+  const targets = cardTargets(manifest, translator, only);
+  if (!targets.length) {
     return { errors: [`no indexable route matched${only ? ` --only=${only}` : ''}`], files: [], patched: null };
   }
 
@@ -409,15 +444,24 @@ export async function generateImages(options = {}) {
       locale: config.locale || 'en-US'
     });
 
-    for (const { route, meta } of routes) {
+    for (const target of targets) {
       const page = await captureContext.newPage();
       const cardPage = await cardContext.newPage();
       try {
         await page.clock?.setFixedTime?.(FIXED_TIME).catch?.(() => {});
-        const capture = await captureRoute(page, { baseUrl, route, selector: config.selector, runner: runnerModule });
+        const capture = await captureRoute(page, {
+          baseUrl,
+          route: target.url,
+          selector: config.selector,
+          runner: runnerModule
+        });
+        const rawTitle = translator?.enabled
+          ? frameworkSeo?.resolveSeoText?.(target.meta.title, (key, params) => translator.t(target.locale, key, params))
+          : target.meta.title;
+        const title = typeof rawTitle === 'string' && rawTitle ? rawTitle : target.route;
         const card = await encodeCard(cardPage, {
-          title: meta.title || route,
-          route,
+          title,
+          route: target.url,
           host,
           shot: capture.shot,
           kind: capture.kind,
@@ -426,7 +470,8 @@ export async function generateImages(options = {}) {
         });
 
         const hash = createHash('sha256').update(card.buffer).digest('hex').slice(0, 10);
-        const fileName = `${routeSlug(route)}-${hash}${card.ext}`;
+        const prefix = target.locale ? `${target.locale}-` : '';
+        const fileName = `${prefix}${routeSlug(target.route)}-${hash}${card.ext}`;
         const file = path.join(outDir, fileName);
 
         if (card.buffer.length > budgetBytes) {
@@ -438,7 +483,7 @@ export async function generateImages(options = {}) {
           if (!fs.existsSync(file)) await fsp.writeFile(file, card.buffer);
         }
 
-        images[route] = {
+        images[target.url] = {
           path: `/og/${fileName}`,
           width: CARD.width,
           height: CARD.height,
@@ -446,10 +491,10 @@ export async function generateImages(options = {}) {
           bytes: card.buffer.length,
           kind: capture.kind
         };
-        files.push({ route, file, status: dryRun ? 'would-write' : 'written', bytes: card.buffer.length });
+        files.push({ route: target.url, file, status: dryRun ? 'would-write' : 'written', bytes: card.buffer.length });
       } catch (error) {
         failed += 1;
-        files.push({ route, status: 'failed', error: error.message });
+        files.push({ route: target.url, status: 'failed', error: error.message });
       } finally {
         await page.close();
         await cardPage.close();
@@ -506,7 +551,7 @@ const readExistingManifest = (outDir) => {
 };
 
 /** `--check`: no browser, no server. Every indexable route must have a card that fits. */
-export function checkImages({ projectRoot, only = null }) {
+export function checkImages({ projectRoot, only = null, translator = null }) {
   const { manifest } = loadManifest(projectRoot);
   if (!manifest) return { errors: ['seo.json not found'], checks: [] };
 
@@ -515,24 +560,24 @@ export function checkImages({ projectRoot, only = null }) {
   const outDir = path.isAbsolute(configuredOut) ? configuredOut : path.join(projectRoot, configuredOut);
   const budgetBytes = Math.round((config.budgetKB || DEFAULT_BUDGET_KB) * 1024);
   const cards = readExistingManifest(outDir)?.images || {};
-  const routes = selectRoutes(manifest, only);
+  const targets = cardTargets(manifest, translator, only);
   const errors = [];
   const checks = [];
 
-  for (const { route } of routes) {
-    const card = cards[route];
-    if (!card) { errors.push(`${route} has no card: run \`slice seo images\``); continue; }
+  for (const { url } of targets) {
+    const card = cards[url];
+    if (!card) { errors.push(`${url} has no card: run \`slice seo images\``); continue; }
     const file = path.join(projectRoot, config.outDir || DEFAULT_OUT_DIR, path.basename(card.path));
-    if (!fs.existsSync(file)) { errors.push(`${route}: missing ${card.path}`); continue; }
+    if (!fs.existsSync(file)) { errors.push(`${url}: missing ${card.path}`); continue; }
     const buffer = fs.readFileSync(file);
     const size = imageSize(buffer);
     if (size.width !== CARD.width || size.height !== CARD.height) {
-      errors.push(`${route}: ${size.width}×${size.height}, expected ${CARD.width}×${CARD.height}`);
+      errors.push(`${url}: ${size.width}×${size.height}, expected ${CARD.width}×${CARD.height}`);
     }
     if (buffer.length > budgetBytes) {
-      errors.push(`${route}: ${(buffer.length / 1024).toFixed(1)} KB over the budget`);
+      errors.push(`${url}: ${(buffer.length / 1024).toFixed(1)} KB over the budget`);
     }
-    checks.push(route);
+    checks.push(url);
   }
 
   return { errors, checks };
@@ -551,7 +596,15 @@ const STATUS = {
 export default async function imagesCommand(options = {}, projectRoot) {
   try {
     if (options.check) {
-      const result = checkImages({ projectRoot, only: options.only });
+      let translator = options.translator ?? null;
+      if (translator === null) {
+        try {
+          translator = await loadSeoTranslator(projectRoot, await loadFrameworkSeo(projectRoot));
+        } catch {
+          translator = null;
+        }
+      }
+      const result = checkImages({ projectRoot, only: options.only, translator });
       if (result.errors.length) {
         for (const error of result.errors) Print.error(error);
         Print.error(`SEO images check failed: ${result.errors.length} problem(s).`);
