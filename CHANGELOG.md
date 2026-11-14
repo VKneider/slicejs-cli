@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `slice export` (experimental): package `dist/` for a static host. Flattens `dist/public` to the
+  root, writes `index.html`/`404.html` and `slice-env.json`, and generates Cloudflare/Netlify,
+  Vercel, nginx or GitHub rules. Supports `--from-dist`, `--check` and `--dry-run`. Per-route SEO
+  prerendering and `base` path hosting remain pending.
+
 ### Changed
 
 - Output pass: `Print` uses one symbol per severity (`✔ ! ✖ • →`), help descriptions are shorter,

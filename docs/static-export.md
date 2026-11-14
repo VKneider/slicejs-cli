@@ -8,8 +8,10 @@ This is an internal design doc. The user-facing guide belongs in
 `slicejs_docs/markdown/` (e.g. `getting-started/deployment.md`) once the command
 ships.
 
-Status: **proposal**. Verified against `slicejs-web-framework@4.2.0` and
-`slicejs-cli@4.5.0`.
+Status: **MVP implemented on `experiment/static-export`** (2026-11-14);
+phases 2–4 are pending. The MVP covers the root layout, `index.html`,
+`404.html`, `slice-env.json`, Cloudflare/Netlify/Vercel/nginx/GitHub rules,
+`--from-dist`, `--check` and `--dry-run`.
 
 Related: `features/0005-static-export.md` (feature record).
 

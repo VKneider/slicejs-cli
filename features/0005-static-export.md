@@ -2,11 +2,11 @@
 id: "0005"
 title: "Static export: serve a Slice app without the Express server"
 repo: "slicejs-cli"
-status: proposed
+status: in-progress
 area: cli
 priority: medium
 created: 2026-11-08
-updated: 2026-11-08
+updated: 2026-11-14
 target: TBD
 owners: []
 related: []
@@ -129,3 +129,13 @@ user repeats, and the framework's own `--compress` flag already advertises
 
 - 2026-11-08 - Created as `proposed` after a static-hosting analysis of the
   framework and CLI 4.2.0/4.5.0.
+- 2026-11-14 - MVP implemented on `experiment/static-export`: `slice export
+  --from-dist` flattens `dist/public` to the root, creates `index.html` /
+  `404.html`, freezes `slice-env.json` through the framework's exported env
+  resolver, and writes Cloudflare/Netlify, Vercel, nginx or GitHub rules.
+- 2026-11-14 - Validated against Conclave with a dumb static server: `/`,
+  `/plantilla`, `/dashboard`, `/mis-respuestas` and `/comparar` render; an
+  unknown route reaches the app's 404 view. The pre-existing `UserMenu`
+  `createElement` error also appears under `slice start`, so it is not caused by
+  the export. Phase 2 (per-route SEO prerender, locale redirects) and phase 4
+  (`base` path) remain open.
