@@ -7,12 +7,26 @@
 // back to the SPA shell.
 import fs from 'fs-extra';
 import path from 'path';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import Print from '../Print.js';
 import { getProjectRoot, getDistPath } from '../utils/PathHelper.js';
-import { resolvePublicEnv } from 'slicejs-web-framework/api/framework/publicEnvResolver.js';
 import build from '../build/build.js';
 
 const HOSTS = new Set(['cloudflare', 'netlify', 'vercel', 'nginx', 'github', 's3', 'none']);
+
+// Prefer the package export (added with this feature), but fall back to the
+// file path so an older framework release still works.
+async function loadPublicEnvResolver() {
+  try {
+    return await import('slicejs-web-framework/api/framework/publicEnvResolver.js');
+  } catch {
+    const require = createRequire(import.meta.url);
+    const entry = require.resolve('slicejs-web-framework');
+    const packageRoot = path.resolve(path.dirname(entry), '..');
+    return import(pathToFileURL(path.join(packageRoot, 'api', 'framework', 'publicEnvResolver.js')).href);
+  }
+}
 
 function normalizeHost(value) {
   const host = String(value || 'cloudflare').toLowerCase();
@@ -51,6 +65,7 @@ async function flattenPublic(outDir) {
 }
 
 async function writeEnv(outDir, projectRoot) {
+  const { resolvePublicEnv } = await loadPublicEnvResolver();
   const payload = resolvePublicEnv({
     mode: 'production',
     envFilePath: path.join(projectRoot, '.env')
