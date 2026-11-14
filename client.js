@@ -25,6 +25,7 @@ import { spawnSync } from "node:child_process";
 import validations from "./commands/Validations.js";
 import Print from "./commands/Print.js";
 import build from './commands/build/build.js';
+import exportStatic from './commands/export/export.js';
 import lintCommand from './commands/lint/lint.js';
 import typecheckCommand from './commands/typecheck/typecheck.js';
 import setupLintCommand from './commands/setup/lint.js';
@@ -333,6 +334,28 @@ buildCommand
   .option("--hash-filenames", "Add a content hash to bundle filenames for immutable CDN caching")
   .option("--compress", "Precompress dist assets to .gz and .br (brotli) for static serving")
   .option("--skip-clean", "Skip cleaning dist before build");
+
+// EXPORT COMMAND - STATIC HOST PACKAGE (experimental)
+sliceClient
+  .command("export")
+  .description("Package the production build for a static host")
+  .option("-o, --out <dir>", "Output directory", "dist-static")
+  .option("--from-dist", "Reuse dist/ instead of running a build")
+  .option("--host <name>", "Host rules: cloudflare, netlify, vercel, nginx, github, s3, none", "cloudflare")
+  .option("--check", "Validate an existing export without writing")
+  .option("--dry-run", "Report what would be written without writing")
+  .option("--sourcemap", "Emit source maps (not recommended for a public export)")
+  .option("--hash-filenames", "Add a content hash to bundle filenames")
+  .option("--compress", "Precompress dist assets (delegated to build)")
+  .option("--no-minify", "Disable minification (enabled by default)")
+  .option("--no-obfuscate", "Disable obfuscation (enabled by default)")
+  .action(async (options) => {
+    await withNodeEnv('production', () => runWithVersionCheck(async () => {
+      const ok = await exportStatic(options);
+      if (ok === false) process.exitCode = 1;
+      return ok;
+    }));
+  });
 
 // DEV COMMAND (DEVELOPMENT)
 sliceClient
