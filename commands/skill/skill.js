@@ -180,7 +180,7 @@ async function addSkill(options = {}) {
   }
 
   Print.success(`Skill '${manifest.name}' v${manifest.version} installed at ${manifest.installPath}/`);
-  Print.info("Reload Claude Code (or restart the session) to pick up the skill.");
+  Print.info("Reload your agent session (Claude Code, OpenCode, …) to pick up the skill.");
   return true;
 }
 
@@ -213,7 +213,7 @@ async function statusSkill() {
   const installDir = path.join(projectRoot, manifest.installPath);
   const localVersion = readLocalVersion(installDir);
 
-  Print.title("Slice.js Claude Code skill");
+  Print.title("Slice.js developer skill");
   console.log(`  name:      ${manifest.name}`);
   console.log(`  latest:    v${manifest.version} (targets ${manifest.targets})`);
   console.log(`  installed: ${localVersion ? "v" + localVersion : "not installed"}`);

@@ -88,7 +88,7 @@ export default async function checkCommand(options = {}, projectRoot) {
       `SEO OK: sitemap ${result.sitemap}, ${result.routes} route(s) cross-checked.`
     );
   } catch (error) {
-    Print.error('slice seo check failed:', error.message);
+    Print.error(`slice seo check failed: ${error.message}`);
     process.exitCode = 1;
   }
 }

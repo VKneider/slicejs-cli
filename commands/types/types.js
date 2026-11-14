@@ -233,9 +233,27 @@ const mergeCatalog = (registry, catalog, prefix = '') => {
 };
 
 // Scan src/**/*.js for slice.events.register(<catalog>) calls and build the event registry.
+// Source files that participate in the static event graph. Specs, tests and
+// generated artifacts must never be documented as application emitters.
+const isEventSourceFile = (filePath, srcDir) => {
+  const name = path.basename(filePath).toLowerCase();
+  if (name.endsWith('.spec.js') || name.endsWith('.test.js') || name.endsWith('.generated.js')) return false;
+  const relative = path.relative(srcDir, filePath).replace(/\\/g, '/');
+  if (relative.startsWith('public/') || relative.startsWith('bundles/')) return false;
+  return true;
+};
+
+const collectEventSourceFiles = async (srcDir) =>
+  (await collectJavaScriptFiles(srcDir)).filter((file) => isEventSourceFile(file, srcDir));
+
+const categoryForEventSource = (relFile) => {
+  const match = relFile.match(/^src\/Components\/([^/]+)\//);
+  return match ? match[1] : null;
+};
+
 const collectEventRegistry = async ({ projectRoot }) => {
   const srcDir = joinRoot(projectRoot, 'src');
-  const files = await collectJavaScriptFiles(srcDir);
+  const files = await collectEventSourceFiles(srcDir);
   const registry = {};
 
   for (const file of files) {
@@ -342,7 +360,7 @@ const enclosingClassName = (pathRef) => {
 // Returns { events: { name: { emitters:[], listeners:[] } }, dynamic: { emitters:[], listeners:[] } }.
 const collectEventGraph = async ({ projectRoot }) => {
   const srcDir = joinRoot(projectRoot, 'src');
-  const files = await collectJavaScriptFiles(srcDir);
+  const files = await collectEventSourceFiles(srcDir);
   const events = {};
   const dynamic = { emitters: [], listeners: [] };
 
@@ -378,7 +396,8 @@ const collectEventGraph = async ({ projectRoot }) => {
         const site = {
           file: relFile,
           line: pathRef.node.loc?.start?.line || 0,
-          component: enclosingClassName(pathRef)
+          component: enclosingClassName(pathRef),
+          category: categoryForEventSource(relFile)
         };
 
         const nameArg = pathRef.node.arguments[0];

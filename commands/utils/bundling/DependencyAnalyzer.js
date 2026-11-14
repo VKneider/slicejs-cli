@@ -16,13 +16,17 @@ export default class DependencyAnalyzer {
     this.components = new Map();
     this.routes = new Map();
     this.dependencyGraph = new Map();
+
+    // Dynamic slice.build() calls found while parsing component files. They are
+    // collected and reported as one line instead of one warning per call.
+    this.dynamicBuildCalls = [];
+    this.dynamicBuildKeys = new Set();
   }
 
   /**
    * Executes complete project analysis
    */
   async analyze() {
-    console.log('🔍 Analyzing project...');
 
     // 1. Load component configuration
     await this.loadComponentsConfig();
@@ -40,8 +44,6 @@ export default class DependencyAnalyzer {
     // 5. Calculate metrics
     const metrics = this.calculateMetrics();
 
-    console.log('✅ Analysis completed');
-
     return {
       components: Array.from(this.components.values()),
       routes: Array.from(this.routes.values()),
@@ -49,6 +51,26 @@ export default class DependencyAnalyzer {
       routeGroups: this.routeGroups,
       metrics
     };
+  }
+
+  /**
+   * Reports every dynamic `slice.build()` call as one line. They are valid at
+   * runtime but cannot be linked into a bundle, so they used to produce one long
+   * warning per call and drown the build result.
+   */
+  reportDynamicBuildWarnings() {
+    if (this.dynamicBuildCalls.length === 0) return;
+
+    const count = this.dynamicBuildCalls.length;
+    const plural = count === 1 ? '' : 's';
+    const locations = this.dynamicBuildCalls
+      .map(({ file, line }) => `${file}${line ? `:${line}` : ''}`)
+      .join(', ');
+
+    console.warn(
+      `! ${count} dynamic slice.build() call${plural} cannot be bundled (runtime-only): ${locations}. ` +
+      'Use a string literal or a resolvable constant to bundle them.'
+    );
   }
 
   /**
@@ -363,7 +385,8 @@ export default class DependencyAnalyzer {
     // `path` is shadowed by the Babel NodePath param inside visitors, so derive
     // the label here where `path` is still the node module.
     const componentLabel = componentFilePath ? path.basename(componentFilePath) : '';
-    const warnedDynamicBuilds = new Set();
+    // Babel visitor methods are plain functions, so `this` is not the analyzer.
+    const analyzer = this;
 
     const resolveRoutesArray = (node, scope) => {
       if (!node) return null;
@@ -526,7 +549,7 @@ export default class DependencyAnalyzer {
       const baseDir = path.dirname(fromFilePath);
       const resolvedPath = resolveImportPath(importPath, baseDir);
       if (!resolvedPath) {
-        console.warn(`⚠️  Cannot resolve import for MultiRoute routes: ${importPath}`);
+        console.warn(`Cannot resolve import for MultiRoute routes: ${importPath}`);
         return null;
       }
 
@@ -591,7 +614,7 @@ export default class DependencyAnalyzer {
         resolveImportedValue.cache.set(cacheKey, exportNode || null);
         return exportNode || null;
       } catch (error) {
-        console.warn(`⚠️  Error resolving import ${importPath}: ${error.message}`);
+        console.warn(`Error resolving import ${importPath}: ${error.message}`);
         resolveImportedValue.cache.set(cacheKey, null);
         return null;
       }
@@ -738,12 +761,10 @@ export default class DependencyAnalyzer {
                 ? code.slice(args[0].start, args[0].end)
                 : '<expr>';
               const line = args[0].loc?.start?.line;
-              const key = `${snippet}@${line ?? '?'}`;
-              if (!warnedDynamicBuilds.has(key)) {
-                warnedDynamicBuilds.add(key);
-                const where = componentLabel ? ` in ${componentLabel}` : '';
-                const at = line ? `:${line}` : '';
-                console.warn(`⚠️  Dynamic slice.build(${snippet})${where}${at} — the component name is computed at runtime, so it can't be linked into a bundle. It will still load individually at runtime (no bundle optimization). Use a string literal or a resolvable constant to bundle it.`);
+              const key = `${componentFilePath || componentLabel}:${line ?? '?'}:${snippet}`;
+              if (!analyzer.dynamicBuildKeys.has(key)) {
+                analyzer.dynamicBuildKeys.add(key);
+                analyzer.dynamicBuildCalls.push({ file: componentLabel || 'unknown', line, snippet });
               }
             }
           }
@@ -759,7 +780,7 @@ export default class DependencyAnalyzer {
         }
       });
     } catch (error) {
-      console.warn(`⚠️  Error parsing component: ${error.message}`);
+      console.warn(`Error parsing component: ${error.message}`);
     }
 
     return dependencies;
@@ -815,7 +836,7 @@ export default class DependencyAnalyzer {
       this.routeGroups = this.detectRouteGroups();
 
     } catch (error) {
-      console.warn(`⚠️  Error parsing routes at ${this.routesPath}: ${error.message}`);
+      console.warn(`Error parsing routes at ${this.routesPath}: ${error.message}`);
     }
   }
 
@@ -966,19 +987,19 @@ export default class DependencyAnalyzer {
    * Generates a visual report of the analysis
    */
   generateReport(metrics) {
-    console.log('\n📊 PROJECT ANALYSIS\n');
+    console.log('\nProject analysis\n');
     console.log(`Total components: ${metrics.totalComponents}`);
     console.log(`Total routes: ${metrics.totalRoutes}`);
     console.log(`Shared components: ${metrics.sharedComponentsCount} (${metrics.sharedPercentage}%)`);
     console.log(`Total size: ${(metrics.totalSize / 1024).toFixed(1)} KB`);
     console.log(`Average size: ${(metrics.averageSize / 1024).toFixed(1)} KB per component`);
 
-    console.log('\n📦 By category:');
+    console.log('\nBy category:');
     for (const [category, count] of Object.entries(metrics.byCategory)) {
       console.log(`  ${category}: ${count} components`);
     }
 
-    console.log('\n🔥 Top 10 most used components:');
+    console.log('\nTop 10 most used components:');
     metrics.topByUsage.forEach((comp, i) => {
       console.log(`  ${i + 1}. ${comp.name} - ${comp.routes} routes - ${(comp.size / 1024).toFixed(1)} KB`);
     });

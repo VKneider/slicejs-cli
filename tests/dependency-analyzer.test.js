@@ -53,14 +53,32 @@ test('extractDependencies resolves slice.build(constant) via scope', async () =>
   assert.equal(warnings.filter((w) => w.includes('Dynamic slice.build')).length, 0);
 });
 
-test('extractDependencies warns on a truly dynamic slice.build() and does not link it', async () => {
+test('extractDependencies collects a dynamic slice.build() and reports it once', async () => {
   const analyzer = new DependencyAnalyzer(import.meta.url);
   const code = "function make(name) { return slice.build(name); }";
-  const { result, warnings } = await withCapturedWarnings(() =>
-    analyzer.extractDependencies(code, 'Widget.js'));
-  const dynamicWarnings = warnings.filter((w) => w.includes('Dynamic slice.build'));
-  assert.equal(dynamicWarnings.length, 1, 'expected exactly one dynamic-build warning');
-  assert.match(dynamicWarnings[0], /Widget\.js/);
+  const { result, warnings } = await withCapturedWarnings(async () => {
+    const dependencies = await analyzer.extractDependencies(code, 'Widget.js');
+    analyzer.reportDynamicBuildWarnings();
+    return dependencies;
+  });
+  assert.equal(warnings.length, 1, 'expected exactly one grouped warning');
+  assert.match(warnings[0], /1 dynamic slice\.build\(\) call/);
+  assert.match(warnings[0], /Widget\.js/);
   // Nothing linkable was added for the computed name.
   assert.equal(result.size, 0);
+});
+
+test('reportDynamicBuildWarnings groups calls from every file into one line', async () => {
+  const analyzer = new DependencyAnalyzer(import.meta.url);
+  const code = "function make(name) { return slice.build(name); }";
+  const { warnings } = await withCapturedWarnings(async () => {
+    await analyzer.extractDependencies(code, 'Widget.js');
+    await analyzer.extractDependencies(code, 'Other.js');
+    analyzer.reportDynamicBuildWarnings();
+  });
+
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /2 dynamic slice\.build\(\) calls/);
+  assert.match(warnings[0], /Widget\.js/);
+  assert.match(warnings[0], /Other\.js/);
 });

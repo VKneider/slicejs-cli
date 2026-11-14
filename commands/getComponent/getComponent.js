@@ -14,6 +14,23 @@ import ora from "ora";
 const DOCS_REPO_BASE_URL = 'https://raw.githubusercontent.com/VKneider/slicejs-components/master/src/Components';
 const COMPONENTS_REGISTRY_URL = 'https://raw.githubusercontent.com/VKneider/slicejs-components/master/src/Components/components.js';
 
+function wrapNames(names, indent = '  ') {
+  const width = Math.max(40, (process.stdout.columns || 80) - indent.length);
+  const lines = [];
+  let current = '';
+  for (const name of names) {
+    const next = current ? `${current}, ${name}` : name;
+    if (next.length > width && current) {
+      lines.push(current);
+      current = name;
+    } else {
+      current = next;
+    }
+  }
+  if (current) lines.push(current);
+  return lines.map((line) => `${indent}${line}`);
+}
+
 /**
  * Loads configuration from sliceConfig.json
  * @returns {object} - Configuration object
@@ -140,7 +157,7 @@ filterOfficialComponents(allComponents) {
 
       return JSON.parse(match[1]);
     } catch (error) {
-      Print.warning(`⚠️  Could not read the local component registry at: ${componentsPath}`);
+      Print.warning(`Could not read the local component registry at ${componentsPath}`);
       return {};
     }
   }
@@ -378,8 +395,8 @@ filterOfficialComponents(allComponents) {
       await this.updateLocalRegistrySafe(componentName, category);
 
       Print.success(`${componentName} installed successfully from official repository!`);
-      console.log(`📁 Location: ${[folderSuffix, categoryPath, componentName].join('/').replace(/\/+/g, '/')}/`);
-      console.log(`📄 Files: ${downloadedFiles.join(', ')}`);
+      console.log(`Location: ${[folderSuffix, categoryPath, componentName].join('/').replace(/\/+/g, '/')}/`);
+      console.log(`Files: ${downloadedFiles.join(', ')}`);
 
       // Resolve and install what this component pulls in: other components via
       // slice.build('X') or relative imports, and helper .js modules it imports.
@@ -570,10 +587,10 @@ filterOfficialComponents(allComponents) {
     }
 
     Print.newLine();
-    Print.subtitle(`Found ${updatableComponents.length} updatable Visual components:`);
+    Print.subtitle(`Found ${updatableComponents.length} updatable Visual components`);
     Print.newLine();
     updatableComponents.forEach(comp => {
-      console.log(`🎨 ${comp.name} (${comp.category})`);
+      console.log(`  ${comp.name} (${comp.category})`);
     });
 
     if (!force) {
@@ -603,7 +620,7 @@ filterOfficialComponents(allComponents) {
     const totalFailed = results.filter(r => !r.success).length;
 
     Print.newLine();
-    Print.title('Visual Components Sync Summary');
+    Print.title('Sync summary');
     Print.success(`Visual components updated: ${totalSuccessful}`);
     
     if (totalFailed > 0) {
@@ -625,40 +642,28 @@ filterOfficialComponents(allComponents) {
 
   displayAvailableComponents() {
     if (!this.componentsRegistry) {
-      Print.error('❌ Could not load component registry');
+      Print.error('Could not load component registry');
       return;
     }
 
-    console.log('\n📚 Available components in the official Slice.js repository:\n');
-
     const visualComponents = this.getAvailableComponents('Visual');
     const serviceComponents = this.getAvailableComponents('Service');
+    const visualNames = Object.keys(visualComponents).sort((a, b) => a.localeCompare(b));
+    const serviceNames = Object.keys(serviceComponents).sort((a, b) => a.localeCompare(b));
 
-    // Only show names without descriptions
-    Print.info('🎨 Visual Components (UI):');
-    Object.keys(visualComponents).forEach(name => {
-      const files = visualComponents[name].files;
-      const fileIcons = files.map(file => {
-        if (file.endsWith('.js')) return '📜';
-        if (file.endsWith('.html')) return '🌐';
-        if (file.endsWith('.css')) return '🎨';
-        return '📄';
-      }).join(' ');
-      console.log(`  • ${name} ${fileIcons}`);
-    });
-
-    Print.info('\n⚙️  Service Components (Logic):');
-    Object.keys(serviceComponents).forEach(name => {
-      console.log(`  • ${name} 📜`);
-    });
+    Print.title('Available components');
+    Print.subtitle(`Visual (${visualNames.length})`);
+    for (const line of wrapNames(visualNames)) console.log(line);
+    Print.newLine();
+    Print.subtitle(`Service (${serviceNames.length})`);
+    for (const line of wrapNames(serviceNames)) console.log(line);
 
     Print.newLine();
-    Print.info(`Total: ${Object.keys(visualComponents).length} Visual + ${Object.keys(serviceComponents).length} Service components`);
-
-    console.log(`\n💡 Usage examples:`);
-    console.log(`slice get Button Card Input          # Install Visual components`);
-    console.log(`slice get FetchManager --service     # Install Service component`);
-    console.log(`slice sync                           # Sync Visual components`);
+    Print.info(`Total: ${visualNames.length} Visual + ${serviceNames.length} Service components`);
+    Print.subtitle('Usage examples');
+    Print.commandExample('Install Visual components', 'slice get Button Card Input');
+    Print.commandExample('Install a Service component', 'slice get FetchManager --service');
+    Print.commandExample('Sync Visual components', 'slice sync');
   }
 
   async interactiveInstall() {
@@ -668,8 +673,8 @@ filterOfficialComponents(allComponents) {
         name: 'componentType',
         message: 'Select the type of component to install from the repository:',
         choices: [
-          { name: '🎨 Visual Components (UI)', value: 'Visual' },
-          { name: '⚙️  Service Components (Logic)', value: 'Service' }
+          { name: 'Visual components (UI)', value: 'Visual' },
+          { name: 'Service components (logic)', value: 'Service' }
         ]
       }
     ]);

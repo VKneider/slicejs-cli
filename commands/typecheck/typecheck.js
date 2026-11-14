@@ -42,7 +42,7 @@ export default async function typecheckCommand(options = {}, projectRoot) {
       const types = await runTypeRefresh(projectRoot, options);
       if (types) reportTypesRefresh(types, projectRoot);
     } catch (error) {
-      Print.warning('Could not refresh the generated types:', error.message);
+      Print.warning(`Could not refresh the generated types: ${error.message}`);
     }
   }
 
@@ -69,7 +69,7 @@ export default async function typecheckCommand(options = {}, projectRoot) {
   });
 
   if (result.error) {
-    Print.error('Could not run tsc:', result.error.message);
+    Print.error(`Could not run tsc: ${result.error.message}`);
     process.exitCode = 1;
     return false;
   }

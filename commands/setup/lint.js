@@ -120,7 +120,7 @@ export default async function setupLintCommand(options = {}, projectRoot) {
   try {
     result = await setupLint({ projectRoot, dryRun, withTypes: Boolean(options.withTypes) });
   } catch (error) {
-    Print.error('slice setup lint:', error.message);
+    Print.error(`slice setup lint: ${error.message}`);
     process.exitCode = 1;
     return false;
   }

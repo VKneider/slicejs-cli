@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Output pass: `Print` uses one symbol per severity (`✔ ! ✖ • →`), help descriptions are shorter,
+  stack traces require `SLICE_DEBUG=1`, and emoji prefixes are gone from build, bundle, update and
+  `get` output.
+- `slice component list` is a compact category summary by default, with `--all`, `--category` and
+  `--json`.
+- `slice dev` / `slice start` print the READY banner once; the spawned server's readiness line is
+  consumed instead of repeated.
+- `slice build` is compact by default: phase successes, build size, bundle counts and request
+  reduction. `--verbose` restores per-file sizes and the per-route bundle list. The obsolete
+  "Update your Slice.js" next step is gone and the run ends with one `Build completed` block.
+- Bundler warnings use the `!` line and are deduplicated. Dynamic `slice.build()` calls that cannot
+  be linked are grouped into one warning with the file list instead of one long warning per call.
+
 ## [4.5.0] - 2026-10-29
 
 ### Added

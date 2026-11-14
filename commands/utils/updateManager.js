@@ -130,16 +130,16 @@ export class UpdateManager {
         }
 
         console.log('');
-        Print.warning('📦 Available Updates:');
+        Print.subtitle('Available updates');
         console.log('');
 
         updateInfo.updates.forEach(pkg => {
-            console.log(`   ${pkg.type === 'cli' ? '🔧' : '⚡'} ${pkg.displayName}`);
+            console.log(`   ${pkg.displayName}`);
             console.log(`      ${pkg.current} → ${pkg.latest}`);
         });
 
         console.log('');
-        console.log('   📚 Changelog: https://github.com/VKneider/slice.js/releases');
+        console.log('   Changelog: https://github.com/VKneider/slice.js/releases');
         console.log('');
     }
 
@@ -296,7 +296,7 @@ export class UpdateManager {
             }
 
             if (updateInfo.allCurrent || !updateInfo.hasUpdates) {
-                Print.success('✅ All components are up to date!');
+                Print.success('All components are up to date');
                 // --update-api works even when no package update runs.
                 if (options.updateApi) {
                     await this.updateApiIndexIfNeeded(options);
@@ -318,7 +318,7 @@ export class UpdateManager {
         // Show plan and confirm installation if not auto-confirmed
         let plan = await this.buildUpdatePlan(packagesToUpdate);
         console.log('');
-        Print.info('🧭 Update plan:');
+        Print.subtitle('Update plan');
         plan.forEach(item => {
             const where = item.target === 'global' ? 'GLOBAL' : 'PROJECT';
             console.log(`   • ${item.package} → ${where}`);
@@ -341,7 +341,7 @@ export class UpdateManager {
                     packagesToUpdate.push('slicejs-cli');
                     plan = await this.buildUpdatePlan(packagesToUpdate);
                     console.log('');
-                    Print.info('🧭 Updated plan:');
+                    Print.subtitle('Updated plan');
                     plan.forEach(item => {
                         const where = item.target === 'global' ? 'GLOBAL' : 'PROJECT';
                         console.log(`   • ${item.package} → ${where}`);
@@ -373,7 +373,7 @@ export class UpdateManager {
             }
 
             console.log(''); // Line break
-            Print.info('📥 Installing updates...');
+            Print.info('Installing updates...');
             console.log('');
 
             // Install updates
@@ -385,14 +385,14 @@ export class UpdateManager {
             const failCount = results.filter(r => !r.success).length;
 
             if (failCount === 0) {
-                Print.success(`✅ ${successCount} package(s) updated successfully!`);
+                Print.success(`${successCount} package(s) updated`);
             } else {
-                Print.warning(`⚠️  ${successCount} successful, ${failCount} failed`);
+                Print.warning(`${successCount} succeeded, ${failCount} failed`);
             }
 
             if (successCount > 0) {
                 console.log('');
-                Print.info('💡 It is recommended to restart the development server if it is running.');
+                Print.info('Restart the development server if it is running.');
             }
 
             const frameworkUpdated = results.find(r => r.packageName === 'slicejs-web-framework' && r.success);
@@ -425,7 +425,7 @@ export class UpdateManager {
                 return;
             }
 
-            Print.warning('⚠️ Detected changes in framework api/index.js.');
+            Print.warning('Detected changes in framework api/index.js.');
 
             // Overwriting api/index.js is opt-in: `--update-api` is the only way
             // to auto-confirm. `-y/--yes` deliberately does NOT imply it — the
@@ -457,7 +457,7 @@ export class UpdateManager {
             const backupPath = `${projectApiPath}.bak`;
             await fs.copy(projectApiPath, backupPath);
             await fs.writeFile(projectApiPath, frameworkContent, 'utf-8');
-            Print.success('✅ api/index.js updated from framework template.');
+            Print.success('api/index.js updated from the framework template.');
             Print.info(`Backup created at ${backupPath}`);
         } catch (error) {
             Print.error(`Failed to update api/index.js: ${error.message}`);

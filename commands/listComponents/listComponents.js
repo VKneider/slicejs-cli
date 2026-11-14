@@ -1,172 +1,205 @@
 import fs from 'fs';
 import path from 'path';
-import Table from 'cli-table3';
 import chalk from 'chalk';
 import Print from '../Print.js';
 import { getSrcPath, getComponentsJsPath, getConfigPath } from '../utils/PathHelper.js';
 
 /**
  * Loads configuration from sliceConfig.json
- * @returns {object} - Configuration object
+ * @returns {object|null}
  */
 const loadConfig = () => {
-    try {
-        const configPath = getConfigPath(import.meta.url);
-        if (!fs.existsSync(configPath)) {
-            Print.error('sliceConfig.json not found');
-            Print.info('Run "slice init" to initialize your project');
-            return null;
-        }
-        const rawData = fs.readFileSync(configPath, 'utf-8');
-        return JSON.parse(rawData);
-    } catch (error) {
-        Print.error(`Failed to load configuration: ${error.message}`);
-        Print.info('Check that sliceConfig.json is valid JSON');
-        return null;
-    }
+   try {
+      const configPath = getConfigPath(import.meta.url);
+      if (!fs.existsSync(configPath)) {
+         Print.error('sliceConfig.json not found');
+         Print.info('Run "slice init" to initialize your project');
+         return null;
+      }
+      return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+   } catch (error) {
+      Print.error(`Failed to load configuration: ${error.message}`);
+      Print.info('Check that sliceConfig.json is valid JSON');
+      return null;
+   }
+};
+
+const listDirectories = (folderPath) => {
+   try {
+      if (!fs.existsSync(folderPath)) return [];
+      return fs.readdirSync(folderPath);
+   } catch (error) {
+      Print.error(`Failed to read directory ${folderPath}: ${error.message}`);
+      return [];
+   }
+};
+
+const countFiles = (componentPath) => {
+   try {
+      if (!fs.existsSync(componentPath)) return 0;
+      return fs.readdirSync(componentPath).filter((file) =>
+         fs.statSync(path.join(componentPath, file)).isFile()
+      ).length;
+   } catch {
+      return 0;
+   }
 };
 
 /**
- * Lists files in a given folder, filtering only .js files
- * @param {string} folderPath - Path of the folder to read
- * @returns {string[]} - List of found files
- */
-const listComponents = (folderPath) => {
-    try {
-        if (!fs.existsSync(folderPath)) {
-            return [];
-        }
-        const result = fs.readdirSync(folderPath);
-        return result;
-    } catch (error) {
-        Print.error(`Failed to read directory ${folderPath}: ${error.message}`);
-        return [];
-    }
-};
-
-/**
- * Counts files in a component directory
- */
-const countComponentFiles = (componentPath) => {
-    try {
-        if (!fs.existsSync(componentPath)) return 0;
-        const files = fs.readdirSync(componentPath);
-        return files.filter(f => fs.statSync(path.join(componentPath, f)).isFile()).length;
-    } catch {
-        return 0;
-    }
-};
-
-/**
- * Gets components dynamically from sliceConfig.json
- * @returns {object} - Component mapping with their category
+ * Scans sliceConfig.paths.components and returns the live component catalog.
+ * @returns {Record<string, {category: string, files: number}>}
  */
 const getComponents = () => {
-    const config = loadConfig();
-    if (!config) return {};
+   const config = loadConfig();
+   if (!config) return {};
 
-    const folderSuffix = 'src'; // Always use 'src' for development
-    const componentPaths = config.paths?.components || {};
-    let allComponents = new Map();
+   const components = new Map();
+   for (const [category, meta] of Object.entries(config.paths?.components || {})) {
+      const cleanPath = meta?.path ? meta.path.replace(/^[/\\]+/, '') : '';
+      const fullPath = getSrcPath(import.meta.url, cleanPath);
+      for (const entry of listDirectories(fullPath)) {
+         const componentPath = path.join(fullPath, entry);
+         if (fs.existsSync(componentPath) && fs.statSync(componentPath).isDirectory()) {
+            components.set(entry, { category, files: countFiles(componentPath) });
+         }
+      }
+   }
 
-    Object.entries(componentPaths).forEach(([category, { path: folderPath }]) => {
-        const cleanFolderPath = folderPath ? folderPath.replace(/^[/\\]+/, '') : '';
-        const fullPath = getSrcPath(import.meta.url, cleanFolderPath);
-        const files = listComponents(fullPath);
-
-        files.forEach(file => {
-            const componentPath = path.join(fullPath, file);
-            if (fs.statSync(componentPath).isDirectory()) {
-                const fileCount = countComponentFiles(componentPath);
-                allComponents.set(file, { category, files: fileCount });
-            }
-        });
-    });
-
-    return Object.fromEntries(allComponents);
+   return Object.fromEntries(
+      Object.entries(Object.fromEntries(components)).sort(([a], [b]) => a.localeCompare(b))
+   );
 };
 
-function listComponentsReal() {
-    try {
-        // Get components dynamically
-        const components = getComponents();
-
-        if (Object.keys(components).length === 0) {
-            Print.warning('No components found in your project');
-            Print.info('Create your first component with "slice component create"');
-            return;
-        }
-
-        // Create table with cli-table3
-        const table = new Table({
-            head: [
-                chalk.cyan.bold('Component'),
-                chalk.cyan.bold('Category'),
-                chalk.cyan.bold('Files')
-            ],
-            colWidths: [30, 20, 10],
-            style: {
-                head: [],
-                border: ['gray']
-            }
-        });
-
-        // Group by category for better visualization
-        const byCategory = {};
-        Object.entries(components).forEach(([name, data]) => {
-            if (!byCategory[data.category]) {
-                byCategory[data.category] = [];
-            }
-            byCategory[data.category].push({ name, files: data.files });
-        });
-
-        // Add rows to the table
-        Object.entries(byCategory).forEach(([category, comps]) => {
-            comps.forEach((comp, index) => {
-                if (index === 0) {
-                    // First row of the category
-                    table.push([
-                        chalk.bold(comp.name),
-                        chalk.yellow(category),
-                        comp.files.toString()
-                    ]);
-                } else {
-                    // Rest of components in the category
-                    table.push([
-                        chalk.bold(comp.name),
-                        chalk.gray('″'),  // Ditto mark
-                        comp.files.toString()
-                    ]);
-                }
-            });
-        });
-
-        Print.newLine();
-        Print.title('📦 Local Components');
-        Print.newLine();
-        console.log(table.toString());
-        Print.newLine();
-        Print.info(`Total: ${Object.keys(components).length} component${Object.keys(components).length !== 1 ? 's' : ''} found`);
-
-        // Path where components.js will be generated
-        const outputPath = getComponentsJsPath(import.meta.url);
-
-        // Ensure the directory exists
-        const outputDir = path.dirname(outputPath);
-        if (!fs.existsSync(outputDir)) {
-            fs.mkdirSync(outputDir, { recursive: true });
-        }
-
-        // Generate components.js file with detected components
-        const componentsForExport = Object.fromEntries(
-            Object.entries(components).map(([name, data]) => [name, data.category])
-        );
-        fs.writeFileSync(outputPath, `const components = ${JSON.stringify(componentsForExport, null, 2)};\n\nexport default components;\n`);
-
-    } catch (error) {
-        Print.error(`Failed to list components: ${error.message}`);
-        Print.info('Make sure your project structure is correct');
-    }
+function writeRegistry(components) {
+   const outputPath = getComponentsJsPath(import.meta.url);
+   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+   const registry = Object.fromEntries(
+      Object.entries(components).map(([name, data]) => [name, data.category])
+   );
+   fs.writeFileSync(
+      outputPath,
+      `const components = ${JSON.stringify(registry, null, 2)};\n\nexport default components;\n`
+   );
 }
 
+function groupByCategory(components) {
+   const grouped = new Map();
+   for (const [name, data] of Object.entries(components)) {
+      if (!grouped.has(data.category)) grouped.set(data.category, []);
+      grouped.get(data.category).push(name);
+   }
+   return new Map(
+      [...grouped.entries()]
+         .map(([category, names]) => [category, names.sort((a, b) => a.localeCompare(b))])
+         .sort(([a], [b]) => a.localeCompare(b))
+   );
+}
+
+function wrapNames(names, indent = '    ') {
+   const width = Math.max(40, (process.stdout.columns || 80) - indent.length);
+   const lines = [];
+   let current = '';
+   for (const name of names) {
+      const next = current ? `${current}, ${name}` : name;
+      if (next.length > width && current) {
+         lines.push(current);
+         current = name;
+      } else {
+         current = next;
+      }
+   }
+   if (current) lines.push(current);
+   return lines.map((line) => `${indent}${line}`);
+}
+
+function printCompact(components, grouped) {
+   const names = Object.keys(components);
+   if (names.length === 0) {
+      Print.warning('No components found in your project');
+      Print.info('Create your first component with "slice component create"');
+      return;
+   }
+
+   Print.newLine();
+   console.log(chalk.bold('Local components'));
+   Print.newLine();
+
+   for (const [category, categoryNames] of grouped) {
+      const sample = categoryNames.slice(0, 4).join(', ');
+      const more = categoryNames.length > 4 ? ` +${categoryNames.length - 4} more` : '';
+      console.log(
+         `  ${chalk.cyan.bold(category.padEnd(16))} ${chalk.gray(String(categoryNames.length).padStart(3))}  ${chalk.white(sample)}${chalk.gray(more)}`
+      );
+   }
+
+   Print.newLine();
+   Print.info(`Total: ${names.length} component${names.length === 1 ? '' : 's'} in ${grouped.size} categor${grouped.size === 1 ? 'y' : 'ies'}`);
+   Print.info('Use "slice component list --all" for every component, or --category <name> to narrow it.');
+}
+
+function printAll(components, grouped) {
+   const names = Object.keys(components);
+   if (names.length === 0) {
+      Print.warning('No components found in your project');
+      Print.info('Create your first component with "slice component create"');
+      return;
+   }
+
+   Print.newLine();
+   console.log(chalk.bold('Local components'));
+   for (const [category, categoryNames] of grouped) {
+      Print.newLine();
+      console.log(`  ${chalk.cyan.bold(category)} ${chalk.gray(`(${categoryNames.length})`)}`);
+      for (const line of wrapNames(categoryNames)) console.log(chalk.white(line));
+   }
+   Print.newLine();
+   Print.info(`Total: ${names.length} component${names.length === 1 ? '' : 's'} in ${grouped.size} categor${grouped.size === 1 ? 'y' : 'ies'}`);
+}
+
+function printJson(components, grouped) {
+   const payload = {
+      total: Object.keys(components).length,
+      categories: [...grouped.entries()].map(([name, componentsInCategory]) => ({
+         name,
+         count: componentsInCategory.length,
+         components: componentsInCategory,
+      })),
+   };
+   console.log(JSON.stringify(payload, null, 2));
+}
+
+/**
+ * Lists local components and rewrites components.js.
+ *
+ * Default output is a compact category summary; `--all` lists every component.
+ * The long cli-table is gone on purpose: real apps have dozens/hundreds of
+ * components and a table becomes noise.
+ *
+ * @param {{ all?: boolean, category?: string, json?: boolean }} [options]
+ */
+function listComponentsReal(options = {}) {
+   try {
+      const components = getComponents();
+      writeRegistry(components);
+
+      const filter = options.category
+         ? Object.entries(components).filter(([, data]) => data.category.toLowerCase() === String(options.category).toLowerCase())
+         : Object.entries(components);
+      const filtered = Object.fromEntries(filter);
+      const grouped = groupByCategory(filtered);
+
+      if (options.json) {
+         printJson(filtered, grouped);
+         return;
+      }
+
+      if (options.all) printAll(filtered, grouped);
+      else printCompact(filtered, grouped);
+   } catch (error) {
+      Print.error(`Failed to list components: ${error.message}`);
+      Print.info('Make sure your project structure is correct');
+   }
+}
+
+export { getComponents };
 export default listComponentsReal;

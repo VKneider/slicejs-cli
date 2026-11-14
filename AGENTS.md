@@ -172,9 +172,18 @@ after(async () => {
 
 ### Error Messages
 - Bare error messages (just the error message without context) must NOT be used
-- Always wrap errors with context: `Print.error('Context:', error.message)`
+- Always wrap errors with context in ONE string: `Print.error(\`Context: ${error.message}\`)`. `Print.error` accepts a single message; a second argument is silently ignored.
 - Use `Print.error()` / `Print.success()` / `Print.info()` / `Print.warning()` instead of raw `console.log`/`console.error`
-- EXCEPTION: Formatted help/command listing output can use `console.log` directly (avoids `ℹ️ Info:` prefix pollution)
+- EXCEPTION: Formatted help/table output can use `console.log` directly
+
+### Output style
+
+- `Print` owns the symbol and color; do not embed another emoji or `Info:`/`Success:`/`Error:` prefix in the message.
+- One severity per line: `✔` success, `!` warning, `✖` error, `•` info, `→` next action.
+- Titles are short nouns without emoji: `Local components`, `Build statistics`, `Version information`.
+- Errors say what failed and, when possible, the next action. Keep stack traces out of normal output; use `Print.verbose`/debug only.
+- List output must stay readable: compact summaries by default, `--all`/`--json` for full or machine output. Never print a full component table on `dev`/`build`/`start`.
+- Alignment: two spaces of indent for detail lines, no trailing colon on headings.
 
 ### Empty Catch Blocks
 - Silent catches are acceptable ONLY for:

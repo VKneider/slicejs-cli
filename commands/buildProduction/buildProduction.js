@@ -59,8 +59,6 @@ async function checkBuildDependencies() {
  * Verifies that critical Slice.js files exist
  */
 async function verifySliceFiles(srcDir) {
-  Print.info('Verifying Slice.js critical files...');
-  
   const criticalFiles = [
     'sliceConfig.json',
     'Components/components.js',
@@ -73,16 +71,12 @@ async function verifySliceFiles(srcDir) {
       throw new Error(`Critical Slice.js file missing: ${file}`);
     }
   }
-  
-  Print.success('All critical Slice.js files verified');
 }
 
 /**
  * Verifies build integrity for Slice.js
  */
 async function verifyBuildIntegrity(distDir) {
-  Print.info('Verifying build integrity for Slice.js...');
-  
   const criticalBuiltFiles = [
     'sliceConfig.json',
     'Components/components.js',
@@ -102,20 +96,18 @@ async function verifyBuildIntegrity(distDir) {
       }
     }
   }
-  
-  Print.success('Build integrity verified - all Slice.js components preserved');
 }
 
 /**
  * Copies sliceConfig.json to the dist directory
  */
-async function copySliceConfig() {
+async function copySliceConfig(options = {}) {
   const srcConfig = getConfigPath(import.meta.url);
   const distConfig = getDistPath(import.meta.url, 'sliceConfig.json');
   
   if (await fs.pathExists(srcConfig)) {
     await fs.copy(srcConfig, distConfig);
-    Print.info('sliceConfig.json copied to dist');
+    if (options.verbose) Print.info('sliceConfig.json copied to dist');
   }
 }
 
@@ -142,7 +134,7 @@ async function copyFrameworkRuntime() {
     await fs.copy(frameworkEntry, distSlice);
 
     const stat = await fs.stat(distSlice);
-    Print.info(`Framework runtime bundled to dist/Slice/Slice.js (${(stat.size / 1024).toFixed(1)} KB)`);
+    Print.success(`Framework runtime copied (${(stat.size / 1024).toFixed(1)} KB)`);
   } catch (error) {
     Print.warning(`Could not bundle framework runtime into dist: ${error.message}`);
     Print.warning('Production servers that serve /Slice/Slice.js from dist may 404 until this is resolved.');
@@ -227,45 +219,45 @@ async function processFile(srcFilePath, distFilePath, options) {
         await fs.copy(srcFilePath, distFilePath);
         const stat = await fs.stat(srcFilePath);
         const sizeKB = (stat.size / 1024).toFixed(1);
-        Print.info(`📄 Copied: ${fileName} (${sizeKB} KB)`);
+        if (options?.verbose) Print.info(`Copied ${fileName} (${sizeKB} KB)`);
       } else {
-        await processComponentsFile(srcFilePath, distFilePath);
+        await processComponentsFile(srcFilePath, distFilePath, options);
       }
     } else if (ext === '.js') {
       if (options?.minify === false) {
         await fs.copy(srcFilePath, distFilePath);
         const stat = await fs.stat(srcFilePath);
         const sizeKB = (stat.size / 1024).toFixed(1);
-        Print.info(`📄 Copied: ${fileName} (${sizeKB} KB)`);
+        if (options?.verbose) Print.info(`Copied ${fileName} (${sizeKB} KB)`);
       } else {
-        await minifyJavaScript(srcFilePath, distFilePath);
+        await minifyJavaScript(srcFilePath, distFilePath, options);
       }
     } else if (ext === '.css') {
       if (options?.minify === false) {
         await fs.copy(srcFilePath, distFilePath);
         const stat = await fs.stat(srcFilePath);
         const sizeKB = (stat.size / 1024).toFixed(1);
-        Print.info(`📄 Copied: ${fileName} (${sizeKB} KB)`);
+        if (options?.verbose) Print.info(`Copied ${fileName} (${sizeKB} KB)`);
       } else {
-        await minifyCSS(srcFilePath, distFilePath);
+        await minifyCSS(srcFilePath, distFilePath, options);
       }
     } else if (ext === '.html') {
       if (options?.minify === false) {
         await fs.copy(srcFilePath, distFilePath);
         const stat = await fs.stat(srcFilePath);
         const sizeKB = (stat.size / 1024).toFixed(1);
-        Print.info(`📄 Copied: ${fileName} (${sizeKB} KB)`);
+        if (options?.verbose) Print.info(`Copied ${fileName} (${sizeKB} KB)`);
       } else {
-        await minifyHTML(srcFilePath, distFilePath);
+        await minifyHTML(srcFilePath, distFilePath, options);
       }
     } else if (fileName === 'sliceConfig.json') {
       await fs.copy(srcFilePath, distFilePath);
-      Print.info(`📄 Preserved: ${fileName} (configuration file)`);
+      if (options?.verbose) Print.info(`Preserved ${fileName} (configuration file)`);
     } else {
       await fs.copy(srcFilePath, distFilePath);
       const stat = await fs.stat(srcFilePath);
       const sizeKB = (stat.size / 1024).toFixed(1);
-      Print.info(`📄 Copied: ${fileName} (${sizeKB} KB)`);
+      if (options?.verbose) Print.info(`Copied ${fileName} (${sizeKB} KB)`);
     }
   } catch (error) {
     // Copying the source through keeps the build usable, but the file ships
@@ -278,12 +270,14 @@ async function processFile(srcFilePath, distFilePath, options) {
     });
     await fs.copy(srcFilePath, distFilePath);
   }
+
+  if (options) options.fileCount = (options.fileCount || 0) + 1;
 }
 
 /**
  * Processes the components.js file in a special way
  */
-async function processComponentsFile(srcPath, distPath) {
+async function processComponentsFile(srcPath, distPath, options = {}) {
   const content = await fs.readFile(srcPath, 'utf8');
   const originalSize = Buffer.byteLength(content, 'utf8');
   
@@ -294,13 +288,13 @@ async function processComponentsFile(srcPath, distPath) {
   const minifiedSize = Buffer.byteLength(result.code, 'utf8');
   const savings = Math.round(((originalSize - minifiedSize) / originalSize) * 100);
   
-  Print.minificationResult(`${path.basename(srcPath)} (preserved structure)`, originalSize, minifiedSize, savings);
+  if (options.verbose) Print.minificationResult(`${path.basename(srcPath)} (preserved structure)`, originalSize, minifiedSize, savings);
 }
 
 /**
  * Minifies JavaScript files preserving Slice.js architecture
  */
-async function minifyJavaScript(srcPath, distPath) {
+async function minifyJavaScript(srcPath, distPath, options = {}) {
   const content = await fs.readFile(srcPath, 'utf8');
   const originalSize = Buffer.byteLength(content, 'utf8');
 
@@ -323,13 +317,13 @@ async function minifyJavaScript(srcPath, distPath) {
   const minifiedSize = Buffer.byteLength(result.code, 'utf8');
   const savings = Math.round(((originalSize - minifiedSize) / originalSize) * 100);
   
-  Print.minificationResult(path.basename(srcPath), originalSize, minifiedSize, savings);
+  if (options.verbose) Print.minificationResult(path.basename(srcPath), originalSize, minifiedSize, savings);
 }
 
 /**
  * Minifies CSS files
  */
-async function minifyCSS(srcPath, distPath) {
+async function minifyCSS(srcPath, distPath, options = {}) {
   const content = await fs.readFile(srcPath, 'utf8');
   const originalSize = Buffer.byteLength(content, 'utf8');
   
@@ -349,13 +343,13 @@ async function minifyCSS(srcPath, distPath) {
   const minifiedSize = Buffer.byteLength(result.styles, 'utf8');
   const savings = Math.round(((originalSize - minifiedSize) / originalSize) * 100);
   
-  Print.minificationResult(path.basename(srcPath), originalSize, minifiedSize, savings);
+  if (options.verbose) Print.minificationResult(path.basename(srcPath), originalSize, minifiedSize, savings);
 }
 
 /**
  * Minifies HTML files
  */
-async function minifyHTML(srcPath, distPath) {
+async function minifyHTML(srcPath, distPath, options = {}) {
   const content = await fs.readFile(srcPath, 'utf8');
   const originalSize = Buffer.byteLength(content, 'utf8');
   
@@ -382,30 +376,13 @@ async function minifyHTML(srcPath, distPath) {
   const minifiedSize = Buffer.byteLength(minified, 'utf8');
   const savings = Math.round(((originalSize - minifiedSize) / originalSize) * 100);
   
-  Print.minificationResult(path.basename(srcPath), originalSize, minifiedSize, savings);
-}
-
-/**
- * Creates an optimized bundle of the main file
- */
-async function createOptimizedBundle() {
-  Print.buildProgress('Creating optimized bundle...');
-  
-  const mainJSPath = getDistPath(import.meta.url, 'App', 'index.js');
-  
-  if (await fs.pathExists(mainJSPath)) {
-    Print.success('Main bundle optimized');
-  } else {
-    Print.warning('No main JavaScript file found for bundling');
-  }
+  if (options.verbose) Print.minificationResult(path.basename(srcPath), originalSize, minifiedSize, savings);
 }
 
 /**
  * Generates build statistics
  */
 async function generateBuildStats(srcDir, distDir) {
-  Print.buildProgress('Generating build statistics...');
-  
   const getDirectorySize = async (dirPath) => {
     let totalSize = 0;
     const items = await fs.readdir(dirPath);
@@ -430,10 +407,10 @@ async function generateBuildStats(srcDir, distDir) {
     const savings = Math.round(((srcSize - distSize) / srcSize) * 100);
     
     Print.newLine();
-    Print.info(`📊 Build Statistics:`);
-    console.log(`   Source: ${(srcSize / 1024).toFixed(1)} KB`);
-    console.log(`   Built:  ${(distSize / 1024).toFixed(1)} KB`);
-    console.log(`   Saved:  ${savings}% smaller`);
+    Print.subtitle('Build size');
+    console.log(`  Source: ${(srcSize / 1024).toFixed(1)} KB`);
+    console.log(`  Built:  ${(distSize / 1024).toFixed(1)} KB`);
+    console.log(`  Saved:  ${savings}% smaller`);
     
   } catch (error) {
     Print.warning('Could not generate build statistics');
@@ -462,46 +439,45 @@ async function analyzeBuild() {
  * MAIN BUILD FUNCTION
  */
 export default async function buildProduction(options = {}) {
-  const startTime = Date.now();
-  const packageManager = resolvePackageManager(getProjectRoot(import.meta.url)).name;
   resetDegradations();
 
   try {
-    Print.title('🔨 Building Slice.js project for production...');
+    Print.title('Building for production');
     Print.newLine();
     
     const srcDir = getSrcPath(import.meta.url);
     const distDir = getDistPath(import.meta.url);
+    const processOptions = { ...options, fileCount: 0 };
     
     if (!await fs.pathExists(srcDir)) {
       throw new Error('Source directory not found. Run "slice init" first.');
     }
 
     await verifySliceFiles(srcDir);
+    Print.success('Project files verified');
 
     // Clean dist directory
     if (await fs.pathExists(distDir)) {
       if (!options.skipClean) {
-        Print.info('Cleaning previous build...');
         await fs.remove(distDir);
-        Print.success('Previous build cleaned');
+        Print.success('Cleaned dist/');
       }
     }
     
     await fs.ensureDir(distDir);
-    await copySliceConfig();
+    await copySliceConfig(processOptions);
 
     // Process files
-    Print.info('Processing and optimizing source files for Slice.js...');
-    await processDirectory(srcDir, distDir, srcDir, options);
-    Print.success('All source files processed and optimized');
+    Print.info('Optimizing source files...');
+    await processDirectory(srcDir, distDir, srcDir, processOptions);
+    Print.success(`Optimized ${processOptions.fileCount} files`);
 
     // Make dist self-contained: the framework runtime the app imports at
     // /Slice/Slice.js must live under dist so it ships with serverless deploys.
     await copyFrameworkRuntime();
 
     await verifyBuildIntegrity(distDir);
-    await createOptimizedBundle();
+    Print.success('Build integrity verified');
     await generateBuildStats(srcDir, distDir);
 
     const fullyOptimized = reportDegradations();
@@ -510,16 +486,6 @@ export default async function buildProduction(options = {}) {
       return false;
     }
 
-    const buildTime = ((Date.now() - startTime) / 1000).toFixed(1);
-
-    Print.newLine();
-    Print.success(`✨ Slice.js production build completed in ${buildTime}s`);
-    Print.info('Your optimized project is ready in the /dist directory');
-    Print.newLine();
-    Print.info('Next steps:');
-    console.log(`  • Use "${runScriptCommand(packageManager, 'start')}" to test the production build`);
-    console.log('  • All Slice.js components and architecture preserved');
-    
     return true;
 
   } catch (error) {
@@ -604,7 +570,7 @@ export async function buildCommand(options = {}) {
   
   if (success && options.preview) {
     Print.newLine();
-    Print.info('✨ Build completed successfully!');
+    Print.success('Build completed');
     Print.info(`Starting preview server on port ${options.port || defaultPort}...`);
     await serveProductionBuild(options.port || defaultPort);
   }

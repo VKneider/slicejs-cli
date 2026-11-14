@@ -119,7 +119,7 @@ export default async function initCommand(options = {}, projectRoot) {
     Print.info('Dictionaries live in that folder; templates use data-t="key" and code uses slice.t("key").');
     Print.info('Next: `slice translator check`.');
   } catch (error) {
-    Print.error('slice translator init failed:', error.message);
+    Print.error(`slice translator init failed: ${error.message}`);
     process.exitCode = 1;
   }
 }

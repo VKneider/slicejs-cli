@@ -635,7 +635,7 @@ export default async function imagesCommand(options = {}, projectRoot) {
       process.exitCode = 1;
     }
   } catch (error) {
-    Print.error('slice seo images failed:', error.message);
+    Print.error(`slice seo images failed: ${error.message}`);
     process.exitCode = 1;
   }
 }

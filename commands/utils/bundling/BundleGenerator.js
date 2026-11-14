@@ -35,6 +35,10 @@ export default class BundleGenerator {
     this.srcPath = getSrcPath(moduleUrl);
     this.distPath = getDistPath(moduleUrl);
     this.output = options.output || 'dist';
+    this.verbose = !!options.verbose;
+    // Import warnings are deduped: the same missing import can be reached from
+    // several bundled modules, and each occurrence is not a new problem.
+    this.warningMessages = new Set();
     this.bundlesPath = this.output === 'dist'
       ? path.join(this.distPath, 'bundles')
       : path.join(this.srcPath, 'bundles');
@@ -170,8 +174,6 @@ export default class BundleGenerator {
    * Generates all bundles
    */
   async generate() {
-    console.log('🔨 Generating bundles...');
-
     // 0. Create bundles directory
     await fs.ensureDir(this.bundlesPath);
     if (this.output === 'dist') {
@@ -214,8 +216,6 @@ export default class BundleGenerator {
       console.warn(`Warning: emitted bundle(s) never referenced by any route: ${integrity.orphans.join(', ')}`);
     }
 
-    console.log('✅ Bundles generated successfully');
-
     return {
       bundles: this.bundles,
       config,
@@ -233,13 +233,13 @@ export default class BundleGenerator {
     // Strategy based on size and usage pattern
     if (totalComponents < 20 || sharedPercentage > 60) {
       this.config.strategy = 'global';
-      console.log('📦 Strategy: Global Bundle (small project or highly shared)');
+      if (this.verbose) console.log('Strategy: global bundle (small project or highly shared)');
     } else if (totalComponents < 100) {
       this.config.strategy = 'hybrid';
-      console.log('📦 Strategy: Hybrid (critical + grouped routes)');
+      if (this.verbose) console.log('Strategy: hybrid (critical + grouped routes)');
     } else {
       this.config.strategy = 'per-route';
-      console.log('📦 Strategy: Per Route (large project)');
+      if (this.verbose) console.log('Strategy: per route (large project)');
     }
   }
 
@@ -307,7 +307,7 @@ export default class BundleGenerator {
       this.bundles.critical.size = this.componentsBudgetSize(this.bundles.critical.components);
     }
 
-    console.log(`✓ Critical bundle: ${this.bundles.critical.components.length} components, ${(this.bundles.critical.size / 1024).toFixed(1)} KB`);
+    if (this.verbose) console.log(`✔ Critical bundle: ${this.bundles.critical.components.length} components, ${(this.bundles.critical.size / 1024).toFixed(1)} KB`);
   }
 
   /**
@@ -368,7 +368,7 @@ export default class BundleGenerator {
         file: `slice-bundle.${routeKey}.js`
       };
 
-      console.log(`✓ Bundle ${routeKey}: ${uniqueComponents.length} components, ${(totalSize / 1024).toFixed(1)} KB`);
+      if (this.verbose) console.log(`✔ Bundle ${routeKey}: ${uniqueComponents.length} components, ${(totalSize / 1024).toFixed(1)} KB`);
     }
   }
 
@@ -439,7 +439,7 @@ export default class BundleGenerator {
               file: `slice-bundle.${this.routeToFileName(groupKey)}.js`
             };
 
-            console.log(`✓ Bundle ${groupKey}: ${uniqueComponents.length} components, ${(totalSize / 1024).toFixed(1)} KB (${groupData.routes.length} routes)`);
+            if (this.verbose) console.log(`✔ Bundle ${groupKey}: ${uniqueComponents.length} components, ${(totalSize / 1024).toFixed(1)} KB (${groupData.routes.length} routes)`);
           }
         }
       }
@@ -496,7 +496,7 @@ export default class BundleGenerator {
         file: `slice-bundle.${this.routeToFileName(category)}.js`
       };
 
-      console.log(`✓ Bundle ${category}: ${uniqueComponents.length} components, ${(totalSize / 1024).toFixed(1)} KB (${routes.length} routes)`);
+      if (this.verbose) console.log(`✔ Bundle ${category}: ${uniqueComponents.length} components, ${(totalSize / 1024).toFixed(1)} KB (${routes.length} routes)`);
     }
   }
 
@@ -1584,14 +1584,14 @@ export default class BundleGenerator {
 
     if (needsDefault.size === 0) return;
 
-    console.log(`📦 Resolving ${needsDefault.size} external dependenc${needsDefault.size === 1 ? 'y' : 'ies'} from node_modules...`);
+    if (this.verbose) console.log(`Resolving ${needsDefault.size} external dependenc${needsDefault.size === 1 ? 'y' : 'ies'} from node_modules...`);
 
     for (const [name, nd] of needsDefault) {
       try {
         const { expression, warnings } = await this.getExternalBundler().bundle(name, { needsDefault: nd });
         this.externalModulesByName.set(name, expression);
         warnings.forEach((w) => console.warn(`Warning: [external:${name}] ${w}`));
-        console.log(`  ✓ ${name}`);
+        if (this.verbose) console.log(`  ✔ ${name}`);
       } catch (error) {
         this.externalResolutionErrors.set(name, error.message);
         console.warn(`Warning: ${error.message}`);
@@ -2730,10 +2730,10 @@ if (window.slice && window.slice.controller) {
         && options.handledSpecifiers.has(specifier);
 
       if (!handled && !options.silent) {
-        console.warn(this.buildImportWarningMessage(
+        this.recordImportWarning(
           `Warning: Stripping unsupported import inside bundled dependency: ${specifier}`,
           moduleName
-        ));
+        );
       }
       return '';
     }
@@ -2744,10 +2744,10 @@ if (window.slice && window.slice.controller) {
       // object. The source module is registered earlier by the topological order.
       const depExpr = this.reexportDependencyExpression(moduleName, node.source?.value, preferShared, specifierToKey);
       if (!depExpr) {
-        console.warn(this.buildImportWarningMessage(
+        this.recordImportWarning(
           `Warning: Dropping unresolvable 'export *' inside bundled dependency: ${node.source?.value}`,
           moduleName
-        ));
+        );
         return '';
       }
       const tmp = `__sliceReexportAll_${node.start}`;
@@ -2774,10 +2774,10 @@ if (window.slice && window.slice.controller) {
         // the corresponding member of the resolved module's exports object.
         const depExpr = this.reexportDependencyExpression(moduleName, node.source.value, preferShared, specifierToKey);
         if (!depExpr) {
-          console.warn(this.buildImportWarningMessage(
+          this.recordImportWarning(
             `Warning: Dropping unresolvable re-export inside bundled dependency: ${node.source.value}`,
             moduleName
-          ));
+          );
           return '';
         }
         const tmp = `__sliceReexport_${node.start}`;
@@ -3275,8 +3275,26 @@ if (window.slice && window.slice.controller) {
   }
 
   buildImportWarningMessage(baseMessage, sourceContext) {
-    if (!sourceContext) return baseMessage;
-    return `${baseMessage} [${sourceContext}]`;
+    const message = String(baseMessage).replace(/^Warning:\s*/, '');
+    if (!sourceContext) return `! ${message}`;
+    // Keep warnings readable: the full absolute path of a framework dependency
+    // adds noise without helping identify the file. Two trailing segments are
+    // enough (`Controller/Controller.js`).
+    const short = sourceContext.includes(path.sep)
+      ? sourceContext.split(path.sep).slice(-2).join('/')
+      : sourceContext;
+    return `! ${message} (${short})`;
+  }
+
+  /**
+   * Prints one `!` warning per unique import problem. Duplicates are common when
+   * the same module is reached from several bundles.
+   */
+  recordImportWarning(baseMessage, sourceContext) {
+    const message = this.buildImportWarningMessage(baseMessage, sourceContext);
+    if (this.warningMessages.has(message)) return;
+    this.warningMessages.add(message);
+    console.warn(message);
   }
 
   extractLocalBindingsFromImportStatement(statement) {
@@ -3437,7 +3455,7 @@ if (window.slice && window.slice.controller) {
           cleanedCode += statement;
         }
       } else if (classification.warning) {
-        console.warn(this.buildImportWarningMessage(classification.warning, sourceContext));
+        this.recordImportWarning(classification.warning, sourceContext);
       }
       cursor = end;
     }
@@ -3474,7 +3492,7 @@ if (window.slice && window.slice.controller) {
             cleaned += statement;
           }
         } else if (classification.warning) {
-          console.warn(this.buildImportWarningMessage(classification.warning, sourceContext));
+          this.recordImportWarning(classification.warning, sourceContext);
         }
 
         cursor = node.end;
@@ -3574,10 +3592,10 @@ if (window.slice && window.slice.controller) {
     // attach one to. Dropping it costs nothing inside the bundle, but it means
     // this file is acting as a barrel — worth saying so out loud.
     if (node.source) {
-      console.warn(this.buildImportWarningMessage(
+      this.recordImportWarning(
         `Warning: Dropping re-export '${code.slice(node.start, node.end).split('\n')[0].trim()}' from a component file (not supported in bundles)`,
         sourceContext
-      ));
+      );
       return '';
     }
 
@@ -3699,8 +3717,8 @@ if (window.slice && window.slice.controller) {
     const jsConfig = this.generateBundleConfigJS(config);
     await fs.writeFile(jsConfigPath, jsConfig, 'utf-8');
 
-    console.log(`✓ Configuration saved to ${configPath}`);
-    console.log(`✓ JavaScript config generated: ${jsConfigPath}`);
+    if (this.verbose) console.log(`✔ Configuration saved to ${configPath}`);
+    if (this.verbose) console.log(`✔ JavaScript config generated: ${jsConfigPath}`);
   }
 
   /**

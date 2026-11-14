@@ -14,16 +14,20 @@ export default async function bundle(options = {}) {
   const projectRoot = getProjectRoot(import.meta.url);
 
   try {
-    Print.title('📦 Slice.js Bundle Generator');
-    Print.newLine();
-
     // Validate that it's a Slice.js project
     await validateProject(projectRoot);
 
+    if (options.analyze) {
+      Print.title('Build analysis');
+      Print.newLine();
+    } else {
+      Print.buildProgress('Generating bundles...');
+    }
+
     // Phase 1: Analysis
-    Print.buildProgress('Analyzing project...');
     const analyzer = new DependencyAnalyzer(import.meta.url);
     const analysisData = await analyzer.analyze();
+    analyzer.reportDynamicBuildWarnings();
 
     // Show report if in verbose mode
     if (options.verbose || options.analyze) {
@@ -39,38 +43,30 @@ export default async function bundle(options = {}) {
     }
 
     // Phase 2: Bundle generation
-    Print.buildProgress('Generating bundles...');
     const generator = new BundleGenerator(import.meta.url, analysisData, {
       minify: !!options.minify,
       obfuscate: !!options.obfuscate,
       output: options.output || 'dist',
       strictExternal: !!options.strictExternal,
       sourcemap: !!options.sourcemap,
-      hashFilenames: !!options.hashFilenames
+      hashFilenames: !!options.hashFilenames,
+      verbose: !!options.verbose
     });
     const result = await generator.generate();
 
     // Phase 3: Save configuration
-    Print.buildProgress('Saving configuration...');
     await generator.saveBundleConfig(result.config);
 
     // Phase 4: Summary
     Print.newLine();
-    printSummary(result, startTime);
-
-    // Show next step
-    Print.newLine();
-    Print.info('💡 Next step:');
-    console.log('   Update your Slice.js to use the generated bundles');
-    console.log('   Bundles will load automatically in production\n');
+    printSummary(result, startTime, options);
 
   } catch (error) {
-    Print.error('Error generating bundles:', error.message);
-    console.error('\n📍 Complete stack trace:');
-    console.error(error.stack);
+    Print.error(`Error generating bundles: ${error.message}`);
+    Print.stack(error);
 
     if (error.code) {
-      console.error('\n📍 Error code:', error.code);
+      Print.verbose(`Error code: ${error.code}`);
     }
 
     throw error;
@@ -97,49 +93,58 @@ async function validateProject(projectRoot) {
 /**
  * Prints summary of generated bundles
  */
-function printSummary(result, startTime) {
+function printSummary(result, startTime, options = {}) {
   const { bundles, config, files } = result;
   const duration = ((Date.now() - startTime) / 1000).toFixed(2);
-
-  Print.success(`Bundles generated in ${duration}s\n`);
-
-  // Critical bundle
-  if (bundles.critical.components.length > 0) {
-    Print.info('📦 Critical Bundle:');
-    console.log(`   Components: ${bundles.critical.components.length}`);
-    console.log(`   Size: ${(bundles.critical.size / 1024).toFixed(1)} KB`);
-    console.log(`   File: ${bundles.critical.file}\n`);
-  }
-
-  // Route bundles
-  const routeCount = Object.keys(bundles.routes).length;
-  if (routeCount > 0) {
-    Print.info(`📦 Route Bundles (${routeCount}):`);
-
-    for (const [key, bundle] of Object.entries(bundles.routes)) {
-      console.log(`   ${key}:`);
-      const routeDisplay = Array.isArray(bundle.path) ? `${bundle.path.length} routes` : (bundle.path || key);
-      console.log(`     Route: ${routeDisplay}`);
-      console.log(`     Components: ${bundle.components.length}`);
-      console.log(`     Size: ${(bundle.size / 1024).toFixed(1)} KB`);
-      console.log(`     File: ${bundle.file}`);
-    }
-    Print.newLine();
-  }
-
-  // Global statistics
-  Print.info('📊 Statistics:');
-  console.log(`   Strategy: ${config.strategy}`);
-  console.log(`   Total components: ${config.stats.totalComponents}`);
-  console.log(`   Shared components: ${config.stats.sharedComponents}`);
-  console.log(`   Generated files: ${files.length}`);
-
-  // Calculate estimated improvement
   const beforeRequests = config.stats.totalComponents;
   const afterRequests = files.length;
-  const improvement = Math.round((1 - afterRequests / beforeRequests) * 100);
+  const improvement = beforeRequests > 0
+    ? Math.round((1 - afterRequests / beforeRequests) * 100)
+    : 0;
+  const routeCount = Object.keys(bundles.routes).length;
 
-  console.log(`   Request reduction: ${improvement}% (${beforeRequests} → ${afterRequests})`);
+  Print.success(`Bundles generated in ${duration}s`);
+  Print.newLine();
+
+  if (options.verbose) {
+    // Critical bundle
+    if (bundles.critical.components.length > 0) {
+      Print.subtitle('Critical bundle');
+      console.log(`  Components: ${bundles.critical.components.length}`);
+      console.log(`  Size: ${(bundles.critical.size / 1024).toFixed(1)} KB`);
+      console.log(`  File: ${bundles.critical.file}`);
+      Print.newLine();
+    }
+
+    // Route bundles
+    if (routeCount > 0) {
+      Print.subtitle(`Route bundles (${routeCount})`);
+
+      for (const [key, bundle] of Object.entries(bundles.routes)) {
+        console.log(`  ${key}`);
+        const routeDisplay = Array.isArray(bundle.path) ? `${bundle.path.length} routes` : (bundle.path || key);
+        console.log(`    Route: ${routeDisplay}`);
+        console.log(`    Components: ${bundle.components.length}`);
+        console.log(`    Size: ${(bundle.size / 1024).toFixed(1)} KB`);
+        console.log(`    File: ${bundle.file}`);
+      }
+      Print.newLine();
+    }
+  }
+
+  // One summary for both modes. The per-route detail above is opt-in because a
+  // large app has dozens of bundles and the list drowns the build result.
+  Print.subtitle('Bundles');
+  console.log(`  Strategy: ${config.strategy}`);
+  console.log(`  Components: ${config.stats.totalComponents}`);
+  console.log(`  Bundles: ${files.length}`);
+  if (bundles.critical.components.length > 0) {
+    console.log(`  Critical: ${bundles.critical.components.length} components, ${(bundles.critical.size / 1024).toFixed(1)} KB`);
+  }
+  if (routeCount > 0) {
+    console.log(`  Routes: ${routeCount}`);
+  }
+  console.log(`  Requests: ${beforeRequests} → ${afterRequests} (${improvement}% fewer)`);
 }
 
 /**
@@ -150,7 +155,7 @@ export async function cleanBundles() {
   const legacyPath = getSrcPath(import.meta.url, 'bundles');
 
   try {
-    Print.title('🧹 Cleaning bundles...');
+    Print.title('Cleaning bundles');
 
     // Checked before any early return: a project that upgraded and never rebuilt
     // only has the old folder, and that is the case the hint exists for.
@@ -178,7 +183,7 @@ export async function cleanBundles() {
 
     for (const file of generated) {
       await fs.remove(path.join(bundlesPath, file));
-      console.log(`   ✓ Deleted: bundles/${file}`);
+      console.log(`   Deleted: bundles/${file}`);
     }
 
     // Only remove the folder when this command emptied it: dist/bundles may hold
@@ -191,8 +196,8 @@ export async function cleanBundles() {
     Print.success(`${generated.length} files deleted`);
 
   } catch (error) {
-    Print.error('Error cleaning bundles:', error.message);
-    console.error(error.stack);
+    Print.error(`Error cleaning bundles: ${error.message}`);
+    Print.stack(error);
     throw error;
   }
 }
@@ -212,7 +217,7 @@ export async function bundleInfo() {
 
     const config = await fs.readJson(configPath);
 
-    Print.title('📦 Bundle Information');
+    Print.title('Bundle information');
     Print.newLine();
 
     Print.info('Configuration:');
@@ -244,8 +249,8 @@ export async function bundleInfo() {
     }
 
   } catch (error) {
-    Print.error('Error reading information:', error.message);
-    console.error(error.stack);
+    Print.error(`Error reading bundle information: ${error.message}`);
+    Print.stack(error);
     throw error;
   }
 }

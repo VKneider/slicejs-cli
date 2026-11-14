@@ -113,19 +113,19 @@ class VersionChecker {
       if (!silent && (cliStatus === 'outdated' || frameworkStatus === 'outdated')) {
         const pm = resolvePackageManager(getProjectRoot(import.meta.url)).name;
         console.log(''); // Line break
-        Print.warning('📦 Available Updates:');
+        Print.subtitle('Available updates');
 
         if (cliStatus === 'outdated') {
-          console.log(`   🔧 CLI: ${current.cli} → ${latest.cli}`);
+          console.log(`   CLI: ${current.cli} → ${latest.cli}`);
           console.log(`       ${pm} update slicejs-cli`);
         }
 
         if (frameworkStatus === 'outdated') {
-          console.log(`   ⚡ Framework: ${current.framework} → ${latest.framework}`);
+          console.log(`   Framework: ${current.framework} → ${latest.framework}`);
           console.log(`       ${pm} update slicejs-web-framework`);
         }
         
-        console.log('   📚 Changelog: https://github.com/VKneider/slice.js/releases');
+        console.log('   Changelog: https://github.com/VKneider/slice.js/releases');
         console.log(''); // Line break
       }
 
@@ -144,22 +144,22 @@ class VersionChecker {
     const current = await this.getCurrentVersions();
     const latest = await this.getLatestVersions();
     
-    console.log('\n📋 Version Information:');
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    
+    Print.title('Version information');
+    Print.separator();
+
     if (current?.cli) {
       const cliStatus = this.compareVersions(current.cli, latest?.cli);
-      const statusIcon = cliStatus === 'current' ? '✅' : cliStatus === 'outdated' ? '🔄' : '🆕';
-      console.log(`${statusIcon} CLI: v${current.cli}${latest?.cli && latest.cli !== current.cli ? ` (latest: v${latest.cli})` : ''}`);
+      const status = cliStatus === 'current' ? 'up to date' : cliStatus === 'outdated' ? 'update available' : 'new';
+      console.log(`CLI        v${current.cli}${latest?.cli && latest.cli !== current.cli ? ` → v${latest.cli}` : ''}  (${status})`);
     }
-    
+
     if (current?.framework) {
       const frameworkStatus = this.compareVersions(current.framework, latest?.framework);
-      const statusIcon = frameworkStatus === 'current' ? '✅' : frameworkStatus === 'outdated' ? '🔄' : '🆕';
-      console.log(`${statusIcon} Framework: v${current.framework}${latest?.framework && latest.framework !== current.framework ? ` (latest: v${latest.framework})` : ''}`);
+      const status = frameworkStatus === 'current' ? 'up to date' : frameworkStatus === 'outdated' ? 'update available' : 'new';
+      console.log(`Framework  v${current.framework}${latest?.framework && latest.framework !== current.framework ? ` → v${latest.framework}` : ''}  (${status})`);
     }
-    
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+
+    Print.separator();
   }
 }
 

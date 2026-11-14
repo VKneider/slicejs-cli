@@ -1,13 +1,17 @@
+import fs from 'fs-extra';
+import path from 'path';
 import bundle from '../bundle/bundle.js';
 import buildProduction, { serveProductionBuild } from '../buildProduction/buildProduction.js';
 import { validateProject, validateServerEntry, classifyValidation, describeIssue } from '../utils/ProjectValidation.js';
 import { getProjectRoot, getDistPath } from '../utils/PathHelper.js';
 import { precompressDirectory } from '../utils/compressAssets.js';
+import { checkDocs } from '../docs/index.js';
 import Print from '../Print.js';
 
 export default async function build(options = {}) {
   const minify = options.minify !== false;
   const obfuscate = options.obfuscate !== false;
+  const buildStart = Date.now();
 
   if (options.analyze) {
     return bundle({ analyze: true, verbose: options.verbose });
@@ -58,6 +62,21 @@ export default async function build(options = {}) {
     Print.warning(describeIssue(issue));
   }
 
+  // Projects created with the documentation scaffold must keep their generated
+  // docs current. Older projects without AGENTS.md/docs/events are untouched.
+  const projectRoot = getProjectRoot(import.meta.url);
+  if (
+    await fs.pathExists(path.join(projectRoot, 'AGENTS.md')) &&
+    await fs.pathExists(path.join(projectRoot, 'docs', 'events', 'index.md'))
+  ) {
+    const docs = await checkDocs({ projectRoot, target: 'all' });
+    if (!docs.ok) {
+      Print.error('Build blocked: generated documentation is out of date.');
+      Print.info('Run "slice docs generate" and commit the result.');
+      process.exit(1);
+    }
+  }
+
   const success = await buildProduction({
     ...options,
     minify,
@@ -67,7 +86,6 @@ export default async function build(options = {}) {
     return false;
   }
 
-  Print.info('Generating bundles for production build...');
   await bundle({
     verbose: options.verbose,
     minify,
@@ -89,8 +107,16 @@ export default async function build(options = {}) {
     }
   }
 
+  const elapsed = ((Date.now() - buildStart) / 1000).toFixed(1);
+  Print.newLine();
+  Print.success(`Build completed in ${elapsed}s`);
+
   if (options.preview) {
     await serveProductionBuild(options.port);
+  } else {
+    Print.newLine();
+    Print.subtitle('Next steps');
+    Print.commandExample('Serve the production build', 'slice start');
   }
 
   return true;

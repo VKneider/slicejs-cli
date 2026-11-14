@@ -77,7 +77,7 @@ export function reportTypesRefresh(types, projectRoot) {
       Print.info('Using tsconfig.json; the generated declarations are not added to it.');
       break;
     case 'editor_config_error':
-      Print.warning('Could not update jsconfig.json:', types.jsconfigError || 'unknown error');
+      Print.warning(`Could not update jsconfig.json: ${types.jsconfigError || 'unknown error'}`);
       break;
     default:
       break;

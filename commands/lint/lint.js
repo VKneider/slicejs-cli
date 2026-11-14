@@ -36,7 +36,7 @@ export default async function lintCommand(options = {}, projectRoot) {
       const types = await runTypeRefresh(projectRoot, options);
       if (types) reportTypesRefresh(types, projectRoot);
     } catch (error) {
-      Print.error('Could not refresh the generated types:', error.message);
+      Print.error(`Could not refresh the generated types: ${error.message}`);
       process.exitCode = 1;
     }
   }
@@ -61,7 +61,7 @@ export default async function lintCommand(options = {}, projectRoot) {
   });
 
   if (result.error) {
-    Print.error('Could not run ESLint:', result.error.message);
+    Print.error(`Could not run ESLint: ${result.error.message}`);
     process.exitCode = 1;
     return false;
   }

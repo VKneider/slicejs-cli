@@ -103,7 +103,7 @@ export default async function sitemapCommand(options = {}, projectRoot) {
       process.exitCode = 1;
     }
   } catch (error) {
-    Print.error('slice seo sitemap failed:', error.message);
+    Print.error(`slice seo sitemap failed: ${error.message}`);
     process.exitCode = 1;
   }
 }

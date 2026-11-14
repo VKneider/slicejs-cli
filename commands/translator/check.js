@@ -26,7 +26,7 @@ export default async function checkCommand(options = {}, projectRoot) {
       `${result.contentCount ? `, ${result.contentCount} content document(s)` : ''}).`
     );
   } catch (error) {
-    Print.error('slice translator check failed:', error.message);
+    Print.error(`slice translator check failed: ${error.message}`);
     process.exitCode = 1;
   }
 }

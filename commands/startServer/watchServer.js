@@ -8,7 +8,7 @@ import Print from '../Print.js';
  * @returns {FSWatcher} - Chokidar watcher
  */
 export default function setupWatcher(serverProcess, onRestart) {
-    Print.info('Watch mode enabled - monitoring file changes...');
+    Print.info('Watch mode enabled; monitoring changes');
     Print.newLine();
 
     const watcher = chokidar.watch(['api/**/*'], {
@@ -33,7 +33,7 @@ export default function setupWatcher(serverProcess, onRestart) {
         clearTimeout(reloadTimeout);
         reloadTimeout = setTimeout(() => {
             if (onRestart) {
-                console.log(chalk.yellow('🔄 API change detected, restarting server...'));
+                console.log(chalk.yellow('API change detected. Restarting server...'));
                 onRestart(changedPath);
             }
         }, 500);
@@ -47,7 +47,7 @@ export default function setupWatcher(serverProcess, onRestart) {
             Print.error(`Watcher error: ${error.message}`);
         })
         .on('ready', () => {
-            console.log(chalk.gray('👀 Watching for file changes...'));
+            console.log(chalk.gray('Watching for changes...'));
             Print.newLine();
         });
 

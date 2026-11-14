@@ -6,9 +6,11 @@ import { spawn } from 'child_process';
 import { createServer } from 'net';
 import setupWatcher, { stopWatcher } from './watchServer.js';
 import Print from '../Print.js';
-import { getApiPath, getSrcPath, getDistPath, getPath } from '../utils/PathHelper.js';
+import { getApiPath, getSrcPath, getDistPath, getPath, getProjectRoot } from '../utils/PathHelper.js';
 import { loadConfigSync } from '../utils/loadConfig.js';
 import build from '../build/build.js';
+import { generateDocs, hasDocumentationScaffold } from '../docs/index.js';
+import { syncComponentsRegistry } from '../utils/componentCatalog.js';
 
 /**
  * Checks if a port is available
@@ -91,26 +93,46 @@ function startNodeServer(port, mode) {
     });
 
     let serverStarted = false;
-    let outputBuffer = '';
+    let readyAnnounced = false;
+    let stdoutBuffer = '';
 
-    // Capture output to detect when the server is ready
-    serverProcess.stdout.on('data', (data) => {
-      const output = data.toString();
-      outputBuffer += output;
+    const isReadyLine = (line) =>
+      line.includes('Server running') ||
+      line.includes('listening on') ||
+      line.includes('Started on') ||
+      line.includes(`port ${port}`);
 
-      // Detect common messages indicating the server has started
-      if (!serverStarted && (
-        output.includes('Server running') ||
-        output.includes('listening on') ||
-        output.includes('Started on') ||
-        output.includes(`port ${port}`)
-      )) {
-        serverStarted = true;
-        Print.serverReady(port);
+    // The framework announces readiness on stdout. The CLI already prints the
+    // READY block, so the announcing line is consumed instead of forwarded;
+    // everything else the server logs still reaches the terminal.
+    const forwardLine = (line) => {
+      if (isReadyLine(line)) {
+        if (!readyAnnounced) {
+          readyAnnounced = true;
+          serverStarted = true;
+          Print.serverReady(port);
+        }
+        return;
       }
+      process.stdout.write(line);
+    };
 
-      // Display server output
-      process.stdout.write(output);
+    // Capture output line by line so a readiness message split across chunks is
+    // still detected and suppressed exactly once.
+    serverProcess.stdout.on('data', (data) => {
+      stdoutBuffer += data.toString();
+      let newline;
+      while ((newline = stdoutBuffer.indexOf('\n')) !== -1) {
+        forwardLine(stdoutBuffer.slice(0, newline + 1));
+        stdoutBuffer = stdoutBuffer.slice(newline + 1);
+      }
+    });
+
+    serverProcess.stdout.on('end', () => {
+      if (stdoutBuffer) {
+        forwardLine(stdoutBuffer);
+        stdoutBuffer = '';
+      }
     });
 
     serverProcess.stderr.on('data', (data) => {
@@ -135,6 +157,7 @@ function startNodeServer(port, mode) {
     setTimeout(() => {
       if (!serverStarted) {
         serverStarted = true;
+        readyAnnounced = true;
         Print.serverReady(port);
       }
       resolve(serverProcess);
@@ -166,12 +189,28 @@ export default async function startServer(options = {}) {
   const { mode = 'development', port = defaultPort, watch = false } = options;
 
   try {
-    Print.title(`🚀 Starting Slice.js ${mode} server...`);
+    Print.title(`Starting Slice.js ${mode} server`);
     Print.newLine();
 
     // Verify project structure
     if (!await checkDevelopmentStructure()) {
       throw new Error('Project structure not found. Run "slice init" first.');
+    }
+
+    // Keep the generated documentation current while developing. The build
+    // command checks it instead of writing, so CI catches a stale commit.
+    // Hand-written AGENTS.md files are left alone until the project opts in.
+    if (mode === 'development' && watch) {
+      const projectRoot = getProjectRoot(import.meta.url);
+      try {
+        // Keep components.js current without printing the component catalog.
+        await syncComponentsRegistry(projectRoot);
+        if (await hasDocumentationScaffold(projectRoot)) {
+          await generateDocs({ projectRoot, target: 'all' });
+        }
+      } catch (error) {
+        Print.warning(`Could not generate project docs: ${error.message}`);
+      }
     }
 
     let actualPort = await isPortAvailable(port) ? port : port + 1; // Try one more port
@@ -181,10 +220,10 @@ export default async function startServer(options = {}) {
        if(!fallbackAvailable) {
            throw new Error(`Ports ${port} and ${actualPort} are in use.`);
        }
-       Print.info(`ℹ️ Port ${port} in use, using ${actualPort} instead.`);
+       Print.info(`Port ${port} is busy; using ${actualPort}.`);
     }
 
-    Print.serverStatus('checking', `Port ${actualPort} available ✓`);
+    Print.serverStatus('checking', `Port ${actualPort} available`);
     Print.newLine();
 
     if (mode === 'production') {
@@ -218,7 +257,7 @@ export default async function startServer(options = {}) {
         await new Promise(r => setTimeout(r, 500));
         
         try {
-        Print.info('🔄 File changed. Restarting server...');
+        Print.info('File changed. Restarting server...');
 
           currentServerProcess = await startNodeServer(actualPort, mode);
         } catch (e) {

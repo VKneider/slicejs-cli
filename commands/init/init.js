@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import ora from 'ora';
 import Print from '../Print.js';
+import { generateDocs } from '../docs/index.js';
 import { getProjectRoot, getApiPath, getSrcPath, getPath } from '../utils/PathHelper.js';
 import { execSync } from 'child_process';
 import {
@@ -241,7 +242,7 @@ export default async function initializeProject(options = {}) {
                 fwSpinner.warn('Install did not run; using the slicejs-web-framework already in this project');
             } else {
                 fwSpinner.fail('Failed to install slicejs-web-framework');
-                Print.error('slice init:', err.message);
+                Print.error(`slice init: ${err.message}`);
                 const retry = installCommand(packageManager, latestVersion ? `slicejs-web-framework@${latestVersion}` : 'slicejs-web-framework');
                 Print.info(`Retry with: ${retry}`);
                 return;
@@ -283,8 +284,8 @@ export default async function initializeProject(options = {}) {
             if (fs.existsSync(path.join(destinationApi, 'index.js'))) throw new Error(`api/index.js already exists: ${path.join(destinationApi, 'index.js')}`);
             if (fs.existsSync(destinationSrc)) throw new Error(`The "src" directory already exists: ${destinationSrc}`);
         } catch (error) {
-            Print.error('Validating destination directories:', error.message);
-            console.error(error.stack);
+            Print.error(`Validating destination directories: ${error.message}`);
+            Print.stack(error);
             return;
         }
 
@@ -299,7 +300,7 @@ export default async function initializeProject(options = {}) {
         } catch (error) {
             apiSpinner.fail('Error creating api/index.js');
             Print.error(error.message);
-            console.error(error.stack);
+            Print.stack(error);
             return;
         }
 
@@ -351,7 +352,7 @@ export default async function initializeProject(options = {}) {
         } catch (error) {
             srcSpinner.fail('Error creating source structure');
             Print.error(error.message);
-            console.error(error.stack);
+            Print.stack(error);
             return;
         }
 
@@ -484,38 +485,44 @@ export default async function initializeProject(options = {}) {
             }
 
             await fs.writeFile(pkgPath, JSON.stringify(pkg, null, 2), 'utf8');
-            pkgSpinner.succeed('Package scripts configured successfully');
-
-            Print.title('New recommended commands:');
-            console.log(`  ${packageManager} run dev            - Start development server`);
-            console.log(`  ${packageManager} run get            - Install components`);
-            console.log(`  ${packageManager} run browse         - Browse components`);
+            pkgSpinner.succeed('Package scripts configured');
         } catch (error) {
         pkgSpinner.fail('Failed to configure npm scripts');
         Print.error(error.message);
-        console.error(error.stack);
+        Print.stack(error);
+        }
+
+        // 5. SEED THE AGENT DOCUMENTATION
+        const docsSpinner = ora('Documenting the project for agents...').start();
+        try {
+            await generateDocs({ projectRoot, target: 'all' });
+            docsSpinner.succeed('AGENTS.md, category guides, types and event docs created');
+        } catch (error) {
+            docsSpinner.warn('Project created, but the agent docs could not be generated');
+            Print.error(`Documentation error: ${error.message}`);
         }
 
         const projectName = path.basename(process.cwd());
 
         const failedCount = [...visualResults, ...serviceResults].filter(r => !r.success).length;
         if (failedCount > 0) {
-            Print.warning(`${failedCount} component(s) failed to install — run "${packageManager} run get -- <name>" to retry`);
+            const suffix = failedCount === 1 ? '' : 's';
+            Print.warning(`${failedCount} component${suffix} failed to install. Retry with "${packageManager} run get -- <name>".`);
         }
 
-        Print.success(`Project initialized successfully in "${projectName}/"`);
+        Print.success(`Project initialized in ${projectName}/`);
         Print.newLine();
-        Print.title('Next steps:');
+        Print.title('Next steps');
         console.log(`  cd ${projectName}`);
-        console.log(`  ${packageManager} run dev     - Start development server`);
-        console.log(`  ${packageManager} run browse  - View available components`);
-        console.log(`  ${packageManager} run get -- Button - Install specific components`);
-        console.log(`  ${packageManager} run sync    - Update all components to latest versions`);
-        console.log(`  slice setup lint --with-types - ESLint, type checking and the generated types`);
+        console.log(`  ${packageManager} run dev                     Start the development server`);
+        console.log(`  ${packageManager} run browse                  Browse registry components`);
+        console.log(`  ${packageManager} run get -- Button           Add a component`);
+        console.log(`  ${packageManager} run sync                    Update installed components`);
+        console.log('  npx slicejs-cli setup lint --with-types     ESLint, type checking and generated types');
 
     } catch (error) {
-        Print.error('Unexpected error initializing project:', error.message);
-        console.error(error.stack);
+        Print.error(`Unexpected error initializing project: ${error.message}`);
+        Print.stack(error);
     }
 }
 

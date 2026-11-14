@@ -30,6 +30,20 @@ import typecheckCommand from './commands/typecheck/typecheck.js';
 import setupLintCommand from './commands/setup/lint.js';
 import { runGenerateTypes } from './commands/types/types.js';
 import { runDocsGet, runDocsList, runDocsSearch } from './commands/docs/docs.js';
+import { checkDocs, generateDocs, hasDocumentationScaffold } from './commands/docs/index.js';
+
+async function syncAgentDocs() {
+  const projectRoot = getProjectRoot(import.meta.url);
+  if (!(await hasDocumentationScaffold(projectRoot))) return;
+  try {
+    await generateDocs({
+      projectRoot,
+      target: 'agents',
+    });
+  } catch (error) {
+    Print.warning(`Could not update AGENTS.md: ${error.message}`);
+  }
+}
 import { cleanBundles, bundleInfo } from './commands/bundle/bundle.js';
 import {
   isLocalDelegationDisabled,
@@ -69,7 +83,6 @@ function parsePort(value) {
 async function withNodeEnv(env, fn) {
   const prevEnv = process.env.NODE_ENV;
   process.env.NODE_ENV = env;
-  listComponents();
   try {
     return await fn();
   } finally {
@@ -101,7 +114,7 @@ async function runWithVersionCheck(commandFunction, ...args) {
     return result;
   } catch (error) {
     Print.error(`Command execution: ${error.message}`);
-    console.error(error.stack);
+    Print.stack(error);
     // A command that threw must not report success. This used to swallow the
     // error and return normally, so `slice build` printed a red failure and
     // still exited 0 — CI read that as a passing build and shipped it.
@@ -153,15 +166,15 @@ try {
   const pkgPath = path.join(__dirname, "./package.json");
   const pkgRaw = fs.readFileSync(pkgPath, "utf-8");
   const pkg = JSON.parse(pkgRaw);
-  sliceClient.version(pkg.version).description("CLI for managing Slice.js framework components");
+  sliceClient.name("slice").version(pkg.version).description("Build, run and maintain Slice.js projects");
 } catch {
-  sliceClient.version("0.0.0").description("CLI for managing Slice.js framework components");
+  sliceClient.name("slice").version("0.0.0").description("Build, run and maintain Slice.js projects");
 }
 
 // INIT COMMAND
 sliceClient
   .command("init")
-  .description("Initialize a new Slice.js project")
+  .description("Create a new Slice.js project")
   .argument("[name]", "Project name (defaults to my-slice-app)")
   .option("-y, --yes", "Skip prompts")
   .option("--pm <packageManager>", "Package manager to use (pnpm or npm). Auto-detected when omitted")
@@ -277,7 +290,7 @@ sliceClient
 
 // BUILD COMMAND
 const buildCommand = sliceClient.command("build")
-  .description("Build Slice.js project for production")
+  .description("Build for production")
   .action(async (options) => {
     await withNodeEnv('production', () => runWithVersionCheck(async () => {
       // build() reports failure by returning false (degraded files, missing
@@ -324,7 +337,7 @@ buildCommand
 // DEV COMMAND (DEVELOPMENT)
 sliceClient
   .command("dev")
-  .description("Start development server with hot reload enabled by default")
+  .description("Start the development server")
   .option("-p, --port <port>", "Port for development server")
   .option("--no-hmr", "Disable hot module reload (enabled by default)")
   .action(async (options) => {
@@ -340,7 +353,7 @@ sliceClient
 // START COMMAND - PRODUCTION MODE
 sliceClient
   .command("start")
-  .description("Serve production files from dist/ (requires prior slice build)")
+  .description("Serve the production build")
   .option("-p, --port <port>", "Port for server")
   .action(async (options) => {
     await withNodeEnv('production', () => runWithVersionCheck(async () => {
@@ -352,13 +365,13 @@ sliceClient
   });
 
 // COMPONENT COMMAND GROUP - For local component management
-const componentCommand = sliceClient.command("component").alias("comp").description("Manage local project components");
+const componentCommand = sliceClient.command("component").alias("comp").description("Manage project components");
 
 // CREATE LOCAL COMPONENT
 componentCommand
   .command("create [name]")
   .alias("new")
-  .description("Create a new component in your local project")
+  .description("Create a component")
   .option("-c, --category <category>", "Component category (e.g. Visual, Service, AppComponents). Skips the prompt when provided.")
   .action(async (name, options) => {
     await runWithVersionCheck(async () => {
@@ -410,8 +423,8 @@ componentCommand
       const result = createComponent(componentName, category);
       if (result) {
         Print.success(`Component '${componentName}' created successfully in category '${category}'`);
-        Print.info("Listing updated components:");
-        listComponents();
+        listComponents({ category });
+        await syncAgentDocs();
       }
     });
   });
@@ -420,10 +433,13 @@ componentCommand
 componentCommand
   .command("list")
   .alias("ls")
-  .description("List all components in your local project")
-  .action(async () => {
+  .description("List local components")
+  .option("-a, --all", "List every component, not just a category summary")
+  .option("-c, --category <category>", "Only one category")
+  .option("--json", "Print machine-readable JSON")
+  .action(async (options) => {
     await runWithVersionCheck(() => {
-      listComponents();
+      listComponents(options);
       return Promise.resolve();
     });
   });
@@ -432,7 +448,7 @@ componentCommand
 componentCommand
   .command("delete [name]")
   .alias("remove")
-  .description("Delete a component from your local project")
+  .description("Delete a component")
   .option("-c, --category <category>", "Component category. Skips the category prompt when provided.")
   .option("-y, --yes", "Skip the confirmation prompt (for non-interactive use)")
   .action(async (name, options) => {
@@ -523,8 +539,8 @@ componentCommand
         // deleteComponent validates the name/category and that the component exists.
         if (deleteComponent(componentName, category)) {
           Print.success(`Component ${componentName} deleted successfully`);
-          Print.info("Listing updated components:");
-          listComponents();
+          listComponents({ category });
+          await syncAgentDocs();
         }
       } catch (error) {
         Print.error(`Deleting component: ${error.message}`);
@@ -533,10 +549,10 @@ componentCommand
   });
 
 // REGISTRY COMMAND GROUP - For component registry operations
-const registryCommand = sliceClient.command("registry").alias("reg").description("Manage components from official Slice.js repository");
+const registryCommand = sliceClient.command("registry").alias("reg").description("Manage registry components");
 
 // SKILL COMMAND GROUP - Claude Code skill fetched from the docs repo
-const skillCommand = sliceClient.command("skill").description("Manage the Slice.js Claude Code skill (fetched from the official docs repo)");
+const skillCommand = sliceClient.command("skill").description("Manage the developer skill");
 
 skillCommand
   .command("add")
@@ -550,7 +566,7 @@ skillCommand
   });
 
 // DOCUMENTATION COMMAND GROUP - Framework and Slice.js Components docs
-const docsCommand = sliceClient.command("docs").description("Search and retrieve Slice.js documentation");
+const docsCommand = sliceClient.command("docs").description("Search docs and generate project documentation");
 
 docsCommand
   .command("list")
@@ -588,6 +604,33 @@ docsCommand
     });
   });
 
+docsCommand
+  .command("generate [target]")
+  .description("Generate project documentation: all, agents, types, or events")
+  .option("-o, --output <path>", "Custom types output path", "src/slice-build.generated.d.ts")
+  .action(async (target, options) => {
+    await runWithVersionCheck(async () => {
+      await generateDocs({
+        projectRoot: getProjectRoot(import.meta.url),
+        target: target || 'all',
+        outputPath: options.output,
+      });
+    });
+  });
+
+docsCommand
+  .command("check [target]")
+  .description("Check generated project documentation for drift: all, agents, types, or events")
+  .action(async (target) => {
+    await runWithVersionCheck(async () => {
+      const result = await checkDocs({
+        projectRoot: getProjectRoot(import.meta.url),
+        target: target || 'all',
+      });
+      if (!result.ok) process.exitCode = 1;
+    });
+  });
+
 skillCommand
   .command("update")
   .description("Update the installed skill to the latest compatible version")
@@ -607,7 +650,7 @@ skillCommand
   });
 
 // TYPES COMMAND GROUP - TypeScript declarations from static props
-const typesCommand = sliceClient.command("types").description("Generate TypeScript declarations from component static props");
+const typesCommand = sliceClient.command("types").description("Generate TypeScript declarations");
 
 typesCommand
   .command("generate")
@@ -630,7 +673,7 @@ typesCommand
 // GET COMPONENTS FROM REGISTRY
 registryCommand
   .command("get [components...]")
-  .description("Download and install components from official repository")
+  .description("Install components from the registry")
   .option("-f, --force", "Force overwrite existing components")
   .option("-s, --service", "Install Service components instead of Visual")
   .option("--no-deps", "Do not resolve and install component dependencies")
@@ -641,6 +684,7 @@ registryCommand
         service: options.service,
         deps: options.deps
       });
+      await syncAgentDocs();
     });
   });
 
@@ -648,7 +692,7 @@ registryCommand
 registryCommand
   .command("list")
   .alias("ls")
-  .description("List all available components in the official repository")
+  .description("List registry components")
   .action(async () => {
     await runWithVersionCheck(async () => {
       await listRemoteComponents();
@@ -658,20 +702,21 @@ registryCommand
 // SYNC COMPONENTS FROM REGISTRY
 registryCommand
   .command("sync")
-  .description("Update all local components to latest versions from repository")
+  .description("Update installed components")
   .option("-f, --force", "Force update without confirmation")
   .action(async (options) => {
     await runWithVersionCheck(async () => {
       await syncComponents({
         force: options.force
       });
+      await syncAgentDocs();
     });
   });
 
 // SHORTCUTS - Top-level convenient commands
 sliceClient
   .command("get [components...]")
-  .description("Quick install components from registry")
+  .description("Install components from the registry")
   .option("-f, --force", "Force overwrite existing components")
   .option("-s, --service", "Install Service components instead of Visual")
   .option("--no-deps", "Do not resolve and install component dependencies")
@@ -690,12 +735,13 @@ sliceClient
         service: options.service,
         deps: options.deps
       });
+      await syncAgentDocs();
     });
   });
 
 sliceClient
   .command("browse")
-  .description("Quick browse available components")
+  .description("Browse registry components")
   .action(async () => {
     await runWithVersionCheck(async () => {
       await listRemoteComponents();
@@ -704,23 +750,27 @@ sliceClient
 
 sliceClient
   .command("sync")
-  .description("Quick sync local components to latest versions")
+  .description("Update installed components")
   .option("-f, --force", "Force update without confirmation")
   .action(async (options) => {
     await runWithVersionCheck(async () => {
       await syncComponents({
         force: options.force
       });
+      await syncAgentDocs();
     });
   });
 
 // LIST COMMAND - Quick shortcut for listing local components
 sliceClient
   .command("list")
-  .description("Quick list all local components (alias for component list)")
-  .action(async () => {
+  .description("List local components")
+  .option("-a, --all", "List every component, not just a category summary")
+  .option("-c, --category <category>", "Only one category")
+  .option("--json", "Print machine-readable JSON")
+  .action(async (options) => {
     await runWithVersionCheck(() => {
-      listComponents();
+      listComponents(options);
       return Promise.resolve();
     });
   });
@@ -729,7 +779,7 @@ sliceClient
 sliceClient
   .command("doctor")
   .alias("diagnose")
-  .description("Run diagnostics to check project health")
+  .description("Check project health")
   .action(async () => {
     await runWithVersionCheck(async () => {
       await runDiagnostics();
@@ -781,7 +831,7 @@ sliceClient
 // guarded in CI rather than generated at request time.
 const seoCommand = sliceClient
   .command("seo")
-  .description("SEO helpers: sitemap/robots generation and seo.json validation");
+  .description("SEO helpers");
 
 seoCommand
   .command("sitemap")
@@ -825,7 +875,7 @@ seoCommand
 const translatorCommand = sliceClient
   .command("translator")
   .alias("i18n")
-  .description("Translator helpers: scaffold the locale files and check every key");
+  .description("Translator helpers");
 
 translatorCommand
   .command("init")
@@ -853,14 +903,14 @@ translatorCommand
 // POSTINSTALL COMMAND - Configure npm scripts in existing project
 sliceClient
   .command("postinstall")
-  .description("Configure npm scripts in package.json (useful when adding slicejs-cli to an existing project)")
+  .description("Add Slice scripts to package.json")
   .action(() => {
     const pnpmHome = process.env.PNPM_HOME;
     const cliEntryPath = fileURLToPath(import.meta.url);
     const isGlobal = process.env.npm_config_global === 'true'
       || (pnpmHome && cliEntryPath.startsWith(pnpmHome));
     if (isGlobal) {
-      console.log('⚠️  Global installation of slicejs-cli detected.');
+      console.log('Global installation of slicejs-cli detected.');
       console.log('   We strongly recommend using a local installation to avoid version mismatches.');
       console.log(`   Uninstall global: ${pnpmHome ? 'pnpm remove -g slicejs-cli' : 'npm uninstall -g slicejs-cli'}`);
       return;
@@ -895,10 +945,10 @@ sliceClient
       }
 
       fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2), 'utf-8');
-      console.log(`✅  slicejs-cli installed successfully. Added ${addedCount} package scripts to package.json.`);
+      console.log(`slicejs-cli installed successfully. Added ${addedCount} package scripts to package.json.`);
       console.log(`   Run: ${runScriptCommand(packageManager, 'slice:dev')}`);
     } catch (err) {
-      console.log('✅  slicejs-cli installed successfully.');
+      console.log('slicejs-cli installed successfully.');
       console.log('   Could not auto-configure scripts:', err.message);
       console.log(`   Configure scripts manually and run: ${runScriptCommand(packageManager, 'slice:dev')}`);
     }
@@ -969,7 +1019,7 @@ program.on('command:*', () => {
 });
 
 // HELP Command
-const helpCommand = sliceClient.command("help").description("Display help information for Slice.js CLI").action(() => {
+const helpCommand = sliceClient.command("help").description("Display CLI help").action(() => {
   sliceClient.outputHelp();
 });
 

@@ -17,6 +17,9 @@ import ExternalModuleBundler from '../utils/bundling/ExternalModuleBundler.js';
 import { loadFrameworkSeo, loadManifest, loadSeoTranslator } from '../seo/support.js';
 import { loadRoutes } from '../seo/check.js';
 import { checkProject as checkTranslatorProject } from '../translator/scan.js';
+import { scanComponentCatalog } from '../utils/componentCatalog.js';
+import { checkAgents } from '../docs/agents.js';
+import { checkEventDocs } from '../docs/events.js';
 
 /**
  * Translator: is it configured, and does every key on the page exist in every locale?
@@ -618,6 +621,36 @@ async function checkExternalDependencies() {
 }
 
 /**
+ * Documentation: AGENTS guides, component inventories and the generated event catalog.
+ * Read-only; `slice docs generate` is the fix.
+ */
+async function checkDocumentation() {
+    const projectRoot = getProjectRoot(import.meta.url);
+    const configPath = getConfigPath(import.meta.url);
+    if (!fs.existsSync(configPath)) {
+        return { warn: true, message: 'No sliceConfig.json', suggestion: 'Run `slice init`' };
+    }
+
+    try {
+        const config = await fs.readJson(configPath);
+        const catalog = await scanComponentCatalog({ projectRoot, config });
+        const agents = await checkAgents({ projectRoot, catalog });
+        const events = await checkEventDocs({ projectRoot });
+        const issues = [...agents.issues, ...events.issues];
+        if (issues.length === 0) {
+            return { pass: true, message: 'AGENTS guides, inventories and event docs are current' };
+        }
+        return {
+            warn: true,
+            message: `${issues.length} documentation item(s): ${issues[0]}`,
+            suggestion: 'Run `slice docs generate`'
+        };
+    } catch (error) {
+        return { warn: true, message: `Could not check documentation: ${error.message}`, suggestion: 'Run `slice docs generate`' };
+    }
+}
+
+/**
  * Main diagnostic command
  */
 export {
@@ -635,7 +668,7 @@ export {
 
 export default async function runDiagnostics() {
     Print.newLine();
-    Print.title('🔍 Running Slice.js Diagnostics...');
+    Print.title('Slice.js diagnostics');
     Print.newLine();
 
     const checks = [
@@ -648,6 +681,7 @@ export default async function runDiagnostics() {
         { name: 'Package Manager', fn: checkPackageManagerSetup },
         { name: 'Dependencies', fn: checkDependencies },
         { name: 'Components & Routes', fn: checkComponents },
+        { name: 'Documentation', fn: checkDocumentation },
         { name: 'Server entry', fn: checkServerEntry },
         { name: 'External Dependencies', fn: checkExternalDependencies }
     ];
@@ -673,11 +707,11 @@ export default async function runDiagnostics() {
     results.forEach(result => {
         let status;
         if (result.pass) {
-            status = chalk.green('✅ PASS');
+            status = chalk.green('PASS');
         } else if (result.warn) {
-            status = chalk.yellow('⚠️  WARN');
+            status = chalk.yellow('WARN');
         } else {
-            status = chalk.red('❌ FAIL');
+            status = chalk.red('FAIL');
         }
 
         const details = result.suggestion
@@ -707,13 +741,13 @@ export default async function runDiagnostics() {
     }
 
     if (issues === 0 && warnings === 0) {
-        Print.success('All checks passed! 🎉');
+        Print.success('All checks passed');
         Print.info('Your Slice.js project is correctly configured');
     } else {
-        console.log(chalk.bold('📊 Summary:'));
-        console.log(chalk.green(`  ✅ Passed: ${passed}`));
-        if (warnings > 0) console.log(chalk.yellow(`  ⚠️  Warnings: ${warnings}`));
-        if (issues > 0) console.log(chalk.red(`  ❌ Issues: ${issues}`));
+        console.log(chalk.bold('Summary'));
+        console.log(chalk.green(`  Passed: ${passed}`));
+        if (warnings > 0) console.log(chalk.yellow(`  Warnings: ${warnings}`));
+        if (issues > 0) console.log(chalk.red(`  Failures: ${issues}`));
 
         Print.newLine();
 
