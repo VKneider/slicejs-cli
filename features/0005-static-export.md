@@ -22,7 +22,7 @@ Add `slice export`: a command that turns `dist/` into a folder any static file
 server can host (Cloudflare Pages, Vercel, nginx, GitHub Pages, S3), with no
 Express and no long-running Node process. It flattens the build output, emits
 per-route HTML from the SEO manifest, a real `404.html`, locale redirects,
-`slice-env.json`, and the host rule files.
+`slice-env.json` + its ESM shim, and the host rule files.
 
 Full design: [`../docs/static-export.md`](../docs/static-export.md).
 
@@ -71,7 +71,9 @@ user repeats, and the framework's own `--compress` flag already advertises
 
 - `slice export` with `--out`, `--host`, `--seo`, `--origin`, `--patterns`,
   `--no-prerender`, `--from-dist`, `--check`, `--dry-run`.
-- Flatten + root `index.html` + `slice-env.json`.
+- Flatten + root `index.html` + `slice-env.json` + `slice-env.generated.js`.
+- Build-time public env: `slice build` writes the JSON and the ESM shim; the runtime imports the
+  shim, so there is no env endpoint in production.
 - Per-route HTML from `prepareSeo.pages`, `404.html`, locale redirects.
 - Host rule generators: Cloudflare/Netlify, Vercel, nginx, GitHub Pages, S3.
 - Validation and a smoke test against a dumb static server.
@@ -121,7 +123,7 @@ user repeats, and the framework's own `--compress` flag already advertises
 - [ ] Command name: `slice export` vs `slice build --static`.
 - [ ] Default `${param}` policy: `skip`, `shell`, or fail.
 - [ ] One output layout + host rules, or one layout per host.
-- [ ] `slice-env.json` frozen at build vs edge function.
+- [x] `slice-env.json` frozen at build vs edge function. Build-time JSON + ESM shim; edge functions remain an option.
 - [ ] `Components/`: keep by default or prune with `--prune-components`.
 - [ ] Does `export` run `build`, or require `--from-dist`?
 
@@ -133,9 +135,16 @@ user repeats, and the framework's own `--compress` flag already advertises
   --from-dist` flattens `dist/public` to the root, creates `index.html` /
   `404.html`, freezes `slice-env.json` through the framework's exported env
   resolver, and writes Cloudflare/Netlify, Vercel, nginx or GitHub rules.
+- 2026-11-14 - Public env moved into `slice build`: `dist/slice-env.json` is the shared,
+  auditable artifact and `dist/slice-env.generated.js` is the ESM shim the runtime
+  imports. `slice export` copies both; `slice start` serves them as static assets.
+  The `/slice-env.json` endpoint remains only as the development/live provider and
+  as a fallback for older builds. Native JSON module imports were rejected because
+  they are not available in every browser/webview Slice supports.
 - 2026-11-14 - Validated against Conclave with a dumb static server: `/`,
   `/plantilla`, `/dashboard`, `/mis-respuestas` and `/comparar` render; an
-  unknown route reaches the app's 404 view. The pre-existing `UserMenu`
-  `createElement` error also appears under `slice start`, so it is not caused by
-  the export. Phase 2 (per-route SEO prerender, locale redirects) and phase 4
-  (`base` path) remain open.
+  unknown route reaches the app's 404 view. The static server log shows a
+  `GET /slice-env.generated.js` and no `GET /slice-env.json`. The pre-existing
+  `UserMenu` `createElement` error also appears under `slice start`, so it is not
+  caused by the export. Phase 2 (per-route SEO prerender, locale redirects) and
+  phase 4 (`base` path) remain open.

@@ -7,26 +7,12 @@
 // back to the SPA shell.
 import fs from 'fs-extra';
 import path from 'path';
-import { createRequire } from 'node:module';
-import { pathToFileURL } from 'node:url';
 import Print from '../Print.js';
 import { getProjectRoot, getDistPath } from '../utils/PathHelper.js';
+import { writeSliceEnv, writeSliceEnvPayload } from '../utils/publicEnv.js';
 import build from '../build/build.js';
 
 const HOSTS = new Set(['cloudflare', 'netlify', 'vercel', 'nginx', 'github', 's3', 'none']);
-
-// Prefer the package export (added with this feature), but fall back to the
-// file path so an older framework release still works.
-async function loadPublicEnvResolver() {
-  try {
-    return await import('slicejs-web-framework/api/framework/publicEnvResolver.js');
-  } catch {
-    const require = createRequire(import.meta.url);
-    const entry = require.resolve('slicejs-web-framework');
-    const packageRoot = path.resolve(path.dirname(entry), '..');
-    return import(pathToFileURL(path.join(packageRoot, 'api', 'framework', 'publicEnvResolver.js')).href);
-  }
-}
 
 function normalizeHost(value) {
   const host = String(value || 'cloudflare').toLowerCase();
@@ -64,14 +50,16 @@ async function flattenPublic(outDir) {
   await fs.remove(publicDir);
 }
 
-async function writeEnv(outDir, projectRoot) {
-  const { resolvePublicEnv } = await loadPublicEnvResolver();
-  const payload = resolvePublicEnv({
-    mode: 'production',
-    envFilePath: path.join(projectRoot, '.env')
-  });
-  await fs.writeFile(path.join(outDir, 'slice-env.json'), `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
-  return Object.keys(payload.env || {}).length;
+async function ensureEnv(outDir, projectRoot) {
+  const envPath = path.join(outDir, 'slice-env.json');
+  if (await fs.pathExists(envPath)) {
+    const payload = JSON.parse(await fs.readFile(envPath, 'utf8'));
+    // Re-emit both artifacts so an older build gets the ESM shim too.
+    await writeSliceEnvPayload(outDir, payload);
+    return Object.keys(payload.env || {}).length;
+  }
+  // Older builds (before env moved into `slice build`) get the files here.
+  return writeSliceEnv(outDir, projectRoot);
 }
 
 const HEADER_RULES = `/*
@@ -81,6 +69,8 @@ const HEADER_RULES = `/*
 /bundles/*
   Cache-Control: no-store
 /slice-env.json
+  Cache-Control: no-store
+/slice-env.generated.js
   Cache-Control: no-store
 `;
 
@@ -102,6 +92,10 @@ async function writeHostRules(outDir, host) {
         {
           source: '/slice-env.json',
           headers: [{ key: 'Cache-Control', value: 'no-store' }]
+        },
+        {
+          source: '/slice-env.generated.js',
+          headers: [{ key: 'Cache-Control', value: 'no-store' }]
         }
       ]
     };
@@ -122,6 +116,10 @@ location /bundles/ {
 location = /slice-env.json {
   add_header Cache-Control "no-store";
 }
+
+location = /slice-env.generated.js {
+  add_header Cache-Control "no-store";
+}
 `;
     await fs.writeFile(path.join(outDir, 'nginx.conf'), nginx, 'utf8');
     written.push('nginx.conf');
@@ -135,7 +133,7 @@ location = /slice-env.json {
 
 async function checkExport(outDir) {
   const issues = [];
-  const required = ['index.html', 'slice-env.json', 'bundles/bundle.config.json', 'Slice/Slice.js'];
+  const required = ['index.html', 'slice-env.json', 'slice-env.generated.js', 'bundles/bundle.config.json', 'Slice/Slice.js'];
 
   for (const file of required) {
     if (!await fs.pathExists(path.join(outDir, file))) {
@@ -215,7 +213,7 @@ export default async function exportStatic(options = {}) {
     // SPA shell there too. Real per-route SEO/404 pages are phase 2.
     await fs.copy(rootIndex, path.join(outDir, '404.html'));
 
-    const envKeys = await writeEnv(outDir, projectRoot);
+    const envKeys = await ensureEnv(outDir, projectRoot);
     const rules = await writeHostRules(outDir, host);
     const files = await listFiles(outDir);
     const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
@@ -223,7 +221,7 @@ export default async function exportStatic(options = {}) {
     Print.title('Static export');
     Print.success(`Exported to ${path.relative(projectRoot, outDir) || '.'}`);
     Print.info(`${files.length} files, ${(totalBytes / 1024 / 1024).toFixed(2)} MB`);
-    Print.info(`slice-env.json: ${envKeys} public key(s)`);
+    Print.info(`Public env: ${envKeys} key(s) (JSON + ESM)`);
     Print.info(`Host rules: ${rules.length ? rules.join(', ') : 'none'}`);
     Print.newLine();
     Print.subtitle('Next step');

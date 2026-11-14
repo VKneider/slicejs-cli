@@ -67,7 +67,7 @@ There is **no root `dist/index.html`**; the shell lives at `App/index.html`.
 | Responsibility | Source | Can it move to build time? |
 |---|---|---|
 | Serve `dist/public` at `/` and `dist/App` at `/App` | `repos/slice.js/api/framework/server.js:789,793` | Yes: flatten |
-| `/slice-env.json` from `.env` + `process.env` | `server.js:582` | Yes: frozen at build |
+| `/slice-env.json` from `.env` + `process.env` | `server.js:582` | Build writes `dist/slice-env.json` + `slice-env.generated.js`; the server serves them as static assets |
 | PWA (`service-worker.js`, `manifest.json`) | `server.js:596-625` | Yes: files + flatten |
 | `/Slice/Slice.js` | `server.js:632-651` | Already in `dist/Slice/` |
 | SPA fallback + 404 + locale redirects | `sliceFallback` (`server.js:129`) | Partial: `prepareSeo().resolve()` |
@@ -171,12 +171,20 @@ return {
 
 ### 3.6 `slice-env.json`
 
-- Emit at build from `SLICE_PUBLIC_*`, using the same rule as
-  `repos/slice.js/api/framework/publicEnvResolver.js:103`.
+- `slice build` emits two artifacts into `dist/`:
+  - `slice-env.json` — the shared, auditable payload.
+  - `slice-env.generated.js` — an ESM shim that exports the same object. The
+    runtime imports this shim, so there is no env endpoint in production.
+- The shim exists because native JSON modules (`import ... with { type: 'json' }`)
+  are not available in every browser/webview Slice supports. The JSON stays the
+  source of truth; the shim is only the import mechanism.
 - **Trade-off:** frozen at build. Per-environment values need one build per
   environment or an edge function.
-- Do not duplicate the logic: export the provider from the package
-  (`./api/framework/env.js`) and use it from the CLI.
+- Do not duplicate the resolver: the CLI uses
+  `slicejs-web-framework/api/framework/publicEnvResolver.js`.
+- `slice dev` keeps the live `/slice-env.json` endpoint (and serves a live shim)
+  so `.env` edits do not require a build. `slice start` serves the built files as
+  static assets; the old endpoint remains only as a fallback for older builds.
 
 ### 3.7 PWA and headers
 
@@ -258,11 +266,13 @@ pattern is detected.
 | Change | File | Risk |
 |---|---|---|
 | Expose `pages`, `notFound`, `redirects` in `prepareSeo()` | `repos/slice.js/api/framework/server.js:278-476` | Low. Adds fields only. |
-| Export the env provider (`./api/framework/env.js`) | `repos/slice.js/api/framework/publicEnvResolver.js:103` + `package.json exports` | Low. |
+| Export the env provider (`./api/framework/publicEnvResolver.js`) | `repos/slice.js/api/framework/publicEnvResolver.js` + `package.json exports` | Low. |
+| Import `/slice-env.generated.js` at boot (fetch fallback) | `repos/slice.js/Slice/Slice.js` | Low: same payload shape, no endpoint in production. |
+| Serve the built env JSON + shim as static assets | `repos/slice.js/api/framework/server.js` | Low: two file reads; dev keeps the live endpoint. |
 | (Phase 4) `base` in `sliceConfig` + `slice.url()` helper | `repos/slice.js/Slice/Slice.js`, `Controller.js`, `sliceConfig.schema.json` | Medium: touches the runtime. |
 
-`sliceFallback` and `createSliceServer` stay untouched: they remain the
-`slice start` / serverless path.
+`sliceFallback` stays untouched. `createSliceServer` only gains the static env
+routes; `slice start` remains the Express path.
 
 ---
 
@@ -272,7 +282,8 @@ pattern is detected.
 2. **Read config**: `sliceConfig.json`, `routes.js`, `seo.json`.
 3. **Prerender**: `prepareSeo({ projectRoot, runMode: 'production', seo })`.
 4. **Flatten**: `dist/public/*` → root; `dist/App/*` → `App/`; shell → `index.html`.
-5. **Emit**: pages, `404.html`, `slice-env.json`, redirects.
+5. **Copy env**: `dist/slice-env.json` + `dist/slice-env.generated.js`
+   (generate them for a `--from-dist` build created before this feature).
 6. **Host rules**: `_redirects`, `_headers`, `vercel.json`, `nginx.conf`.
 7. **Validate**: referenced assets exist, routes covered, no `.map`, no
    secrets, `index.html` present.

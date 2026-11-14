@@ -12,27 +12,43 @@ const MODULE_URL = import.meta.url;
 describe('slice build (full pipeline: buildProduction + bundle -> dist)', () => {
   test('produces a dist/ with parseable bundles', async () => {
     await withTestProject(async (root) => {
-      const ok = await build({ minify: false, obfuscate: false });
-      assert.equal(ok, true);
+      const previous = process.env.SLICE_PUBLIC_BUILD_TEST;
+      process.env.SLICE_PUBLIC_BUILD_TEST = 'from-build';
+      try {
+        const ok = await build({ minify: false, obfuscate: false });
+        assert.equal(ok, true);
 
-      const dist = path.join(root, 'dist');
-      assert.ok(await fs.pathExists(path.join(dist, 'App', 'index.js')));
+        const dist = path.join(root, 'dist');
+        assert.ok(await fs.pathExists(path.join(dist, 'App', 'index.js')));
 
-      const bundlesDir = path.join(dist, 'bundles');
-      assert.ok(await fs.pathExists(bundlesDir), 'dist/bundles should exist');
-      assert.equal(await fs.pathExists(path.join(root, 'src', 'bundles')), false, 'bundles never land in src/');
+        const env = JSON.parse(await fs.readFile(path.join(dist, 'slice-env.json'), 'utf8'));
+        assert.equal(env.mode, 'production');
+        assert.equal(env.env.SLICE_PUBLIC_BUILD_TEST, 'from-build');
 
-      const bundleFiles = (await fs.readdir(bundlesDir)).filter(
-        (f) => f.startsWith('slice-bundle.') && f.endsWith('.js')
-      );
-      assert.ok(bundleFiles.length > 0, 'at least one bundle in dist/bundles');
+        const shim = await fs.readFile(path.join(dist, 'slice-env.generated.js'), 'utf8');
+        assert.match(shim, /SLICE_PUBLIC_BUILD_TEST/);
+        assert.match(shim, /from-build/);
+        assert.match(shim, /export default env/);
 
-      for (const f of bundleFiles) {
-        const code = await fs.readFile(path.join(bundlesDir, f), 'utf8');
-        assert.doesNotThrow(
-          () => parse(code, { sourceType: 'module', plugins: ['jsx'] }),
-          `dist bundle ${f} is not valid JS`
+        const bundlesDir = path.join(dist, 'bundles');
+        assert.ok(await fs.pathExists(bundlesDir), 'dist/bundles should exist');
+        assert.equal(await fs.pathExists(path.join(root, 'src', 'bundles')), false, 'bundles never land in src/');
+
+        const bundleFiles = (await fs.readdir(bundlesDir)).filter(
+          (f) => f.startsWith('slice-bundle.') && f.endsWith('.js')
         );
+        assert.ok(bundleFiles.length > 0, 'at least one bundle in dist/bundles');
+
+        for (const f of bundleFiles) {
+          const code = await fs.readFile(path.join(bundlesDir, f), 'utf8');
+          assert.doesNotThrow(
+            () => parse(code, { sourceType: 'module', plugins: ['jsx'] }),
+            `dist bundle ${f} is not valid JS`
+          );
+        }
+      } finally {
+        if (previous === undefined) delete process.env.SLICE_PUBLIC_BUILD_TEST;
+        else process.env.SLICE_PUBLIC_BUILD_TEST = previous;
       }
     });
   });

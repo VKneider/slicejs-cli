@@ -10,12 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `slice export` (experimental): package `dist/` for a static host. Flattens `dist/public` to the
-  root, writes `index.html`/`404.html` and `slice-env.json`, and generates Cloudflare/Netlify,
-  Vercel, nginx or GitHub rules. Supports `--from-dist`, `--check` and `--dry-run`. Per-route SEO
-  prerendering and `base` path hosting remain pending.
+  root, writes `index.html`/`404.html` and copies the build-time `slice-env.json` +
+  `slice-env.generated.js`, and generates Cloudflare/Netlify, Vercel, nginx or GitHub rules.
+  Supports `--from-dist`, `--check` and `--dry-run`. Per-route SEO prerendering and `base` path
+  hosting remain pending.
 
 ### Changed
 
+- `slice build` writes `dist/slice-env.json` and `dist/slice-env.generated.js`. The runtime imports
+  the ESM shim, so production no longer needs an env endpoint; `slice dev` keeps the live endpoint
+  and `slice start` serves the built files as static assets.
 - Output pass: `Print` uses one symbol per severity (`✔ ! ✖ • →`), help descriptions are shorter,
   stack traces require `SLICE_DEBUG=1`, and emoji prefixes are gone from build, bundle, update and
   `get` output.

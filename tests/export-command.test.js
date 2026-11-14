@@ -30,6 +30,10 @@ async function createFakeDist(root) {
 test('export flattens dist/public and writes root index, env and host rules', async () => {
   await withTestProject(async (root) => {
     await createFakeDist(root);
+    await write(
+      path.join(root, 'dist', 'slice-env.json'),
+      JSON.stringify({ mode: 'production', env: { SLICE_PUBLIC_FROM: 'dist' } })
+    );
 
     const ok = await exportStatic({ fromDist: true, out: 'dist-static', host: 'cloudflare' });
     assert.equal(ok, true);
@@ -47,7 +51,11 @@ test('export flattens dist/public and writes root index, env and host rules', as
 
     const env = JSON.parse(await fs.readFile(path.join(out, 'slice-env.json'), 'utf8'));
     assert.equal(env.mode, 'production');
-    assert.deepEqual(env.env, {});
+    assert.deepEqual(env.env, { SLICE_PUBLIC_FROM: 'dist' });
+
+    const shim = await fs.readFile(path.join(out, 'slice-env.generated.js'), 'utf8');
+    assert.match(shim, /SLICE_PUBLIC_FROM/);
+    assert.match(shim, /export default env/);
 
     const check = await exportStatic({ out: 'dist-static', check: true });
     assert.equal(check, true);
