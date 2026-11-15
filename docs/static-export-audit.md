@@ -57,8 +57,8 @@ fixed or explicitly documented below. The feature is ready for a final review, b
 | P2-1 | P2 | `--sourcemap` is a no-op for the published export (maps are filtered). | Documented + warning |
 | P2-2 | P2 | `--no-minify` / `--no-obfuscate` can ship readable bundles. | Documented + warning |
 | P2-3 | P2 | `sliceConfig.json` exposes `server.port` / `server.host` (not secrets, but unnecessary). | Open; low priority |
-| P2-4 | P2 | Service workers can cache old bundle names across deploys. | Open; host-specific guidance |
-| P2-5 | P2 | `/api/*` is not exported; a static host has no server routes. | Documented limitation |
+| P2-4 | P2 | Service workers can cache old bundle names across deploys. | Documented (PWA + deployment guide); hardening optional |
+| P2-5 | P2 | `/api/*` is not exported; a static host has no server routes. | Documented (use `slice start`/Express or a separate API) |
 | P2-6 | P2 | GitHub Pages project sites (`user.github.io/repo/`) need a base path and are not supported. | Product decision |
 | P2-7 | P2 | `dist-static` vs a single `dist` was not formally decided/documented. | Fixed |
 
@@ -415,9 +415,29 @@ slice export (Portfolio)
 
 | Item | Recommendation |
 |---|---|
-| P2-3 `sliceConfig.json` exposure | Optionally emit a runtime-only subset for production; verify the runtime does not need `server.*`. |
-| P2-4 service worker caching | Document a versioned cache name / skipWaiting flow per host; consider hashing the cache on build. |
-| P2-5 API routes | Document that a static host has no `/api/*`; use an edge function or a separate backend. |
+| P2-3 `sliceConfig.json` exposure | Optional: emit a runtime-only subset in `dist/` (drop `server`, keep `paths`/`router`/`translator`/UI blocks). Verified: the runtime does not read `server`, and the Express server reads the port from `src/sliceConfig.json`. `publicFolders` is dead config and can be dropped. |
+| P2-4 service worker caching | Documented in `pwa.md` and the deployment guide. The worker is app-owned; the framework serves it but does not set the cache policy. Optional future: replace a build hash placeholder in `service-worker.js`. |
+| P2-5 API routes | Documented in the deployment guide and CLI reference: a static export has no `/api/*`; use `slice build` + `slice start` (Express) or a separate API origin. |
 | `--check` asset references | A future pass can parse `App/index.html` and bundles for local URLs and assert they exist. |
-| `--check` secret scan | A future pass can scan `sliceConfig.json` for keys such as `secret`, `password`, `token`; keep it opt-in to avoid false positives. |
+| `--check` secret scan | Defense-in-depth for hand-edited public files: `sliceConfig.json`, route metadata in `routes.js`, or a stray backup/`.env` under `src/public`. Generic key-name scans produce false positives, so keep it opt-in and limited to high-confidence patterns. |
 | Release | Bump CLI + framework together, run `node scripts/release-check.mjs`, and publish only after the deployment guide is live. |
+
+### P2-4 verification (Portfolio)
+
+The current `portfolio/src/service-worker.js`:
+
+- hardcodes `CACHE_NAME = 'portfolio-pwa-v4'` (must be bumped manually),
+- precaches the shell and optional `bundle.config.json` / `routes.js` /
+  `sliceConfig.json`; bundles are not precached,
+- serves `/bundles/*` network-first with `cache: 'no-store'` and a cached
+  fallback,
+- serves assets cache-first and navigations network-first with
+  `/App/index.html` as the offline fallback,
+- does **not** call `skipWaiting()` or `clients.claim()`.
+
+So the stale risk is not "old bundle filenames" (network-first updates them);
+it is an open tab keeping the old worker until all tabs close, plus asset
+cache-first behavior. The PWA guide now documents `CACHE` bumps,
+`--hash-filenames`, `skipWaiting`/`clients.claim`, and the export rule "do not
+precache `/Components/...`". The framework does not generate or version the
+worker because caching policy is app-specific.
