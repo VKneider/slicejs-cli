@@ -56,7 +56,7 @@ user repeats, and the framework's own `--compress` flag already advertises
 - `--check` validates an export: required runtime files, allowlist, no
   `.map*`/`.d.ts`/`.env*`/package manifests, no `sourceMappingURL=`, coherent
   host rules, and literal route coverage when there is no SPA fallback. Dynamic
-  routes, asset references and app secrets are documented as out of scope.
+  routes and asset references are documented as out of scope.
 - **Root-only by decision:** the app must be served at a domain/subdomain root,
   so the public route equals the app route. Subpath hosting (`base` path) is not
   supported.
@@ -211,5 +211,5 @@ user repeats, and the framework's own `--compress` flag already advertises
 - 2026-11-15 - **`--check` contract expanded.** It now validates `routes.js`,
   host-rule coherence, `.map.br`/`.map.gz`, `sourceMappingURL=`, `.env*`,
   package manifests, source-only folders and literal route coverage when there is
-  no SPA fallback. Dynamic routes, asset references and app secrets remain
-  explicitly out of scope.
+  no SPA fallback. Dynamic routes and asset references remain explicitly out of
+  scope. A secret scanner is not planned.

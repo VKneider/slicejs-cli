@@ -47,8 +47,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   be linked are grouped into one warning with the file list instead of one long warning per call.
 - `slice export --check` now validates `routes.js`, host-rule coherence, `.map.br`/`.map.gz`,
   `sourceMappingURL=`, `.env*`, package manifests, source-only folders and literal route coverage
-  when there is no SPA fallback. Dynamic `${param}` routes, asset references and app secrets remain
-  explicitly out of scope.
+  when there is no SPA fallback. Dynamic `${param}` routes and asset references remain explicitly out
+  of scope.
 - `slice init` adds `dist-static/` to the generated `.gitignore`.
 
 ## [4.5.0] - 2026-10-29

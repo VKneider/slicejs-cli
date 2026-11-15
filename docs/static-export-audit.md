@@ -50,7 +50,7 @@ fixed or explicitly documented below. The feature is ready for a final review, b
 | P0-4 | P0 | The production guard and `securityMiddleware` inspected the raw `req.path`; `express.static` decoded it, so `/%2eenv` could serve a `.env` from `public/`. | Fixed |
 | P1-1 | P1 | No user-facing deployment guide (Express vs static, hosts, GitHub Pages, preview, CI). | Fixed |
 | P1-2 | P1 | CLI/design flag tables were incomplete (`--keep-components`, `--sourcemap`, `--no-minify`, `--no-obfuscate`, `--hash-filenames`, `--compress`). | Fixed |
-| P1-3 | P1 | `--check` claimed route/secret/host validation but only checked six files, `Components/`, `.map` and `.d.ts`. | Fixed |
+| P1-3 | P1 | `--check` claimed route/host validation but only checked six files, `Components/`, `.map` and `.d.ts`. | Fixed |
 | P1-4 | P1 | `slice start` docs contradicted the code: no auto-build, `/dist` was public, port defaults, "real 404" without SEO, and "`sliceFallback` untouched". | Fixed |
 | P1-5 | P1 | The CLI suggested `npx serve -s`, which hides the real `404.html`. | Fixed |
 | P1-6 | P1 | `sliceConfig.json`, `routes.js` and `bundle.config.json` are public but were not documented as such. | Fixed |
@@ -278,7 +278,6 @@ Added `repos/slice.js_docs/markdown/getting-started/deployment.md`. It covers:
 - enumerate `${param}` routes (list concrete values in
   `seo.json → routes[pattern].sitemap.paths` first),
 - verify that every referenced image/font/CSS file exists,
-- scan `sliceConfig.json` or bundles for application-level secrets,
 - prove that a remote host applies the rules (`_redirects`, `vercel.json`,
   nginx config) or that `Cache-Control` is actually sent.
 
@@ -367,6 +366,14 @@ escape and the CLI warns that component source becomes fetchable.
 runtime imports the shim. There is no production env endpoint. Rebuild per
 environment or use an edge function for per-request values.
 
+### 6.6 No secret scanner
+
+A `--check` secret scanner is **not planned**. The exporter already rejects
+`.env*` and package manifests, and the deployment guide states that
+`sliceConfig.json`, `routes.js`, `bundle.config.json` and `slice-env.json` are
+public. Generic key-name scans produce false positives without preventing the
+real mistake, which is putting a secret in a public file.
+
 ---
 
 ## 7. Verification
@@ -415,11 +422,10 @@ slice export (Portfolio)
 
 | Item | Recommendation |
 |---|---|
-| P2-3 `sliceConfig.json` exposure | Optional: emit a runtime-only subset in `dist/` (drop `server`, keep `paths`/`router`/`translator`/UI blocks). Verified: the runtime does not read `server`, and the Express server reads the port from `src/sliceConfig.json`. `publicFolders` is dead config and can be dropped. |
+| P2-3 `sliceConfig.json` exposure | Optional: emit a runtime-only subset in `dist/` (drop `server`, keep `paths`/`router`/`translator`/UI blocks). Verified: the runtime does not read `server`, and the Express server reads the port from `src/sliceConfig.json`. |
 | P2-4 service worker caching | Documented in `pwa.md` and the deployment guide. The worker is app-owned; the framework serves it but does not set the cache policy. Optional future: replace a build hash placeholder in `service-worker.js`. |
 | P2-5 API routes | Documented in the deployment guide and CLI reference: a static export has no `/api/*`; use `slice build` + `slice start` (Express) or a separate API origin. |
 | `--check` asset references | A future pass can parse `App/index.html` and bundles for local URLs and assert they exist. |
-| `--check` secret scan | Defense-in-depth for hand-edited public files: `sliceConfig.json`, route metadata in `routes.js`, or a stray backup/`.env` under `src/public`. Generic key-name scans produce false positives, so keep it opt-in and limited to high-confidence patterns. |
 | Release | Bump CLI + framework together, run `node scripts/release-check.mjs`, and publish only after the deployment guide is live. |
 
 ### P2-4 verification (Portfolio)

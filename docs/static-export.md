@@ -345,9 +345,8 @@ Expected output:
 - a literal route in `routes.js` has no prerendered page and the export has no
   SPA fallback.
 
-`--check` does not enumerate `${param}` routes, verify every referenced asset,
-or scan application config for secrets. Those limits are documented in the
-deployment guide and the audit.
+`--check` does not enumerate `${param}` routes or verify every referenced asset.
+Those limits are documented in the deployment guide and the audit.
 
 ---
 
@@ -377,8 +376,8 @@ files as static assets. `slice start` remains the Express path.
 5. **Copy env**: `dist/slice-env.json` + `dist/slice-env.generated.js`
    (generate them for a `--from-dist` build created before this feature).
 6. **Host rules**: `_redirects`, `_headers`, `vercel.json`, `nginx.conf`.
-7. **Validate**: referenced assets exist, routes covered, no `.map`, no
-   secrets, `index.html` present.
+7. **Validate**: referenced assets exist, routes covered, no `.map`,
+   `index.html` present.
 8. **Report**: size, route count, warnings.
 
 Integration points: `client.js` (register the command) and a new
