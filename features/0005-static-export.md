@@ -6,7 +6,7 @@ status: in-progress
 area: cli
 priority: medium
 created: 2026-11-08
-updated: 2026-11-14
+updated: 2026-11-15
 target: TBD
 owners: []
 related: []
@@ -24,7 +24,8 @@ Express and no long-running Node process. It flattens the build output, emits
 per-route HTML from the SEO manifest, a real `404.html`, locale redirects,
 `slice-env.json` + its ESM shim, and the host rule files.
 
-Full design: [`../docs/static-export.md`](../docs/static-export.md).
+Full design: [`../docs/static-export.md`](../docs/static-export.md). Audit and
+decisions: [`../docs/static-export-audit.md`](../docs/static-export-audit.md).
 
 ## Problem / motivation
 
@@ -52,8 +53,10 @@ user repeats, and the framework's own `--compress` flag already advertises
   `routes.js`, `sliceConfig.json`, `slice-env.json`.
 - Emit `<route>/index.html` for literal routes, `404.html` and host rules
   (`_redirects`/`_headers`, `vercel.json`, `nginx.conf`).
-- `--check` validates an export: no `.map`, no secret patterns, every route
-  covered, assets present.
+- `--check` validates an export: required runtime files, allowlist, no
+  `.map*`/`.d.ts`/`.env*`/package manifests, no `sourceMappingURL=`, coherent
+  host rules, and literal route coverage when there is no SPA fallback. Dynamic
+  routes, asset references and app secrets are documented as out of scope.
 - **Root-only by decision:** the app must be served at a domain/subdomain root,
   so the public route equals the app route. Subpath hosting (`base` path) is not
   supported.
@@ -71,34 +74,48 @@ user repeats, and the framework's own `--compress` flag already advertises
 
 ### In scope
 
-- `slice export` with `--out`, `--host`, `--seo`, `--origin`, `--no-prerender`,
-  `--from-dist`, `--check`, `--dry-run`.
+- `slice export` with `--out`, `--host`, `--seo`, `--origin`, `--images`,
+  `--no-prerender`, `--spa`, `--keep-components`, `--from-dist`, `--check`,
+  `--dry-run`, `--sourcemap`, `--hash-filenames`, `--compress`, `--no-minify`,
+  `--no-obfuscate`.
 - Flatten + root `index.html` + `slice-env.json` + `slice-env.generated.js`.
 - Build-time public env: `slice build` writes the JSON and the ESM shim; the runtime imports the
   shim, so there is no env endpoint in production.
 - Per-route HTML from `prepareSeo.pages`, `404.html`, locale redirects.
 - Host rule generators: Cloudflare/Netlify, Vercel, nginx, GitHub Pages, S3.
+- Allowlist copy + safe `--out` + expanded `--check`.
 - Validation and a smoke test against a dumb static server.
+- User-facing deployment guide.
 
 ### Out of scope
 
 - Runtime `base` path / subpath hosting is **out of scope by product decision**.
 - Edge functions for `${param}` SEO.
-- Changing `slice start` or `sliceFallback`.
-- A docs-site deployment guide (separate docs commit).
+- Exporting `/api/*` routes; a static host has no server-side routes.
+- A built-in static preview command (`slice serve`); use a static server.
 
 ## Compatibility and risk
 
-- **Public API impact**: new command and flags only. `build`, `start` and the
-  runtime are untouched.
-- **Existing apps affected**: none until they run `slice export`.
-- **Migration / breaking change**: none.
-- **Security / performance**: `Components/` is pruned by default so component
-  source is not fetchable; `--keep-components` opts back in and `--check` fails
-  when it is present. Any `.map` left by `--sourcemap` is excluded; `--check`
-  fails on maps. Prerendering runs `prepareSeo` at build time (Node, no browser).
-- **Framework change**: exposing three fields from `prepareSeo` is additive.
-  Exporting the env provider requires a `package.json` `exports` entry.
+- **Public API impact**: new command and flags only. `build` is untouched.
+  `start` changed for security hardening: production no longer serves the `/dist`
+  tree (only `/dist/bundles/`), `/Components`, maps, declarations, `.env`,
+  `package.json` or `node_modules`.
+- **Existing apps affected**: none until they run `slice export`. Existing
+  `slice start` deployments benefit from the production hardening automatically.
+- **Migration / breaking change**: none. A deployment that fetched files from
+  the public `/dist` tree was relying on an accidental exposure; use
+  `/dist/bundles/` or the public assets instead.
+- **Security / performance**: the export is an allowlist, so `utils/`,
+  `AppConfig.js`, `slice-events.generated.js`, `.map*`, `.d.ts`, `.env*`,
+  lockfiles and `node_modules` never ship. `--out` is validated before
+  `fs.remove()`. Production decodes percent-encoded paths before the guard.
+  `Components/` is pruned by default; `--keep-components` opts back in and
+  `--check` fails when it is present. Prerendering runs `prepareSeo` at build
+  time (Node, no browser).
+- **Framework change**: exposing three fields from `prepareSeo` is additive; the
+  CLI imports it lazily and checks the capability, so an older framework only
+  fails `export`. Exporting the env provider requires a `package.json` `exports`
+  entry.
 
 ## Validation plan
 
@@ -113,22 +130,28 @@ user repeats, and the framework's own `--compress` flag already advertises
 
 ## Documentation impact
 
-- Framework docs pages: new `getting-started/deployment.md` (or
-  `project-architecture/static-hosting.md`) in `repos/slice.js_docs/markdown/`.
-- CLI docs: `cli-commands.md` (new command and flags).
+- Framework docs pages: `getting-started/deployment.md` (host matrix, Express vs
+  static, GitHub Pages, `--check`, security model).
+- CLI docs: `cli-commands.md` (`start` auto-build, `build` flags, `export` flags,
+  `--check` guarantees, `dist-static` rationale).
+- Internal docs: `docs/static-export.md` and `docs/static-export-audit.md`.
 - Component docs: none.
-- Skill / agent guidance: add the export command and the root-only rule to
-  `slice-js-developer`.
+- Skill / agent guidance: `slice-js-developer` v1.34.4 (export allowlist, safe
+  `--out`, `--check` limits, deployment guide pointer).
 - Workspace docs: this feature is aggregated by `pnpm feature:list`.
 
 ## Open questions
 
-- [ ] Command name: `slice export` vs `slice build --static`.
-- [ ] Default `${param}` policy: `skip`, `shell`, or fail.
-- [ ] One output layout + host rules, or one layout per host.
+- [x] Command name: `slice export` (separate from `build`).
+- [x] Default `${param}` policy: skip; enumerate with `sitemap.paths`, or use
+  `--spa`.
+- [x] One output layout + optional host rules.
 - [x] `slice-env.json` frozen at build vs edge function. Build-time JSON + ESM shim; edge functions remain an option.
 - [x] `Components/`: pruned by default; `--keep-components` for debugging.
-- [ ] Does `export` run `build`, or require `--from-dist`?
+- [x] `export` runs `build` by default; `--from-dist` reuses `dist/`.
+- [x] Output folder: `dist-static/` (separate from the Express `dist/`).
+- [x] 404 policy: real 404 with SEO; `--spa` for a soft 404.
+- [x] Deployment guide: `getting-started/deployment.md`.
 
 ## Decision log
 
@@ -175,3 +198,18 @@ user repeats, and the framework's own `--compress` flag already advertises
   `.map`, `.d.ts`, `.env`, `package.json` and `node_modules` requests before the
   SPA fallback. Verified against Portfolio: `/dist/Components/...` and
   `/dist/sliceConfig.json` 404, `/dist/bundles/...` 200, maps 403/404.
+- 2026-11-15 - **Security audit (P0).** Fixed `--out` deleting the project, the
+  top-level framework import breaking every command, the denylist copy shipping
+  source/secrets, and the `/%2eenv` production guard bypass. The export is now an
+  allowlist; the framework SEO API is imported lazily with a capability check;
+  protected paths are decoded before every guard. See
+  [`../docs/static-export-audit.md`](../docs/static-export-audit.md).
+- 2026-11-15 - **`dist-static/` confirmed as the output.** It stays separate from
+  the Express `dist/` because the layouts differ (flattened public root, root
+  `index.html`, `404.html`, host rules). Documented in the design, CLI reference
+  and deployment guide.
+- 2026-11-15 - **`--check` contract expanded.** It now validates `routes.js`,
+  host-rule coherence, `.map.br`/`.map.gz`, `sourceMappingURL=`, `.env*`,
+  package manifests, source-only folders and literal route coverage when there is
+  no SPA fallback. Dynamic routes, asset references and app secrets remain
+  explicitly out of scope.

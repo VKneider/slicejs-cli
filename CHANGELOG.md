@@ -17,6 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is pruned by default so component source is not fetchable; `--keep-components` is debug-only. The
   export is root-only: the public route equals the app route, so subpath hosting is not supported.
 
+### Security
+
+- `slice export` now copies an explicit allowlist instead of `dist/` minus a denylist. `utils/`,
+  `AppConfig.js`, `slice-events.generated.js`, `.map`, `.map.br`, `.map.gz`, `.d.ts`, `.env*`,
+  `package.json`, lockfiles and `node_modules` never reach the export.
+- `slice export --out` is validated before the target is removed. The project root, ancestors, paths
+  outside the project, `src`, `dist`, `api`, `node_modules`, `.git`, `public`, `locales`,
+  `Components`, `App`, `bundles`, `Slice` and non-directory targets are rejected.
+- `slice export` imports the framework SEO API lazily and checks it. An older `slicejs-web-framework`
+  now fails only `export` with a clear message, instead of breaking every CLI command at startup.
+
 ### Changed
 
 - `slice build` writes `dist/slice-env.json` and `dist/slice-env.generated.js`. The runtime imports
@@ -34,6 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Update your Slice.js" next step is gone and the run ends with one `Build completed` block.
 - Bundler warnings use the `!` line and are deduplicated. Dynamic `slice.build()` calls that cannot
   be linked are grouped into one warning with the file list instead of one long warning per call.
+- `slice export --check` now validates `routes.js`, host-rule coherence, `.map.br`/`.map.gz`,
+  `sourceMappingURL=`, `.env*`, package manifests, source-only folders and literal route coverage
+  when there is no SPA fallback. Dynamic `${param}` routes, asset references and app secrets remain
+  explicitly out of scope.
+- `slice init` adds `dist-static/` to the generated `.gitignore`.
 
 ## [4.5.0] - 2026-10-29
 
