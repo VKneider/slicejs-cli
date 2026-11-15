@@ -105,6 +105,9 @@ node_modules/
 # Production build output (slice build)
 dist/
 
+# Static export output (slice export)
+dist-static/
+
 # Local environment overrides
 .env
 .env.*

@@ -26,6 +26,7 @@ async function createFakeDist(root) {
   await write(path.join(dist, 'public', 'images', 'logo.svg'), '<svg/>');
   await write(path.join(dist, 'public', 'manifest.json'), '{"name":"Test"}');
   await write(path.join(dist, 'sliceConfig.json'), '{"server":{"port":3000}}');
+  await write(path.join(dist, 'routes.js'), "export default [{ path: '/' }];\n");
   await write(path.join(dist, 'robots.txt'), 'User-agent: *');
   await write(path.join(dist, 'slice-build.generated.d.ts'), 'export {};');
   await write(path.join(dist, 'bundle.js.map'), '{}');
@@ -230,5 +231,152 @@ test('an unknown host fails before writing', async () => {
     const ok = await exportStatic({ fromDist: true, out: 'dist-static', host: 'nope' });
     assert.equal(ok, false);
     assert.equal(await fs.pathExists(path.join(root, 'dist-static')), false);
+  }, { visualComponents: [] });
+});
+
+test('export refuses to delete the project, source folders or dist', async () => {
+  await withTestProject(async (root) => {
+    await createFakeDist(root);
+    await write(path.join(root, 'src', 'keep-me.js'), 'export const keep = true;');
+    await write(path.join(root, 'api', 'keep-me.js'), 'export const keep = true;');
+    const outputFile = path.join(root, 'not-a-directory.txt');
+    await write(outputFile, 'keep');
+
+    for (const out of ['.', 'src', 'dist', 'api', 'node_modules', 'not-a-directory.txt']) {
+      const ok = await exportStatic({ fromDist: true, out, host: 'cloudflare' });
+      assert.equal(ok, false, `--out ${out} should be rejected`);
+    }
+
+    assert.equal(await fs.pathExists(path.join(root, 'src', 'keep-me.js')), true);
+    assert.equal(await fs.pathExists(path.join(root, 'api', 'keep-me.js')), true);
+    assert.equal(await fs.pathExists(path.join(root, 'dist', 'App', 'index.html')), true);
+    assert.equal(await fs.pathExists(outputFile), true);
+  }, { visualComponents: [] });
+});
+
+test('export refuses to overwrite an existing non-export folder such as docs', async () => {
+  await withTestProject(async (root) => {
+    await createFakeDist(root);
+    await write(path.join(root, 'docs', 'keep.md'), '# keep');
+
+    const ok = await exportStatic({ fromDist: true, out: 'docs', host: 'cloudflare' });
+
+    assert.equal(ok, false);
+    assert.equal(await fs.pathExists(path.join(root, 'docs', 'keep.md')), true);
+  }, { visualComponents: [] });
+});
+
+test('export can overwrite a previous export', async () => {
+  await withTestProject(async (root) => {
+    await createFakeDist(root);
+    assert.equal(await exportStatic({ fromDist: true, out: 'dist-static', host: 'cloudflare' }), true);
+    assert.equal(await exportStatic({ fromDist: true, out: 'dist-static', host: 'cloudflare' }), true);
+
+    assert.equal(await fs.pathExists(path.join(root, 'dist-static', 'index.html')), true);
+  }, { visualComponents: [] });
+});
+
+test('export rejects case variants of protected folders on Windows', async (t) => {
+  if (process.platform !== 'win32') {
+    t.skip('case-insensitive filesystem check only applies to Windows');
+    return;
+  }
+
+  await withTestProject(async (root) => {
+    await createFakeDist(root);
+    await write(path.join(root, 'src', 'keep-me.js'), 'export const keep = true;');
+
+    for (const out of ['SRC', 'Dist', 'API']) {
+      const ok = await exportStatic({ fromDist: true, out, host: 'cloudflare' });
+      assert.equal(ok, false, `--out ${out} should be rejected on Windows`);
+    }
+
+    assert.equal(await fs.pathExists(path.join(root, 'src', 'keep-me.js')), true);
+    assert.equal(await fs.pathExists(path.join(root, 'dist', 'App', 'index.html')), true);
+  }, { visualComponents: [] });
+});
+
+test('export refuses an output path outside the project', async () => {
+  await withTestProject(async (root) => {
+    await createFakeDist(root);
+    const outside = path.join(path.dirname(root), `slice-export-outside-${process.pid}`);
+    await fs.remove(outside);
+
+    const ok = await exportStatic({ fromDist: true, out: outside, host: 'cloudflare' });
+
+    assert.equal(ok, false);
+    assert.equal(await fs.pathExists(outside), false);
+  }, { visualComponents: [] });
+});
+
+test('export publishes only the runtime allowlist, not source or build artifacts', async () => {
+  await withTestProject(async (root) => {
+    await createFakeDist(root);
+    await write(path.join(root, 'dist', 'utils', 'helper.js'), 'export const secret = true;');
+    await write(path.join(root, 'dist', 'AppConfig.js'), 'export default {};');
+    await write(path.join(root, 'dist', 'slice-events.generated.js'), 'export default {};');
+    await write(path.join(root, 'dist', 'bundles', 'bundle.js.map.br'), 'compressed map');
+    await write(path.join(root, 'dist', 'public', '.env'), 'SLICE_PUBLIC_SECRET=1');
+    await write(path.join(root, 'dist', 'public', 'app.js.map.gz'), 'compressed map');
+
+    const ok = await exportStatic({ fromDist: true, out: 'dist-static', host: 'cloudflare' });
+    assert.equal(ok, true);
+
+    const out = path.join(root, 'dist-static');
+    for (const file of [
+      'utils/helper.js',
+      'AppConfig.js',
+      'slice-events.generated.js',
+      'bundles/bundle.js.map.br',
+      '.env',
+      'app.js.map.gz'
+    ]) {
+      assert.equal(await fs.pathExists(path.join(out, file)), false, `${file} should not be exported`);
+    }
+
+    assert.equal(await fs.pathExists(path.join(out, 'App', 'index.html')), true);
+    assert.equal(await fs.pathExists(path.join(out, 'bundles', 'slice-bundle.home.js')), true);
+  }, { visualComponents: [] });
+});
+
+test('check rejects map variants, sourceMappingURL, env files and unexpected source', async () => {
+  await withTestProject(async (root) => {
+    await createFakeDist(root);
+    const ok = await exportStatic({ fromDist: true, out: 'dist-static', host: 'cloudflare' });
+    assert.equal(ok, true);
+
+    const out = path.join(root, 'dist-static');
+    await write(path.join(out, 'bundles', 'bundle.js.map.gz'), 'map');
+    await write(path.join(out, '.env.local'), 'SECRET=1');
+    await write(path.join(out, 'utils', 'helper.js'), 'export const x = 1;');
+    await write(path.join(out, 'App', 'index.js'), 'export const x = 1;\n//# sourceMappingURL=index.js.map');
+
+    assert.equal(await exportStatic({ out: 'dist-static', check: true }), false);
+  }, { visualComponents: [] });
+});
+
+test('check requires the rule files for an explicitly selected host', async () => {
+  await withTestProject(async (root) => {
+    await createFakeDist(root);
+    const ok = await exportStatic({ fromDist: true, out: 'dist-static', host: 'github' });
+    assert.equal(ok, true);
+
+    assert.equal(await exportStatic({ out: 'dist-static', check: true }), true);
+    assert.equal(await exportStatic({ out: 'dist-static', check: true, host: 'github' }), true);
+
+    await fs.remove(path.join(root, 'dist-static', '.nojekyll'));
+    assert.equal(await exportStatic({ out: 'dist-static', check: true, host: 'github' }), false);
+  }, { visualComponents: [] });
+});
+
+test('check reports a missing routes.js', async () => {
+  await withTestProject(async (root) => {
+    await createFakeDist(root);
+    const ok = await exportStatic({ fromDist: true, out: 'dist-static', host: 'cloudflare' });
+    assert.equal(ok, true);
+
+    await fs.remove(path.join(root, 'dist-static', 'routes.js'));
+
+    assert.equal(await exportStatic({ out: 'dist-static', check: true }), false);
   }, { visualComponents: [] });
 });

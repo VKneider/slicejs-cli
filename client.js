@@ -341,7 +341,7 @@ sliceClient
   .description("Package the production build for a static host")
   .option("-o, --out <dir>", "Output directory", "dist-static")
   .option("--from-dist", "Reuse dist/ instead of running a build")
-  .option("--host <name>", "Host rules: cloudflare, netlify, vercel, nginx, github, s3, none", "cloudflare")
+  .option("--host <name>", "Host rules: cloudflare, netlify, vercel, nginx, github, s3, none (default: cloudflare)")
   .option("--seo <file>", "SEO manifest (auto-detected: seo.json / public/seo.json)")
   .option("--origin <url>", "Canonical origin override for prerendered pages")
   .option("--images <file>", "Social card manifest (auto-detected: public/og/manifest.json)")
