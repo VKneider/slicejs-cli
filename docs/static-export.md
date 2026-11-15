@@ -168,7 +168,9 @@ return {
   `${param}` routes cannot be expressed.
 - Vercel: `redirects[]`.
 - nginx: `location = /es/pricing { return 301 /pricing; }`.
-- GitHub Pages: no server redirects; meta refresh or accept the loss.
+- GitHub Pages / S3 / `--host none`: no server redirects, so the exporter writes
+  a tiny HTML redirect page (`meta refresh` + `rel=canonical` + `noindex`) at the
+  non-canonical path. It is a 200 soft redirect, but portable and crawlable.
 
 ### 3.6 `slice-env.json`
 
@@ -355,12 +357,14 @@ location ~* \.(?:css|js|svg|png|woff2)$ {
 - No rewrites, no headers.
 - `index.html` + `<route>/index.html` + `404.html` + `.nojekyll`.
 - Root only (user site or custom domain) until phase 4.
+- Locale redirects become HTML `meta refresh` pages at the non-canonical path.
 - `${param}` routes need the `404.html` redirect trick (head becomes
   404/noindex).
 
 ### S3 + CloudFront
 
 - `index.html` as the default root; `404.html` as the error document.
+- Locale redirects become HTML `meta refresh` pages at the non-canonical path.
 - SPA: CloudFront function or `CustomErrorResponses` to `/index.html` (soft
   404).
 

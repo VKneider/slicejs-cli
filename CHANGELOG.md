@@ -12,8 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `slice export` (experimental): package `dist/` for a static host. Flattens `dist/public` to the
   root, copies the build-time `slice-env.json` + `slice-env.generated.js`, prerenders literal SEO
   routes (and `sitemap.paths`), writes a real `404.html` and locale redirects, and generates
-  Cloudflare/Netlify, Vercel, nginx or GitHub rules. Supports `--from-dist`, `--spa`,
-  `--no-prerender`, `--check` and `--dry-run`. `base` path hosting remains pending.
+  Cloudflare/Netlify, Vercel, nginx or GitHub rules. GitHub/S3/`none` get portable HTML redirect
+  pages. Supports `--from-dist`, `--spa`, `--no-prerender`, `--check` and `--dry-run`. `base` path
+  hosting remains pending.
 
 ### Changed
 

@@ -127,6 +127,51 @@ function redirectLines(redirects) {
   return redirects.map(({ from, to, status }) => `${from}  ${to}  ${status}`).join('\n');
 }
 
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function clientRedirectHtml(to, origin) {
+  const absolute = /^https?:\/\//i.test(to) ? to : `${origin}${to}`;
+  return `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Redirecting…</title>
+  <link rel="canonical" href="${escapeHtml(absolute)}">
+  <meta name="robots" content="noindex">
+  <meta http-equiv="refresh" content="0; url=${escapeHtml(to)}">
+</head>
+<body>
+  <p>Redirecting to <a href="${escapeHtml(to)}">${escapeHtml(to)}</a>…</p>
+</body>
+</html>
+`;
+}
+
+async function writeClientRedirects(outDir, redirects, origin, { allowRoot = false } = {}) {
+  let written = 0;
+  const skipped = [];
+  for (const { from, to } of redirects) {
+    const file = path.join(outDir, pagePathForUrl(from));
+    if (await fs.pathExists(file)) {
+      if (!(allowRoot && from === '/')) {
+        // A canonical page already owns this path; do not replace it with a redirect.
+        skipped.push(from);
+        continue;
+      }
+    }
+    await fs.ensureDir(path.dirname(file));
+    await fs.writeFile(file, clientRedirectHtml(to, origin), 'utf8');
+    written += 1;
+  }
+  return { written, skipped };
+}
+
 async function writeHostRules(outDir, host, redirects = [], { spa = false } = {}) {
   const written = [];
   const warnings = [];
@@ -197,11 +242,6 @@ location = /slice-env.generated.js {
   } else if (host === 'github') {
     await fs.writeFile(path.join(outDir, '.nojekyll'), '', 'utf8');
     written.push('.nojekyll');
-    if (redirects.length) {
-      warnings.push(`GitHub Pages cannot express ${redirects.length} locale redirect(s); they are not in the export.`);
-    }
-  } else if (redirects.length) {
-    warnings.push(`${redirects.length} locale redirect(s) require host rules; --host ${host} writes none.`);
   }
 
   return { written, warnings };
@@ -374,6 +414,18 @@ export default async function exportStatic(options = {}) {
     const redirects = prerender?.seo.redirects || [];
     const spa = options.spa === true || !prerender;
     const hostRules = await writeHostRules(outDir, host, redirects, { spa });
+
+    // Hosts without server-side redirect syntax get portable HTML redirect files.
+    const clientHosts = new Set(['github', 's3', 'none']);
+    let clientRedirects = { written: 0, skipped: [] };
+    if (clientHosts.has(host) && redirects.length) {
+      clientRedirects = await writeClientRedirects(
+        outDir,
+        redirects,
+        prerender?.seo.origin || '',
+        { allowRoot: !prerender?.pages.has('/') }
+      );
+    }
     const files = await listFiles(outDir);
     const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
 
@@ -398,6 +450,12 @@ export default async function exportStatic(options = {}) {
     Print.info(`Public env: ${envKeys} key(s) (JSON + ESM)`);
     Print.info(`Host rules: ${hostRules.written.length ? hostRules.written.join(', ') : 'none'}`);
     Print.info(`SPA fallback: ${spa ? 'yes (unknown routes -> index.html)' : 'no (unknown routes -> 404.html)'}`);
+    if (clientRedirects.written) {
+      Print.info(`${clientRedirects.written} client redirect page(s)`);
+    }
+    for (const skipped of clientRedirects.skipped) {
+      Print.warning(`Redirect path already has a page; kept the page: ${skipped}`);
+    }
     for (const warning of hostRules.warnings) Print.warning(warning);
 
     Print.newLine();

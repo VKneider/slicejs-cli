@@ -154,3 +154,7 @@ user repeats, and the framework's own `--compress` flag already advertises
   restores the SPA fallback. Validated on Portfolio: 30 routes across 2 locales,
   `/en/experience` -> `/experience` 301, `/nope` -> 404 with noindex, localized
   titles and `lang` attributes. Phase 4 (`base` path) remains open.
+- 2026-11-14 - GitHub Pages / S3 / `--host none` now get portable HTML redirect
+  pages (`meta refresh`, `rel=canonical`, `noindex`) for locale redirects, since
+  those hosts cannot express server rules. Verified `/en/experience` lands on
+  `/experience` with the correct title.

@@ -180,6 +180,27 @@ test('export prerenders every locale and writes locale redirects', async () => {
   }, { visualComponents: [] });
 });
 
+test('export writes client redirect pages for hosts without server rules', async () => {
+  await withTestProject(async (root) => {
+    await createLocalizedSeoDist(root);
+
+    const ok = await exportStatic({ fromDist: true, out: 'dist-static', host: 'github' });
+    assert.equal(ok, true);
+
+    const out = path.join(root, 'dist-static');
+    assert.equal(await fs.pathExists(path.join(out, '.nojekyll')), true);
+
+    const rootRedirect = await fs.readFile(path.join(out, 'index.html'), 'utf8');
+    assert.match(rootRedirect, /http-equiv="refresh"/);
+    assert.match(rootRedirect, /url=\/en/);
+
+    const aboutRedirect = await fs.readFile(path.join(out, 'about', 'index.html'), 'utf8');
+    assert.match(aboutRedirect, /http-equiv="refresh"/);
+    assert.match(aboutRedirect, /url=\/en\/about/);
+    assert.match(aboutRedirect, /rel="canonical"/);
+  }, { visualComponents: [] });
+});
+
 test('an unknown host fails before writing', async () => {
   await withTestProject(async (root) => {
     await createFakeDist(root);
