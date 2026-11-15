@@ -218,6 +218,9 @@ fixed; hashed bundles can be immutable).
   bundle. `--keep-components` is a debugging escape and `--check` fails unless
   that flag is passed. A truly dynamic `slice.build` is already broken in
   Express production today.
+- Express production also blocks the `/dist` tree (only `/dist/bundles/` is
+  mirrored) and any `.map`, `.d.ts`, `.env`, `package.json` or `node_modules`
+  request, so the static export and `slice start` agree on what is public.
 
 ### 3.9 Subpath hosting (out of scope)
 

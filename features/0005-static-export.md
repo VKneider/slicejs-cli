@@ -170,3 +170,8 @@ user repeats, and the framework's own `--compress` flag already advertises
   fetchable. `--keep-components` is a debugging escape and `--check` fails when
   the folder is present without it. Verified `/Components/...` returns 404 and
   Portfolio still renders from its bundles.
+- 2026-11-15 - **Production `start` hardened.** `createSliceServer` no longer
+  serves the `/dist` tree (only `/dist/bundles/` for legacy assets) and rejects
+  `.map`, `.d.ts`, `.env`, `package.json` and `node_modules` requests before the
+  SPA fallback. Verified against Portfolio: `/dist/Components/...` and
+  `/dist/sliceConfig.json` 404, `/dist/bundles/...` 200, maps 403/404.
