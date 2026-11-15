@@ -247,7 +247,7 @@ location = /slice-env.generated.js {
   return { written, warnings };
 }
 
-async function checkExport(outDir) {
+async function checkExport(outDir, { keepComponents = false } = {}) {
   const issues = [];
   const required = [
     'index.html',
@@ -262,6 +262,10 @@ async function checkExport(outDir) {
     if (!await fs.pathExists(path.join(outDir, file))) {
       issues.push(`Missing ${file}`);
     }
+  }
+
+  if (!keepComponents && await fs.pathExists(path.join(outDir, 'Components'))) {
+    issues.push('Components/ is present; component source is fetchable. Remove it or pass --keep-components.');
   }
 
   if (await fs.pathExists(outDir)) {
@@ -331,12 +335,13 @@ export default async function exportStatic(options = {}) {
   const outDir = path.resolve(projectRoot, options.out || 'dist-static');
   const checkOnly = Boolean(options.check);
   const dryRun = Boolean(options.dryRun);
+  const keepComponents = Boolean(options.keepComponents);
 
   try {
     const host = normalizeHost(options.host);
     if (checkOnly) {
       Print.title('Static export check');
-      const issues = await checkExport(outDir);
+      const issues = await checkExport(outDir, { keepComponents: options.keepComponents });
       if (issues.length > 0) {
         for (const issue of issues) Print.error(issue);
         return false;
@@ -386,6 +391,20 @@ export default async function exportStatic(options = {}) {
     });
 
     await flattenPublic(outDir);
+
+    // In Express production `/Components` answers 404. Match that in the static
+    // export: component source is minified but still source, and every component
+    // used at runtime is in a bundle. `--keep-components` is a debugging escape.
+    let componentsState = 'none';
+    const componentsDir = path.join(outDir, 'Components');
+    if (await fs.pathExists(componentsDir)) {
+      if (keepComponents) {
+        componentsState = 'kept';
+      } else {
+        await fs.remove(componentsDir);
+        componentsState = 'pruned';
+      }
+    }
 
     const rootIndex = path.join(outDir, 'index.html');
     let pagesWritten = 0;
@@ -450,6 +469,11 @@ export default async function exportStatic(options = {}) {
     Print.info(`Public env: ${envKeys} key(s) (JSON + ESM)`);
     Print.info(`Host rules: ${hostRules.written.length ? hostRules.written.join(', ') : 'none'}`);
     Print.info(`SPA fallback: ${spa ? 'yes (unknown routes -> index.html)' : 'no (unknown routes -> 404.html)'}`);
+    if (componentsState === 'pruned') {
+      Print.info('Components: pruned (source not shipped)');
+    } else if (componentsState === 'kept') {
+      Print.warning('Components: kept; component source is fetchable.');
+    }
     if (clientRedirects.written) {
       Print.info(`${clientRedirects.written} client redirect page(s)`);
     }

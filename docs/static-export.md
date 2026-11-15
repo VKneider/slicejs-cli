@@ -213,10 +213,11 @@ fixed; hashed bundles can be immutable).
   exclude them or fail).
 - `slice-events.generated.js`: **check** whether the app imports it before
   excluding it.
-- `Components/`: kept by default. `--prune-components` only after a check
-  confirms every referenced component is in a bundle. Note: in production the
-  server 404s `/Components` (`server.js:654`), so a truly dynamic `slice.build`
-  is already broken today.
+- `Components/`: **pruned by default**. Express production 404s `/Components`,
+  so the static export matches it; every component used at runtime is in a
+  bundle. `--keep-components` is a debugging escape and `--check` fails unless
+  that flag is passed. A truly dynamic `slice.build` is already broken in
+  Express production today.
 
 ### 3.9 Subpath hosting (out of scope)
 
@@ -385,7 +386,7 @@ location ~* \.(?:css|js|svg|png|woff2)$ {
 | `.br`/`.gz` | Many hosts do not send `Content-Encoding` by extension. Do not emit them unless the host supports it. |
 | `--hash-filenames` | The HTML does not reference bundles (the loader does), but verify the loader reads the hashed names. |
 | Frozen `slice-env.json` | One build per environment, or an edge function. |
-| Public `/Components` | Extra code. Keep for compatibility or `--prune-components` with a check. |
+| Public `/Components` | Pruned by default; `--keep-components` ships fetchable component source. |
 | `--sourcemap` | Never in a public export. `--check` fails if a `.map` appears. |
 | `file://` | Does not work: ES modules + `fetch` need HTTP. For a local tool, a mini server or Electron/Tauri. |
 
@@ -443,4 +444,4 @@ route.
 4. Does `export` run `build`, or require a fresh `dist/`?
 5. Should `slice start` serve `dist-static` (`--static`) for parity testing?
 6. Frozen `slice-env.json` (simple) or an edge function (complex)?
-7. What happens to `Components/` in the export: keep or prune by default?
+7. `${param}` routes: `sitemap.paths` vs `--spa` fallback?

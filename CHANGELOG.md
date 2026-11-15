@@ -13,8 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   root, copies the build-time `slice-env.json` + `slice-env.generated.js`, prerenders literal SEO
   routes (and `sitemap.paths`), writes a real `404.html` and locale redirects, and generates
   Cloudflare/Netlify, Vercel, nginx or GitHub rules. GitHub/S3/`none` get portable HTML redirect
-  pages. Supports `--from-dist`, `--spa`, `--no-prerender`, `--check` and `--dry-run`. The export is
-  root-only: the public route equals the app route, so subpath hosting is not supported.
+  pages. Supports `--from-dist`, `--spa`, `--no-prerender`, `--check` and `--dry-run`. `Components/`
+  is pruned by default so component source is not fetchable; `--keep-components` is debug-only. The
+  export is root-only: the public route equals the app route, so subpath hosting is not supported.
 
 ### Changed
 

@@ -93,9 +93,10 @@ user repeats, and the framework's own `--compress` flag already advertises
   runtime are untouched.
 - **Existing apps affected**: none until they run `slice export`.
 - **Migration / breaking change**: none.
-- **Security / performance**: the export can expose `Components/` and any
-  `.map` left by `--sourcemap`; `--check` must fail on maps and secret
-  patterns. Prerendering runs `prepareSeo` at build time (Node, no browser).
+- **Security / performance**: `Components/` is pruned by default so component
+  source is not fetchable; `--keep-components` opts back in and `--check` fails
+  when it is present. Any `.map` left by `--sourcemap` is excluded; `--check`
+  fails on maps. Prerendering runs `prepareSeo` at build time (Node, no browser).
 - **Framework change**: exposing three fields from `prepareSeo` is additive.
   Exporting the env provider requires a `package.json` `exports` entry.
 
@@ -126,7 +127,7 @@ user repeats, and the framework's own `--compress` flag already advertises
 - [ ] Default `${param}` policy: `skip`, `shell`, or fail.
 - [ ] One output layout + host rules, or one layout per host.
 - [x] `slice-env.json` frozen at build vs edge function. Build-time JSON + ESM shim; edge functions remain an option.
-- [ ] `Components/`: keep by default or prune with `--prune-components`.
+- [x] `Components/`: pruned by default; `--keep-components` for debugging.
 - [ ] Does `export` run `build`, or require `--from-dist`?
 
 ## Decision log
@@ -164,3 +165,8 @@ user repeats, and the framework's own `--compress` flag already advertises
   app route, so no `base` path / subpath hosting is added. Deploy on a domain
   root or subdomain; GitHub Pages project sites under `/repo/` are not supported.
   The experimental base-path WIP was reverted.
+- 2026-11-14 - **`Components/` pruned by default.** Express production 404s
+  `/Components`; the static export now matches that so component source is not
+  fetchable. `--keep-components` is a debugging escape and `--check` fails when
+  the folder is present without it. Verified `/Components/...` returns 404 and
+  Portfolio still renders from its bundles.

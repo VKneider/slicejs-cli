@@ -20,6 +20,7 @@ async function createFakeDist(root) {
   await write(path.join(dist, 'App', 'style.css'), 'body{}');
   await write(path.join(dist, 'bundles', 'bundle.config.json'), '{"version":2}');
   await write(path.join(dist, 'bundles', 'slice-bundle.home.js'), 'export const x = 1;');
+  await write(path.join(dist, 'Components', 'Visual', 'Button', 'Button.js'), 'export default class Button {}');
   await write(path.join(dist, 'Slice', 'Slice.js'), 'export default {};');
   await write(path.join(dist, 'public', 'Themes', 'Light.css'), ':root{}');
   await write(path.join(dist, 'public', 'images', 'logo.svg'), '<svg/>');
@@ -198,6 +199,28 @@ test('export writes client redirect pages for hosts without server rules', async
     assert.match(aboutRedirect, /http-equiv="refresh"/);
     assert.match(aboutRedirect, /url=\/en\/about/);
     assert.match(aboutRedirect, /rel="canonical"/);
+  }, { visualComponents: [] });
+});
+
+test('export prunes Components by default and check enforces it', async () => {
+  await withTestProject(async (root) => {
+    await createFakeDist(root);
+
+    const ok = await exportStatic({ fromDist: true, out: 'dist-static', host: 'cloudflare' });
+    assert.equal(ok, true);
+    assert.equal(await fs.pathExists(path.join(root, 'dist-static', 'Components')), false);
+    assert.equal(await exportStatic({ out: 'dist-static', check: true }), true);
+
+    const kept = await exportStatic({
+      fromDist: true,
+      out: 'dist-static-keep',
+      host: 'cloudflare',
+      keepComponents: true
+    });
+    assert.equal(kept, true);
+    assert.equal(await fs.pathExists(path.join(root, 'dist-static-keep', 'Components')), true);
+    assert.equal(await exportStatic({ out: 'dist-static-keep', check: true }), false);
+    assert.equal(await exportStatic({ out: 'dist-static-keep', check: true, keepComponents: true }), true);
   }, { visualComponents: [] });
 });
 

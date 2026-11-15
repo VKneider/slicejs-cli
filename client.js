@@ -347,6 +347,7 @@ sliceClient
   .option("--images <file>", "Social card manifest (auto-detected: public/og/manifest.json)")
   .option("--no-prerender", "Only the SPA shell and host rules")
   .option("--spa", "Serve unknown routes with index.html (SPA fallback)")
+  .option("--keep-components", "Keep /Components in the export (component source is fetchable)")
   .option("--check", "Validate an existing export without writing")
   .option("--dry-run", "Report what would be written without writing")
   .option("--sourcemap", "Emit source maps (not recommended for a public export)")
