@@ -54,7 +54,9 @@ user repeats, and the framework's own `--compress` flag already advertises
   (`_redirects`/`_headers`, `vercel.json`, `nginx.conf`).
 - `--check` validates an export: no `.map`, no secret patterns, every route
   covered, assets present.
-- Phase 4 (separate): `base` path for subpath hosting.
+- **Root-only by decision:** the app must be served at a domain/subdomain root,
+  so the public route equals the app route. Subpath hosting (`base` path) is not
+  supported.
 
 ## Alternatives considered
 
@@ -69,8 +71,8 @@ user repeats, and the framework's own `--compress` flag already advertises
 
 ### In scope
 
-- `slice export` with `--out`, `--host`, `--seo`, `--origin`, `--patterns`,
-  `--no-prerender`, `--from-dist`, `--check`, `--dry-run`.
+- `slice export` with `--out`, `--host`, `--seo`, `--origin`, `--no-prerender`,
+  `--from-dist`, `--check`, `--dry-run`.
 - Flatten + root `index.html` + `slice-env.json` + `slice-env.generated.js`.
 - Build-time public env: `slice build` writes the JSON and the ESM shim; the runtime imports the
   shim, so there is no env endpoint in production.
@@ -80,7 +82,7 @@ user repeats, and the framework's own `--compress` flag already advertises
 
 ### Out of scope
 
-- Runtime `base` path (phase 4, separate feature if needed).
+- Runtime `base` path / subpath hosting is **out of scope by product decision**.
 - Edge functions for `${param}` SEO.
 - Changing `slice start` or `sliceFallback`.
 - A docs-site deployment guide (separate docs commit).
@@ -114,8 +116,8 @@ user repeats, and the framework's own `--compress` flag already advertises
   `project-architecture/static-hosting.md`) in `repos/slice.js_docs/markdown/`.
 - CLI docs: `cli-commands.md` (new command and flags).
 - Component docs: none.
-- Skill / agent guidance: add the export command and the "root vs subpath"
-  rule to `slice-js-developer`.
+- Skill / agent guidance: add the export command and the root-only rule to
+  `slice-js-developer`.
 - Workspace docs: this feature is aggregated by `pnpm feature:list`.
 
 ## Open questions
@@ -146,15 +148,19 @@ user repeats, and the framework's own `--compress` flag already advertises
   unknown route reaches the app's 404 view. The static server log shows a
   `GET /slice-env.generated.js` and no `GET /slice-env.json`. The pre-existing
   `UserMenu` `createElement` error also appears under `slice start`, so it is not
-  caused by the export. Phase 2 (per-route SEO prerender, locale redirects) and
-  phase 4 (`base` path) remain open.
+  caused by the export. Phase 2 (per-route SEO prerender, locale redirects) is
+  implemented; subpath hosting is out of scope.
 - 2026-11-14 - Phase 2 implemented: `prepareSeo` exposes `pages`, `notFound` and
   `redirects`; `slice export` writes per-route HTML, `sitemap.paths` patterns and
   a real `404.html`. With SEO the default is a real 404 (no catch-all); `--spa`
   restores the SPA fallback. Validated on Portfolio: 30 routes across 2 locales,
   `/en/experience` -> `/experience` 301, `/nope` -> 404 with noindex, localized
-  titles and `lang` attributes. Phase 4 (`base` path) remains open.
+  titles and `lang` attributes. Subpath hosting is out of scope by decision.
 - 2026-11-14 - GitHub Pages / S3 / `--host none` now get portable HTML redirect
   pages (`meta refresh`, `rel=canonical`, `noindex`) for locale redirects, since
   those hosts cannot express server rules. Verified `/en/experience` lands on
   `/experience` with the correct title.
+- 2026-11-14 - **Root-only by product decision.** The public route must equal the
+  app route, so no `base` path / subpath hosting is added. Deploy on a domain
+  root or subdomain; GitHub Pages project sites under `/repo/` are not supported.
+  The experimental base-path WIP was reverted.

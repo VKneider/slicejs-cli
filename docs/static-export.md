@@ -9,10 +9,10 @@ This is an internal design doc. The user-facing guide belongs in
 ships.
 
 Status: **MVP + phase 2 implemented on `experiment/static-export`**
-(2026-11-14); phase 4 (`base` path) is pending. The MVP covers the root layout,
-`index.html`, `404.html`, `slice-env.json` + ESM shim, host rules, `--from-dist`,
-`--check` and `--dry-run`. Phase 2 adds per-route prerender from `prepareSeo`,
-`sitemap.paths` patterns, a real 404 and locale redirects.
+(2026-11-14). The exporter is **root-only** by decision: the app must be served
+at the root of a domain or subdomain. Subpath hosting (`user.github.io/repo/`)
+is out of scope; it would require translating a deployment prefix in the router,
+and the product keeps the public route equal to the app route.
 
 Related: `features/0005-static-export.md` (feature record).
 
@@ -26,8 +26,9 @@ file server** and **emitting at build time what the Express server generates at
 runtime** (per-route HTML, 404, redirects, `slice-env.json`, headers).
 
 The runtime does **not** need changes when the site is served at the **root of a
-domain**. Serving under a subpath (`user.github.io/repo/`) needs a `base` path
-(phase 4).
+domain**. The exporter is root-only: serving under a subpath
+(`user.github.io/repo/`) is out of scope because the public route must stay the
+same as the app route.
 
 The command is **`slice export`**, separate from `build`, so CI that assumes
 `dist/` keeps working.
@@ -76,7 +77,7 @@ There is **no root `dist/index.html`**; the shell lives at `App/index.html`.
 | Security headers + CORS + compression | `server.js:531-576` | No: host rules |
 | `/api/*` 404 JSON | `server.js:178` | Not applicable |
 
-### 2.3 Hardcoded absolute paths (block subpath deploys)
+### 2.3 Hardcoded absolute paths (root-only)
 
 - `repos/slice.js/Slice/Slice.js:449` `fetch('/sliceConfig.json')`
 - `Slice.js:472` `fetch('/slice-env.json')`
@@ -217,13 +218,17 @@ fixed; hashed bundles can be immutable).
   server 404s `/Components` (`server.js:654`), so a truly dynamic `slice.build`
   is already broken today.
 
-### 3.9 Base path (phase 4)
+### 3.9 Subpath hosting (out of scope)
 
-- `sliceConfig.base` (default `/`) or `slice export --base /repo/`.
-- Runtime: a `slice.url(path)` helper that prefixes the five hardcoded paths.
-- Build: prefix `index.html` (`script`, `link`), `sliceConfig.json`
-  (`paths.*`, `routesFile`), `bundle.config.json` and the `import()` calls.
-- Tests: serve under `/repo/` and walk deep links.
+The exporter is **root-only**. Deploy on a domain root (`https://example.com/`)
+or a subdomain (`https://app.example.com/`); do not use a project subpath
+(`https://user.github.io/repo/`).
+
+A subpath would add a deployment prefix to every public URL while routes stay
+root-relative, so the router would have to strip the prefix on the way in and
+add it on the way out. That is a second URL namespace, and the product decision
+is to keep the public route identical to the app route. GitHub Pages project
+sites are therefore not supported; use a user site or a custom domain.
 
 ---
 
@@ -273,7 +278,6 @@ pattern is detected.
 | Export the env provider (`./api/framework/publicEnvResolver.js`) | `repos/slice.js/api/framework/publicEnvResolver.js` + `package.json exports` | Low. |
 | Import `/slice-env.generated.js` at boot (fetch fallback) | `repos/slice.js/Slice/Slice.js` | Low: same payload shape, no endpoint in production. |
 | Serve the built env JSON + shim as static assets | `repos/slice.js/api/framework/server.js` | Low: two file reads; dev keeps the live endpoint. |
-| (Phase 4) `base` in `sliceConfig` + `slice.url()` helper | `repos/slice.js/Slice/Slice.js`, `Controller.js`, `sliceConfig.schema.json` | Medium: touches the runtime. |
 
 `sliceFallback` stays untouched. `createSliceServer` only gains the static env
 routes; `slice start` remains the Express path.
@@ -356,7 +360,8 @@ location ~* \.(?:css|js|svg|png|woff2)$ {
 
 - No rewrites, no headers.
 - `index.html` + `<route>/index.html` + `404.html` + `.nojekyll`.
-- Root only (user site or custom domain) until phase 4.
+- Root only (user site or custom domain). Project sites under `/repo/` are not
+  supported; the public route must equal the app route.
 - Locale redirects become HTML `meta refresh` pages at the non-canonical path.
 - `${param}` routes need the `404.html` redirect trick (head becomes
   404/noindex).
@@ -408,7 +413,7 @@ Cases:
 3. `--check` fails with `.map`, missing `index.html`, or a route not emitted.
 4. Golden test for `_redirects` / `vercel.json`.
 5. Without SEO: shell + SPA rule + soft-404 warning.
-6. `--base /repo/` (phase 4): all of the above under a subpath.
+6. Root-only: no `--base`; a subpath deploy is rejected by product scope.
 
 Framework CI: `slice export --check` on the fixture app, plus a Playwright smoke
 test against the static output.
@@ -423,10 +428,10 @@ test against the static output.
 | 1 | `slice export` MVP: build + flatten + `index.html` + `slice-env.json` + smoke test | 1–2 days |
 | 2 | Per-route prerender + `404.html` + locale redirects | 2–3 days |
 | 3 | Host rules (`_redirects`, `vercel.json`, nginx) + `--check` + CI | 1–2 days |
-| 4 | `base` path (runtime + build) | 1–2 days |
 
-Phase 1 is a useful MVP. Phase 2 is what preserves SEO. Phase 4 only if a
-subpath is needed.
+Phase 1 is a useful MVP. Phase 2 is what preserves SEO. Subpath hosting
+(`base`) is intentionally not a phase: the public route must equal the app
+route.
 
 ---
 
@@ -438,5 +443,4 @@ subpath is needed.
 4. Does `export` run `build`, or require a fresh `dist/`?
 5. Should `slice start` serve `dist-static` (`--static`) for parity testing?
 6. Frozen `slice-env.json` (simple) or an edge function (complex)?
-7. `base` in the runtime, or resolved only by a build rewrite?
-8. What happens to `Components/` in the export: keep or prune by default?
+7. What happens to `Components/` in the export: keep or prune by default?
