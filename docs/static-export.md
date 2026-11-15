@@ -8,10 +8,11 @@ This is an internal design doc. The user-facing guide belongs in
 `slicejs_docs/markdown/` (e.g. `getting-started/deployment.md`) once the command
 ships.
 
-Status: **MVP implemented on `experiment/static-export`** (2026-11-14);
-phases 2–4 are pending. The MVP covers the root layout, `index.html`,
-`404.html`, `slice-env.json`, Cloudflare/Netlify/Vercel/nginx/GitHub rules,
-`--from-dist`, `--check` and `--dry-run`.
+Status: **MVP + phase 2 implemented on `experiment/static-export`**
+(2026-11-14); phase 4 (`base` path) is pending. The MVP covers the root layout,
+`index.html`, `404.html`, `slice-env.json` + ESM shim, host rules, `--from-dist`,
+`--check` and `--dry-run`. Phase 2 adds per-route prerender from `prepareSeo`,
+`sitemap.paths` patterns, a real 404 and locale redirects.
 
 Related: `features/0005-static-export.md` (feature record).
 
@@ -232,11 +233,11 @@ slice export [options]
   --out <dir>            output (default dist-static)
   --from-dist            reuse dist/ without rebuilding
   --host <name>          cloudflare|netlify|vercel|nginx|github|s3|none
-  --base <path>          base path (default /)
   --seo <file>           manifest (default: seo.json / public/seo.json)
   --origin <url>         canonical/OG origin override
-  --patterns <mode>      skip|shell (default skip)
+  --images <file>        social card manifest (default: public/og/manifest.json)
   --no-prerender         shell + SPA rule only
+  --spa                  unknown routes -> index.html (default with no SEO)
   --hash-filenames       delegated to build
   --compress             delegated to build
   --check                validate an existing export, write nothing
@@ -246,13 +247,14 @@ slice export [options]
 Expected output:
 
 ```
-✔ 24 routes prerendered (3 locales)
-✔ 404.html (noindex)
-✔ 2 locale redirects
-✔ slice-env.json (4 SLICE_PUBLIC_* keys)
-✔ _redirects + _headers
-⚠ 1 ${param} route not prerendered (policy: skip)
-⚠ 0.00 MB of source maps
+✔ Exported to dist-static
+• 343 files, 10.09 MB
+• 30 route(s) prerendered (2 locales)
+• 404.html (noindex)
+• 9 locale redirect(s)
+• Public env: 0 key(s) (JSON + ESM)
+• Host rules: _redirects, _headers
+• SPA fallback: no (unknown routes -> 404.html)
 ```
 
 Exit code ≠ 0 when: there is no `index.html`, a `.map` is present, a route in

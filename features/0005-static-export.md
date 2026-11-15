@@ -148,3 +148,9 @@ user repeats, and the framework's own `--compress` flag already advertises
   `UserMenu` `createElement` error also appears under `slice start`, so it is not
   caused by the export. Phase 2 (per-route SEO prerender, locale redirects) and
   phase 4 (`base` path) remain open.
+- 2026-11-14 - Phase 2 implemented: `prepareSeo` exposes `pages`, `notFound` and
+  `redirects`; `slice export` writes per-route HTML, `sitemap.paths` patterns and
+  a real `404.html`. With SEO the default is a real 404 (no catch-all); `--spa`
+  restores the SPA fallback. Validated on Portfolio: 30 routes across 2 locales,
+  `/en/experience` -> `/experience` 301, `/nope` -> 404 with noindex, localized
+  titles and `lang` attributes. Phase 4 (`base` path) remains open.

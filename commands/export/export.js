@@ -1,16 +1,18 @@
 // commands/export/export.js
 //
-// Experimental MVP for `slice export`: turn the production build into a folder a
-// static host can serve without Express. It flattens `dist/public` to the root,
-// creates the root `index.html`, freezes `slice-env.json`, and writes the host
-// rules. Per-route SEO prerendering is a later phase; without it the host falls
-// back to the SPA shell.
+// `slice export`: turn the production build into a folder a static host can serve
+// without Express. It flattens dist/public to the root, creates the root
+// index.html, copies the build-time env artifacts, prerenders every literal SEO
+// route (plus sitemap.paths patterns), emits a real 404.html and writes the host
+// rules.
 import fs from 'fs-extra';
 import path from 'path';
 import Print from '../Print.js';
 import { getProjectRoot, getDistPath } from '../utils/PathHelper.js';
 import { writeSliceEnv, writeSliceEnvPayload } from '../utils/publicEnv.js';
 import build from '../build/build.js';
+import { prepareSeo } from 'slicejs-web-framework/api/framework/server.js';
+import { expandPatternPaths } from 'slicejs-web-framework/api/framework/seo.js';
 
 const HOSTS = new Set(['cloudflare', 'netlify', 'vercel', 'nginx', 'github', 's3', 'none']);
 
@@ -62,6 +64,53 @@ async function ensureEnv(outDir, projectRoot) {
   return writeSliceEnv(outDir, projectRoot);
 }
 
+function pagePathForUrl(url) {
+  const clean = String(url).split(/[?#]/)[0].replace(/^\/+|\/+$/g, '');
+  if (!clean) return 'index.html';
+  const normalized = path.normalize(clean);
+  if (normalized.startsWith('..') || path.isAbsolute(normalized)) {
+    throw new Error(`Refusing to export an unsafe route: ${url}`);
+  }
+  return path.join(normalized, 'index.html');
+}
+
+async function writePage(outDir, url, page) {
+  const file = path.join(outDir, pagePathForUrl(url));
+  await fs.ensureDir(path.dirname(file));
+  await fs.writeFile(file, page.html);
+}
+
+async function findSeoManifest(projectRoot, distDir, options) {
+  const candidates = [];
+  if (options.seo) candidates.push(options.seo);
+  candidates.push(
+    'seo.json',
+    'src/public/seo.json',
+    'src/seo.json',
+    path.join(distDir, 'public', 'seo.json'),
+    path.join(distDir, 'seo.json')
+  );
+  for (const candidate of candidates) {
+    const full = path.isAbsolute(candidate) ? candidate : path.resolve(projectRoot, candidate);
+    if (await fs.pathExists(full)) return full;
+  }
+  return null;
+}
+
+async function findImagesManifest(projectRoot, distDir, options) {
+  const candidates = [];
+  if (options.images) candidates.push(options.images);
+  candidates.push(
+    'src/public/og/manifest.json',
+    path.join(distDir, 'public', 'og', 'manifest.json')
+  );
+  for (const candidate of candidates) {
+    const full = path.isAbsolute(candidate) ? candidate : path.resolve(projectRoot, candidate);
+    if (await fs.pathExists(full)) return full;
+  }
+  return null;
+}
+
 const HEADER_RULES = `/*
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
@@ -74,16 +123,22 @@ const HEADER_RULES = `/*
   Cache-Control: no-store
 `;
 
-async function writeHostRules(outDir, host) {
+function redirectLines(redirects) {
+  return redirects.map(({ from, to, status }) => `${from}  ${to}  ${status}`).join('\n');
+}
+
+async function writeHostRules(outDir, host, redirects = [], { spa = false } = {}) {
   const written = [];
+  const warnings = [];
 
   if (host === 'cloudflare' || host === 'netlify') {
-    await fs.writeFile(path.join(outDir, '_redirects'), '/*  /index.html  200\n', 'utf8');
+    const redirectBlock = redirects.length ? `${redirectLines(redirects)}\n` : '';
+    const spaBlock = spa ? '/*  /index.html  200\n' : '';
+    await fs.writeFile(path.join(outDir, '_redirects'), `${redirectBlock}${spaBlock}`, 'utf8');
     await fs.writeFile(path.join(outDir, '_headers'), HEADER_RULES, 'utf8');
     written.push('_redirects', '_headers');
   } else if (host === 'vercel') {
     const vercel = {
-      rewrites: [{ source: '/(.*)', destination: '/index.html' }],
       headers: [
         {
           source: '/bundles/(.*)',
@@ -99,15 +154,31 @@ async function writeHostRules(outDir, host) {
         }
       ]
     };
+    if (spa) {
+      vercel.rewrites = [{ source: '/(.*)', destination: '/index.html' }];
+    }
+    if (redirects.length) {
+      vercel.redirects = redirects.map(({ from, to, status }) => ({
+        source: from,
+        destination: to,
+        permanent: status === 301
+      }));
+    }
     await fs.writeFile(path.join(outDir, 'vercel.json'), `${JSON.stringify(vercel, null, 2)}\n`, 'utf8');
     written.push('vercel.json');
   } else if (host === 'nginx') {
+    const redirectBlock = redirects
+      .map(({ from, to, status }) => `location = ${from} {\n  return ${status} ${to};\n}\n`)
+      .join('\n');
+    const fallback = spa ? 'try_files $uri $uri/ /index.html;' : 'try_files $uri $uri/ =404;';
     const nginx = `root /var/www/dist-static;
 index index.html;
 
-location / {
-  try_files $uri $uri/ /index.html;
+${redirectBlock}location / {
+  ${fallback}
 }
+
+error_page 404 /404.html;
 
 location /bundles/ {
   add_header Cache-Control "no-store";
@@ -126,14 +197,26 @@ location = /slice-env.generated.js {
   } else if (host === 'github') {
     await fs.writeFile(path.join(outDir, '.nojekyll'), '', 'utf8');
     written.push('.nojekyll');
+    if (redirects.length) {
+      warnings.push(`GitHub Pages cannot express ${redirects.length} locale redirect(s); they are not in the export.`);
+    }
+  } else if (redirects.length) {
+    warnings.push(`${redirects.length} locale redirect(s) require host rules; --host ${host} writes none.`);
   }
 
-  return written;
+  return { written, warnings };
 }
 
 async function checkExport(outDir) {
   const issues = [];
-  const required = ['index.html', 'slice-env.json', 'slice-env.generated.js', 'bundles/bundle.config.json', 'Slice/Slice.js'];
+  const required = [
+    'index.html',
+    '404.html',
+    'slice-env.json',
+    'slice-env.generated.js',
+    'bundles/bundle.config.json',
+    'Slice/Slice.js'
+  ];
 
   for (const file of required) {
     if (!await fs.pathExists(path.join(outDir, file))) {
@@ -150,6 +233,56 @@ async function checkExport(outDir) {
   }
 
   return issues;
+}
+
+async function buildPrerender(projectRoot, distDir, options) {
+  if (options.prerender === false) return null;
+
+  const seoFile = await findSeoManifest(projectRoot, distDir, options);
+  if (!seoFile) return null;
+
+  const imagesFile = await findImagesManifest(projectRoot, distDir, options);
+  const seo = await prepareSeo({
+    projectRoot,
+    mode: 'production',
+    port: options.port ? Number(options.port) : undefined,
+    seo: {
+      manifest: seoFile,
+      ...(options.origin ? { origin: options.origin } : {}),
+      ...(imagesFile ? { images: imagesFile } : {})
+    }
+  });
+  if (!seo) return null;
+
+  // A `${param}` route cannot be enumerated unless it opts in with sitemap.paths.
+  const pages = new Map(seo.pages);
+  const locales = seo.translator?.enabled ? seo.translator.locales : [null];
+  let patternsSkipped = 0;
+
+  for (const route of seo.routes) {
+    if (!/\$\{[^}]+\}/.test(route.path)) continue;
+    const values = seo.manifest.routes?.[route.path]?.sitemap?.paths;
+    const concretePaths = expandPatternPaths(route.path, values);
+    if (concretePaths.length === 0) {
+      patternsSkipped += 1;
+      continue;
+    }
+    for (const concrete of concretePaths) {
+      for (const locale of locales) {
+        const url = seo.translator?.enabled ? seo.translator.localize(concrete, locale) : concrete;
+        if (pages.has(url)) continue;
+        const result = seo.resolve(url);
+        if (result.status === 200 && result.page) pages.set(url, result.page);
+      }
+    }
+  }
+
+  return {
+    seo,
+    pages,
+    patternsSkipped,
+    localeCount: seo.translator?.enabled ? seo.translator.locales.length : 0
+  };
 }
 
 export default async function exportStatic(options = {}) {
@@ -190,10 +323,20 @@ export default async function exportStatic(options = {}) {
       throw new Error('dist/App/index.html is missing. Run "slice build" again.');
     }
 
+    const prerender = await buildPrerender(projectRoot, distDir, options);
+
     if (dryRun) {
       Print.title('Static export (dry run)');
       Print.info(`Would write ${path.relative(projectRoot, outDir)} from ${path.relative(projectRoot, distDir)}.`);
       Print.info(`Host rules: ${host}`);
+      if (prerender) {
+        Print.info(`${prerender.pages.size} route(s) would be prerendered`);
+        if (prerender.seo.redirects.length) {
+          Print.info(`${prerender.seo.redirects.length} locale redirect(s)`);
+        }
+      } else {
+        Print.info('No SEO manifest; the SPA shell would be the only page.');
+      }
       return true;
     }
 
@@ -205,24 +348,58 @@ export default async function exportStatic(options = {}) {
     await flattenPublic(outDir);
 
     const rootIndex = path.join(outDir, 'index.html');
+    let pagesWritten = 0;
+
+    if (prerender) {
+      for (const [url, page] of prerender.pages) {
+        await writePage(outDir, url, page);
+        pagesWritten += 1;
+      }
+    }
+
     if (!await fs.pathExists(rootIndex)) {
       await fs.copy(path.join(outDir, 'App', 'index.html'), rootIndex);
     }
 
-    // Hosts that serve 404.html (GitHub Pages, Netlify, static servers) get the
-    // SPA shell there too. Real per-route SEO/404 pages are phase 2.
-    await fs.copy(rootIndex, path.join(outDir, '404.html'));
+    const notFoundPage = prerender
+      ? (prerender.seo.notFound.get(null) || [...prerender.seo.notFound.values()][0])
+      : null;
+    if (notFoundPage) {
+      await fs.writeFile(path.join(outDir, '404.html'), notFoundPage.html);
+    } else {
+      await fs.copy(rootIndex, path.join(outDir, '404.html'));
+    }
 
     const envKeys = await ensureEnv(outDir, projectRoot);
-    const rules = await writeHostRules(outDir, host);
+    const redirects = prerender?.seo.redirects || [];
+    const spa = options.spa === true || !prerender;
+    const hostRules = await writeHostRules(outDir, host, redirects, { spa });
     const files = await listFiles(outDir);
     const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
 
     Print.title('Static export');
     Print.success(`Exported to ${path.relative(projectRoot, outDir) || '.'}`);
     Print.info(`${files.length} files, ${(totalBytes / 1024 / 1024).toFixed(2)} MB`);
+
+    if (prerender) {
+      const localeLabel = prerender.localeCount ? ` (${prerender.localeCount} locales)` : '';
+      Print.info(`${pagesWritten} route(s) prerendered${localeLabel}`);
+      Print.info(`404.html${notFoundPage ? ' (noindex)' : ''}`);
+      if (redirects.length) Print.info(`${redirects.length} locale redirect(s)`);
+      if (prerender.patternsSkipped) {
+        Print.warning(`${prerender.patternsSkipped} dynamic route(s) not prerendered; add sitemap.paths or pass --spa.`);
+      }
+    } else if (options.prerender === false) {
+      Print.warning('Prerender disabled; using the SPA shell (soft 404).');
+    } else {
+      Print.warning('No seo.json found; using the SPA shell (soft 404).');
+    }
+
     Print.info(`Public env: ${envKeys} key(s) (JSON + ESM)`);
-    Print.info(`Host rules: ${rules.length ? rules.join(', ') : 'none'}`);
+    Print.info(`Host rules: ${hostRules.written.length ? hostRules.written.join(', ') : 'none'}`);
+    Print.info(`SPA fallback: ${spa ? 'yes (unknown routes -> index.html)' : 'no (unknown routes -> 404.html)'}`);
+    for (const warning of hostRules.warnings) Print.warning(warning);
+
     Print.newLine();
     Print.subtitle('Next step');
     Print.commandExample('Serve the export locally', `npx serve -s ${path.relative(projectRoot, outDir) || '.'}`);
