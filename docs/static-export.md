@@ -318,13 +318,14 @@ Expected output:
 
 ```
 ✔ Exported to dist-static
-• 343 files, 10.09 MB
+• 112 files, 9.34 MB
 • 30 route(s) prerendered (2 locales)
 • 404.html (noindex)
 • 9 locale redirect(s)
 • Public env: 0 key(s) (JSON + ESM)
 • Host rules: _redirects, _headers
 • SPA fallback: no (unknown routes -> 404.html)
+• Components: pruned (source not shipped)
 ```
 
 `--check` exit code ≠ 0 when:
