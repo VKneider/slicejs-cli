@@ -14,6 +14,9 @@ hosting (`user.github.io/repo/`) is out of scope; it would require translating a
 deployment prefix in the router, and the product keeps the public route equal to
 the app route.
 
+The command is **experimental**: flags, layout and host presets may change
+between releases. `slice start` remains the stable Express path.
+
 The production audit — findings, priorities, decisions and verification — is in
 [`static-export-audit.md`](./static-export-audit.md). The user-facing guide is
 `repos/slice.js_docs/markdown/getting-started/deployment.md`.
@@ -288,6 +291,48 @@ root-relative, so the router would have to strip the prefix on the way in and
 add it on the way out. That is a second URL namespace, and the product decision
 is to keep the public route identical to the app route. GitHub Pages project
 sites are therefore not supported; use a user site or a custom domain.
+
+### 3.10 Host presets (strategy pattern)
+
+Each host is a small module; `export.js` is orchestration only.
+
+```text
+commands/export/
+  export.js              # build/prerender/copy/report
+  outDir.js              # safe --out
+  copyDist.js            # allowlist + flatten + env
+  prerender.js           # SEO pages/notFound/redirects
+  checkExport.js         # generic validation
+  files.js               # listFiles/pagePath/writePage
+  clientRedirects.js     # HTML redirects + client 404 shell
+  hosts/
+    index.js             # registry + detectHost for --check
+    shared.js            # security headers, redirect helpers, marker
+    cloudflare.js
+    netlify.js
+    vercel.js
+    nginx.js
+    github.js
+    s3.js
+    none.js
+```
+
+A preset is a plain object, not a class:
+
+```js
+export default {
+  id: 'cloudflare',
+  spaMode: 'omit-404',        // omit-404 | redirects | rewrite | try-files | client-404
+  clientRedirectPages: false, // locale redirects as HTML pages?
+  write({ outDir, redirects, spa }) { /* returns written file names */ },
+  check({ outDir, explicitHost }) { /* returns { issues, warnings } */ },
+  spaFallback({ outDir }) { /* boolean, used by --check route validation */ }
+};
+```
+
+`hosts/index.js` owns the id list, `getHost(id)` and `detectHost(outDir)` for
+`--check` without `--host`. This is why Cloudflare and Netlify no longer share a
+branch: their SPA mechanics are different by construction.
 
 ---
 

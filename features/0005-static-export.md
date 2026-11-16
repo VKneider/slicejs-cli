@@ -225,3 +225,9 @@ user repeats, and the framework's own `--compress` flag already advertises
   redirects and headers work on every emulated host. Also fixed the missing
   Vercel/nginx security headers. See
   [`../docs/host-rules-poc.md`](../docs/host-rules-poc.md).
+- 2026-11-16 - **Modular host presets.** `commands/export/export.js` is now
+  orchestration only. Copy/allowlist, prerender, check, file helpers and client
+  redirects live in their own modules; every host is a plain preset object in
+  `commands/export/hosts/*` (`id`, `spaMode`, `write`, `check`, `spaFallback`).
+  The registry also detects the preset for `--check` when `--host` is omitted.
+  This removes the shared Cloudflare/Netlify branch that caused the SPA bug.

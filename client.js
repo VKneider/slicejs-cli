@@ -338,7 +338,7 @@ buildCommand
 // EXPORT COMMAND - STATIC HOST PACKAGE (experimental)
 sliceClient
   .command("export")
-  .description("Package the production build for a static host")
+  .description("Package the production build for a static host (experimental)")
   .option("-o, --out <dir>", "Output directory", "dist-static")
   .option("--from-dist", "Reuse dist/ instead of running a build")
   .option("--host <name>", "Host rules: cloudflare, netlify, vercel, nginx, github, s3, none (default: cloudflare)")

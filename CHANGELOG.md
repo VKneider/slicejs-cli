@@ -63,6 +63,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when there is no SPA fallback. Dynamic `${param}` routes and asset references remain explicitly out
   of scope.
 - `slice init` adds `dist-static/` to the generated `.gitignore`.
+- `slice export` is now explicitly **experimental** in `--help` and prints a
+  warning on each run. Its flags/layout may change between releases.
+- `slice export` host rules moved to `commands/export/hosts/*` strategy presets
+  (`cloudflare`, `netlify`, `vercel`, `nginx`, `github`, `s3`, `none`).
+  `export.js` is orchestration only; copy, prerender, check, file helpers and
+  client redirects are separate modules. `--check` without `--host` detects the
+  preset from the export files.
 
 ## [4.5.0] - 2026-10-29
 
