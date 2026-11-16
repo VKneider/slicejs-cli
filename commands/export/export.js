@@ -313,6 +313,12 @@ async function findImagesManifest(projectRoot, distDir, options) {
   return null;
 }
 
+const SECURITY_HEADERS = [
+  ['X-Content-Type-Options', 'nosniff'],
+  ['X-Frame-Options', 'DENY'],
+  ['Referrer-Policy', 'strict-origin-when-cross-origin']
+];
+
 const HEADER_RULES = `/*
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
@@ -395,20 +401,17 @@ async function writeHostRules(outDir, host, redirects = [], { spa = false } = {}
     await fs.writeFile(path.join(outDir, '_headers'), HEADER_RULES, 'utf8');
     written.push('_redirects', '_headers');
   } else if (host === 'vercel') {
+    const securityHeaders = SECURITY_HEADERS.map(([key, value]) => ({ key, value }));
+    const noStoreHeaders = [
+      ...securityHeaders,
+      { key: 'Cache-Control', value: 'no-store' }
+    ];
     const vercel = {
       headers: [
-        {
-          source: '/bundles/(.*)',
-          headers: [{ key: 'Cache-Control', value: 'no-store' }]
-        },
-        {
-          source: '/slice-env.json',
-          headers: [{ key: 'Cache-Control', value: 'no-store' }]
-        },
-        {
-          source: '/slice-env.generated.js',
-          headers: [{ key: 'Cache-Control', value: 'no-store' }]
-        }
+        { source: '/(.*)', headers: securityHeaders },
+        { source: '/bundles/(.*)', headers: noStoreHeaders },
+        { source: '/slice-env.json', headers: noStoreHeaders },
+        { source: '/slice-env.generated.js', headers: noStoreHeaders }
       ]
     };
     if (spa) {
@@ -435,19 +438,31 @@ index index.html;
 
 ${redirectBlock}location / {
   ${fallback}
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header X-Frame-Options "DENY" always;
+  add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 }
 
 error_page 404 /404.html;
 
 location /bundles/ {
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header X-Frame-Options "DENY" always;
+  add_header Referrer-Policy "strict-origin-when-cross-origin" always;
   add_header Cache-Control "no-store";
 }
 
 location = /slice-env.json {
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header X-Frame-Options "DENY" always;
+  add_header Referrer-Policy "strict-origin-when-cross-origin" always;
   add_header Cache-Control "no-store";
 }
 
 location = /slice-env.generated.js {
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header X-Frame-Options "DENY" always;
+  add_header Referrer-Policy "strict-origin-when-cross-origin" always;
   add_header Cache-Control "no-store";
 }
 `;

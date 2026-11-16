@@ -56,6 +56,7 @@ fixed or explicitly documented below. The feature is ready for a final review, b
 | P1-6 | P1 | `sliceConfig.json`, `routes.js` and `bundle.config.json` are public but were not documented as such. | Fixed |
 | P1-7 | P1 | Cloudflare `--spa` wrote `_redirects: /* /index.html 200`; Cloudflare rejects it as an infinite loop, and `/* / 200` hijacks every asset. | Fixed (omit `404.html`, auto-SPA) |
 | P1-8 | P1 | Vercel redirects used `permanent`, which maps to 308/307, not the SEO page's 301/302. | Fixed (`statusCode`) |
+| P1-9 | P1 | Vercel and nginx presets did not replicate the three security headers that Cloudflare/Netlify got. | Fixed (all presets) |
 | P2-1 | P2 | `--sourcemap` is a no-op for the published export (maps are filtered). | Documented + warning |
 | P2-2 | P2 | `--no-minify` / `--no-obfuscate` can ship readable bundles. | Documented + warning |
 | P2-3 | P2 | `sliceConfig.json` exposes `server.port` / `server.host` (not secrets, but unnecessary). | Open; low priority |
@@ -339,6 +340,20 @@ nginx keeps `try_files`; GitHub/S3/none write the shell as `404.html`.
 Vercel's `permanent` boolean maps to **308/307**, not 301/302. The exporter now
 writes `statusCode: 301|302` from the SEO redirect, preserving the intended
 status.
+
+### P1-9 — Vercel/nginx missing security headers
+
+Cloudflare/Netlify `_headers` included `X-Content-Type-Options`,
+`X-Frame-Options` and `Referrer-Policy`, but `vercel.json` and `nginx.conf` did
+not. Verified by the local PoC (Vercel dev and nginx):
+
+- Vercel now writes a `/*` header rule plus the same headers on the cache
+  rules for `/bundles/*` and the env files.
+- nginx adds the headers with `always` to `location /`, `/bundles/` and the two
+  env locations, so they also apply to 404 responses.
+
+The end-to-end PoC, commands and status matrix are in
+[`host-rules-poc.md`](./host-rules-poc.md).
 
 ---
 

@@ -78,6 +78,29 @@ test('export writes vercel.json instead of Cloudflare files', async () => {
     const vercel = JSON.parse(await fs.readFile(path.join(out, 'vercel.json'), 'utf8'));
     assert.equal(Array.isArray(vercel.rewrites), true);
     assert.equal(await fs.pathExists(path.join(out, '_redirects')), false);
+
+    const allHeaders = vercel.headers.find((rule) => rule.source === '/(.*)');
+    assert.ok(allHeaders, 'Vercel must set global security headers');
+    const keys = allHeaders.headers.map((header) => header.key);
+    assert.deepEqual(keys, ['X-Content-Type-Options', 'X-Frame-Options', 'Referrer-Policy']);
+
+    const bundleHeaders = vercel.headers.find((rule) => rule.source === '/bundles/(.*)');
+    assert.ok(bundleHeaders.headers.some((header) => header.key === 'Cache-Control' && header.value === 'no-store'));
+  }, { visualComponents: [] });
+});
+
+test('nginx config sets security headers on pages, bundles and env files', async () => {
+  await withTestProject(async (root) => {
+    await createFakeDist(root);
+
+    const ok = await exportStatic({ fromDist: true, out: 'dist-static', host: 'nginx' });
+    assert.equal(ok, true);
+
+    const nginx = await fs.readFile(path.join(root, 'dist-static', 'nginx.conf'), 'utf8');
+    assert.match(nginx, /location \/ \{[\s\S]*X-Content-Type-Options "nosniff" always/);
+    assert.match(nginx, /location \/bundles\/ \{[\s\S]*X-Frame-Options "DENY" always/);
+    assert.match(nginx, /location = \/slice-env\.json \{[\s\S]*Referrer-Policy "strict-origin-when-cross-origin" always/);
+    assert.match(nginx, /error_page 404 \/404\.html;/);
   }, { visualComponents: [] });
 });
 

@@ -37,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   308/307 instead of the status decided by the SEO context.
 - GitHub/S3/`none` with `--spa` write the shell as `404.html` (soft 404) instead of the noindex
   not-found page, and the report no longer claims a 200 SPA fallback for those hosts.
+- Vercel and nginx exports now include the same security headers as Cloudflare/Netlify
+  (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`). nginx uses `always` so 404
+  responses keep them.
 
 ### Changed
 

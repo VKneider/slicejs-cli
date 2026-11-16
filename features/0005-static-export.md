@@ -219,3 +219,9 @@ user repeats, and the framework's own `--compress` flag already advertises
   mode. Vercel redirects use `statusCode` (301/302) instead of `permanent`
   (308/307). Netlify, nginx and GitHub rules were verified unchanged. See the
   audit P1-7/P1-8.
+- 2026-11-16 - **Local host-rule PoC.** Tested real exports with
+  `wrangler pages dev` 4.162.0, `netlify-cli dev` 27.19.0, `vercel dev --local`
+  65.16.0 and nginx 1.30.6 (Windows). Real 404, `--spa`, assets, locale
+  redirects and headers work on every emulated host. Also fixed the missing
+  Vercel/nginx security headers. See
+  [`../docs/host-rules-poc.md`](../docs/host-rules-poc.md).

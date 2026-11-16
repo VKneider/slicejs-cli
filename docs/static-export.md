@@ -227,6 +227,11 @@ Referrer-Policy: strict-origin-when-cross-origin
 `/bundles/*`: `Cache-Control: no-store` (the `bundle.config.json` path is
 fixed; hashed bundles can be immutable).
 
+Every preset writes the three security headers: Cloudflare/Netlify via
+`_headers`, Vercel via a `/*` rule in `vercel.json`, nginx via
+`add_header ... always` in each location. nginx uses `always` so 404 responses
+keep them too. The local PoC is in [`host-rules-poc.md`](./host-rules-poc.md).
+
 ### 3.8 What is copied (allowlist)
 
 The export is an **allowlist**, not `dist/` minus a denylist. `dist/` also holds
