@@ -26,7 +26,10 @@ async function createFakeDist(root) {
   await write(path.join(dist, 'public', 'images', 'logo.svg'), '<svg/>');
   await write(path.join(dist, 'public', 'manifest.json'), '{"name":"Test"}');
   await write(path.join(dist, 'public', 'service-worker.js'), 'self.addEventListener("install", () => {});');
-  await write(path.join(dist, 'sliceConfig.json'), '{"server":{"port":3000}}');
+  await write(path.join(dist, 'sliceConfig.json'), JSON.stringify({
+    server: { port: 3000 },
+    events: { enabled: true, ui: { enabled: true } }
+  }));
   await write(path.join(dist, 'routes.js'), "export default [{ path: '/' }];\n");
   await write(path.join(dist, 'slice-events.generated.js'), 'export default {};');
   await write(path.join(dist, 'robots.txt'), 'User-agent: *');
@@ -395,6 +398,19 @@ test('export publishes only the runtime allowlist, not source or build artifacts
 
     assert.equal(await fs.pathExists(path.join(out, 'App', 'index.html')), true);
     assert.equal(await fs.pathExists(path.join(out, 'bundles', 'slice-bundle.home.js')), true);
+  }, { visualComponents: [] });
+});
+
+test('export omits the event catalog when the debugger UI is disabled', async () => {
+  await withTestProject(async (root) => {
+    await createFakeDist(root);
+    await write(path.join(root, 'dist', 'sliceConfig.json'), JSON.stringify({
+      events: { enabled: true, ui: { enabled: false } }
+    }, null, 2));
+
+    const ok = await exportStatic({ fromDist: true, out: 'dist-static', host: 'netlify' });
+    assert.equal(ok, true);
+    assert.equal(await fs.pathExists(path.join(root, 'dist-static', 'slice-events.generated.js')), false);
   }, { visualComponents: [] });
 });
 

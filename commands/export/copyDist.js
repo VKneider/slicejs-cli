@@ -45,19 +45,26 @@ const COMPONENTS_PAGE_BUNDLE_FILES = [
   'docsIndex.js'
 ];
 
-function readTranslatorFolder(distDir) {
+function readDeployedConfig(distDir) {
   try {
-    const config = JSON.parse(fs.readFileSync(path.join(distDir, 'sliceConfig.json'), 'utf8'));
-    const translator = config.translator;
-    if (!translator?.enabled) return null;
-    const value = typeof translator.path === 'string' && translator.path.trim()
-      ? translator.path
-      : '/locales';
-    const folder = value.replace(/^\/+|\/+$/g, '');
-    return folder && !folder.includes('..') ? folder : null;
+    return JSON.parse(fs.readFileSync(path.join(distDir, 'sliceConfig.json'), 'utf8'));
   } catch {
     return null;
   }
+}
+
+function readTranslatorFolder(distDir) {
+  const translator = readDeployedConfig(distDir)?.translator;
+  if (!translator?.enabled) return null;
+  const value = typeof translator.path === 'string' && translator.path.trim()
+    ? translator.path
+    : '/locales';
+  const folder = value.replace(/^\/+|\/+$/g, '');
+  return folder && !folder.includes('..') ? folder : null;
+}
+
+function eventsUiEnabled(distDir) {
+  return readDeployedConfig(distDir)?.events?.ui?.enabled === true;
 }
 
 const BLOCKED_SEGMENTS = new Set(['node_modules', '.git']);
@@ -113,6 +120,11 @@ export async function copyDist(outDir, distDir, { keepComponents, skipped }) {
 
     if (!entry.isFile()) continue;
     if (!EXPORT_ROOT_FILES.has(name)) {
+      skipped.push(name);
+      continue;
+    }
+    // The static event graph only exists for the debugger UI.
+    if (name === 'slice-events.generated.js' && !eventsUiEnabled(distDir)) {
       skipped.push(name);
       continue;
     }

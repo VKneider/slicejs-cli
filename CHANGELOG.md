@@ -20,8 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - `slice export` now copies an explicit allowlist instead of `dist/` minus a denylist. `utils/`,
-  `AppConfig.js`, `slice-events.generated.js`, `.map`, `.map.br`, `.map.gz`, `.d.ts`, `.env*`,
-  `package.json`, lockfiles and `node_modules` never reach the export.
+  `AppConfig.js`, `.map`, `.map.br`, `.map.gz`, `.d.ts`, `.env*`, `package.json`, lockfiles and
+  `node_modules` never reach the export.
 - `slice export --out` is validated before the target is removed. The project root, ancestors, paths
   outside the project, `src`, `dist`, `api`, `node_modules`, `.git`, `public`, `locales`,
   `Components`, `App`, `bundles`, `Slice` and non-directory targets are rejected.
@@ -40,10 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Vercel and nginx exports now include the same security headers as Cloudflare/Netlify
   (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`). nginx uses `always` so 404
   responses keep them.
-- Export build parity: `slice-events.generated.js` is published (the event debugger imports it),
-  PWA files in `public/` keep Express's public-first precedence, a custom `translator.path` is
-  copied, and the two ComponentsPage docs modules Express special-cases go into `bundles/`.
-  `events/` and the rest of `Slice/` are no longer published.
+- Export build parity: `slice-events.generated.js` is published only when `events.ui.enabled` (the
+  event debugger is its only consumer), PWA files in `public/` keep Express's public-first
+  precedence, a custom `translator.path` is copied, and the two ComponentsPage docs modules Express
+  special-cases go into `bundles/`. `events/` and the rest of `Slice/` are no longer published.
 - `slice export` now fails instead of silently replacing custom `_headers`, `_redirects`,
   `vercel.json` or `nginx.conf` found in `dist/public`.
 

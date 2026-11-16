@@ -106,8 +106,9 @@ user repeats, and the framework's own `--compress` flag already advertises
   the public `/dist` tree was relying on an accidental exposure; use
   `/dist/bundles/` or the public assets instead.
 - **Security / performance**: the export is an allowlist, so `utils/`,
-  `AppConfig.js`, `slice-events.generated.js`, `.map*`, `.d.ts`, `.env*`,
-  lockfiles and `node_modules` never ship. `--out` is validated before
+  `AppConfig.js`, `.map*`, `.d.ts`, `.env*`, lockfiles and `node_modules` never
+  ship. `slice-events.generated.js` ships only when `events.ui.enabled`, because
+  only the event debugger consumes it. `--out` is validated before
   `fs.remove()`. Production decodes percent-encoded paths before the guard.
   `Components/` is pruned by default; `--keep-components` opts back in and
   `--check` fails when it is present. Prerendering runs `prepareSeo` at build
@@ -233,8 +234,9 @@ user repeats, and the framework's own `--compress` flag already advertises
   This removes the shared Cloudflare/Netlify branch that caused the SPA bug.
 - 2026-11-16 - **Build parity audit.** A Playwright smoke on the Components app
   found `/slice-events.generated.js` 404. The export now includes the event
-  catalog and Express serves it; PWA files in `public/` keep Express's
-  public-first precedence; a custom `translator.path` is copied; the two
+  catalog when `events.ui.enabled` and Express serves it under the same
+  condition; PWA files in `public/` keep Express's public-first precedence; a
+  custom `translator.path` is copied; the two
   ComponentsPage docs modules Express special-cases are copied to `bundles/`;
   `events/` and the rest of `Slice/` are no longer published. Custom host rules
   in `dist/public` now fail instead of being silently overwritten.

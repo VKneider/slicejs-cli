@@ -235,7 +235,7 @@ Exported Portfolio and loaded `/`, `/experience` and `/projects`:
 | Netlify/Vercel dev override `Cache-Control` on static files | Local-server behavior; verify in a deploy preview |
 | Cloudflare canonicalizes `/route` → `/route/` | Host behavior; router normalizes the slash |
 | GitHub Pages / S3 not emulated locally | Docs + layout validated; no Docker available |
-| `/slice-events.generated.js` 404 in the Components export | Fixed: the runtime event catalog is now exported and served by Express |
+| `/slice-events.generated.js` 404 in the Components export | Fixed: the event catalog is exported and served by Express only when `events.ui.enabled` |
 | PWA files in `public/` were skipped | Fixed: `manifest.json`/`service-worker.js` keep Express's public-first precedence |
 | Custom `translator.path` was skipped | Fixed: the export copies the configured folder |
 | ComponentsPage docs modules were pruned with Components | Fixed: the two files Express special-cases are copied to `bundles/` |

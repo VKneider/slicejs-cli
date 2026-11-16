@@ -250,15 +250,17 @@ Published:
 | `Slice/Slice.js` | Self-contained runtime. Express 404s the rest of `/Slice`, so nothing else is published. |
 | `locales/` | Translator dictionaries. A custom `translator.path` is copied at that exact path. |
 | `public/*` → `/` | Themes, Styles, images, PWA, SEO, sitemap. |
-| Root files | `routes.js`, `sliceConfig.json`, `slice-env.json`, `slice-env.generated.js`, `slice-events.generated.js`, `robots.txt`, `sitemap.xml`, `manifest.json`, `service-worker.js`. |
+| Root files | `routes.js`, `sliceConfig.json`, `slice-env.json`, `slice-env.generated.js`, `slice-events.generated.js` (only when `events.ui.enabled`), `robots.txt`, `sitemap.xml`, `manifest.json`, `service-worker.js`. |
 | `Components/` | **Only** with `--keep-components` (debug). The exporter always copies just `documentationRoutes.generated.js` and `docsIndex.js` into `bundles/` because Express has a narrow carve-out for them. |
 
 Everything else is skipped: `utils/`, `AppConfig.js`,
 `slice-build.generated.d.ts`, `slice-runtime.generated.d.ts`, `events/`,
 arbitrary source folders.
 
-`slice-events.generated.js` is **needed**: the event debugger dynamically
-imports it at runtime. Express production serves it too.
+`slice-events.generated.js` is **needed only by the event debugger**, which
+dynamically imports it. It is copied (and served by Express) only when
+`events.ui.enabled` is true. With the debugger UI off there is no consumer, so
+the file is not published.
 
 `dist/public` is flattened to the root but cannot overwrite the files the
 exporter owns (`index.html`, `404.html`, `routes.js`, `sliceConfig.json`,
@@ -396,12 +398,13 @@ Expected output:
 
 `--check` exit code ≠ 0 when:
 
-- a required runtime file is missing (`index.html`, `404.html`, `routes.js`,
-  `sliceConfig.json`, the env pair, `bundles/bundle.config.json`, `Slice/Slice.js`);
+- a required runtime file is missing (`index.html`, `routes.js`,
+  `sliceConfig.json`, the env pair, `bundles/bundle.config.json`, `Slice/Slice.js`;
+  `404.html` is optional only for Cloudflare auto-SPA);
 - `Components/` is present without `--keep-components`;
 - `public/` was not flattened;
-- `utils/`, `src/`, `api/`, `node_modules/`, `.git/`, `AppConfig.js`,
-  `slice-events.generated.js` or a generated `.d.ts` is present;
+- `utils/`, `src/`, `api/`, `node_modules/`, `.git/`, `AppConfig.js` or a
+  generated `.d.ts` is present;
 - any `.map`, `.map.br`, `.map.gz`, `.d.ts`, `.env*`, `package.json`, lockfile,
   `node_modules` or `.git` is present;
 - an exported `.js` contains `sourceMappingURL=`;

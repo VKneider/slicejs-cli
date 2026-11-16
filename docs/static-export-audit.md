@@ -46,7 +46,7 @@ fixed or explicitly documented below. The feature is ready for a final review, b
 |---|---|---|---|
 | P0-1 | P0 | `slice export --out .` / `--out src` removed the target before copying. | Fixed |
 | P0-2 | P0 | `export.js` imported `prepareSeo` and `expandPatternPaths` at module load; an older published framework made every `slice` command fail at startup. | Fixed |
-| P0-3 | P0 | Export copied `dist/` minus a denylist, so `utils/`, `AppConfig.js`, `slice-events.generated.js`, `.env*`, `.map.br` and `.map.gz` could be published. | Fixed |
+| P0-3 | P0 | Export copied `dist/` minus a denylist, so `utils/`, `AppConfig.js`, `.env*`, `.map.br` and `.map.gz` could be published without a decision. | Fixed |
 | P0-4 | P0 | The production guard and `securityMiddleware` inspected the raw `req.path`; `express.static` decoded it, so `/%2eenv` could serve a `.env` from `public/`. | Fixed |
 | P1-1 | P1 | No user-facing deployment guide (Express vs static, hosts, GitHub Pages, preview, CI). | Fixed |
 | P1-2 | P1 | CLI/design flag tables were incomplete (`--keep-components`, `--sourcemap`, `--no-minify`, `--no-obfuscate`, `--hash-filenames`, `--compress`). | Fixed |
@@ -167,17 +167,16 @@ copied. `--check` did not look at any of those names.
 | Published | Source | Why |
 |---|---|---|
 | `App/` | `dist/App` | The shell loads `/App/index.js` and `/App/style.css`. |
-| `bundles/` | `dist/bundles` | Runtime bundles and `bundle.config.json`. |
-| `Slice/` | `dist/Slice` | The self-contained runtime. |
-| `locales/` | `dist/locales` | Translator dictionaries. |
-| `events/` | `dist/events` | Event catalog, if the build emits it. |
+| `bundles/` | `dist/bundles` | Runtime bundles, `bundle.config.json` and the two ComponentsPage docs modules. |
+| `Slice/Slice.js` | `dist/Slice/Slice.js` | The self-contained runtime; Express 404s the rest of `/Slice`. |
+| `locales/` | `dist/locales` | Translator dictionaries; a custom `translator.path` is copied at that path. |
 | `public/*` flattened to `/` | `dist/public` | Themes, Styles, images, PWA, SEO, sitemap. |
-| Eight root files | `dist/<file>` | `routes.js`, `sliceConfig.json`, `slice-env.json`, `slice-env.generated.js`, `robots.txt`, `sitemap.xml`, `manifest.json`, `service-worker.js`. |
+| Root files | `dist/<file>` | `routes.js`, `sliceConfig.json`, `slice-env.json`, `slice-env.generated.js`, `slice-events.generated.js` (only when `events.ui.enabled`), `robots.txt`, `sitemap.xml`, `manifest.json`, `service-worker.js`. |
 | `Components/` | `dist/Components` | **Only** with `--keep-components` (debug). |
 
 Everything else is skipped: `utils/`, `AppConfig.js`,
-`slice-events.generated.js`, `slice-build.generated.d.ts`,
-`slice-runtime.generated.d.ts`, arbitrary source folders.
+`slice-build.generated.d.ts`, `slice-runtime.generated.d.ts`, `events/`,
+arbitrary source folders.
 
 Inside every copied tree the same filter rejects:
 
@@ -189,15 +188,14 @@ Inside every copied tree the same filter rejects:
 - `node_modules/`, `.git/`.
 
 `dist/public` is flattened, but it may not overwrite files the exporter owns:
-`index.html`, `404.html`, `routes.js`, `sliceConfig.json`, `slice-env.json`,
-`slice-env.generated.js`, `manifest.json`, `service-worker.js`. Express answers
-those paths with explicit routes before its static middleware, so the static
-export matches that precedence.
+`index.html`, `404.html`, `routes.js`, `sliceConfig.json`, `slice-env.json` and
+`slice-env.generated.js`. `manifest.json` and `service-worker.js` are not
+reserved: Express prefers `dist/public/<file>`, so the export preserves that
+precedence.
 
-**Parity note:** `slice-events.generated.js` is **not** served by Express
-production (it is not imported by the runtime, the server or the bundles), so it
-is not exported either. If a future runtime imports it, it must be added to both
-sides of the contract.
+**Parity note:** `slice-events.generated.js` is the event debugger's static
+graph. It is exported and served by Express only when `events.ui.enabled` is
+true. With the debugger UI off there is no consumer, so neither side exposes it.
 
 ### P0-4 — percent-encoded path bypass
 
@@ -258,14 +256,14 @@ Added `repos/slice.js_docs/markdown/getting-started/deployment.md`. It covers:
 
 `checkExport()` now validates:
 
-1. Required runtime files: `index.html`, `404.html`, `routes.js`,
-   `sliceConfig.json`, `slice-env.json`, `slice-env.generated.js`,
-   `bundles/bundle.config.json`, `Slice/Slice.js`.
+1. Required runtime files: `index.html`, `routes.js`, `sliceConfig.json`,
+   `slice-env.json`, `slice-env.generated.js`, `bundles/bundle.config.json`,
+   `Slice/Slice.js`; `404.html` unless Cloudflare auto-SPA, and the translator
+   folder when `translator.enabled`.
 2. `Components/` is absent unless `--keep-components` is passed.
 3. `public/` was flattened (no `/public` directory left in the export).
 4. No source/build leftovers: `utils/`, `src/`, `api/`, `node_modules/`, `.git/`,
-   `AppConfig.js`, `slice-events.generated.js`,
-   `slice-build.generated.d.ts`, `slice-runtime.generated.d.ts`.
+   `AppConfig.js`, `slice-build.generated.d.ts`, `slice-runtime.generated.d.ts`.
 5. No `.map`, `.map.br`, `.map.gz`, `.d.ts`, `.env*`, `package.json`,
    lockfiles, `node_modules` or `.git` anywhere.
 6. No `sourceMappingURL=` reference inside any exported `.js`.
@@ -275,8 +273,9 @@ Added `repos/slice.js_docs/markdown/getting-started/deployment.md`. It covers:
    - `nginx.conf` maps 404 to `/404.html`,
    - `.nojekyll` exists when `--host github` is explicit.
 8. Every literal route in `routes.js` has a prerendered page **unless** the
-   export declares an SPA fallback (`_redirects` catch-all, Vercel rewrite,
-   nginx `try_files ... /index.html`). Localized exports check every locale
+   export declares an SPA fallback (Cloudflare without `404.html`, Netlify
+   `_redirects` catch-all, Vercel rewrite, nginx `try_files ... /index.html`, or
+   the client SPA marker in `404.html`). Localized exports check every locale
    candidate. Missing localized pages are warnings, not failures.
 
 **Documented limits:** `--check` does **not**:
@@ -365,8 +364,9 @@ A Playwright smoke against a real static export of `slicejs-components` found a
 imports that catalog at runtime, and Express production did not serve it either.
 Verified and fixed:
 
-- `slice-events.generated.js` is now in the export allowlist, and Express
-  production serves it (`api/framework/server.js`).
+- `slice-events.generated.js` is now in the export allowlist when
+  `events.ui.enabled` is true, and Express production serves it under the same
+  condition (`api/framework/server.js`).
 - `manifest.json` and `service-worker.js` are no longer reserved against
   `dist/public`: Express prefers `dist/public/<file>` for PWA files, so the
   export now preserves that precedence.
