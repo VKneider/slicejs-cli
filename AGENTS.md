@@ -16,6 +16,15 @@ slicejs-cli/
 │   ├── doctor/doctor.js               # slice doctor
 │   ├── types/types.js                 # slice types generate
 │   ├── bundle/bundle.js               # bundling logic
+│   ├── export/                        # slice export (experimental)
+│   │   ├── export.js                  # orchestration only
+│   │   ├── outDir.js                  # safe --out validation
+│   │   ├── copyDist.js                # allowlist + flatten + env
+│   │   ├── prerender.js               # SEO pages/notFound/redirects
+│   │   ├── checkExport.js             # --check
+│   │   ├── files.js                   # list/page helpers
+│   │   ├── clientRedirects.js         # HTML redirects + client 404
+│   │   └── hosts/                     # one strategy preset per host
 │   ├── utils/
 │   │   ├── PathHelper.js              # Path resolution (critical)
 │   │   ├── bundling/BundleGenerator.js
@@ -32,6 +41,7 @@ slicejs-cli/
 │   ├── client-update-flow-contract.test.js
 │   ├── component-registry-parse.test.js
 │   ├── dependency-analyzer.test.js
+│   ├── export-command.test.js        # export allowlist, hosts, reachability
 │   ├── init-command-contract.test.js
 │   ├── local-cli-delegation.test.js
 │   ├── path-helper.test.js
@@ -41,6 +51,10 @@ slicejs-cli/
 ├── package.json                       # type: "module" — ES modules only
 └── AGENTS.md                          # This file
 ```
+
+`commands/export/` is the static exporter. `export.js` is orchestration only;
+each host is a strategy preset in `hosts/*` (`id`, `spaMode`, `write`, `check`,
+`spaFallback`). See `docs/static-export.md` and `docs/host-rules-poc.md`.
 
 ## Testing System
 
