@@ -10,6 +10,7 @@ import { minifyJs, sourceFileOptions, componentsRegistryOptions } from '../utils
 import { describeSyntaxError } from '../utils/SourceDiagnostics.js';
 import { getSrcPath, getDistPath, getConfigPath, getProjectRoot } from '../utils/PathHelper.js';
 import { resolvePackageManager, runScriptCommand } from '../utils/PackageManager.js';
+import { writeSliceEnv } from '../utils/publicEnv.js';
 
 /**
  * Loads configuration from sliceConfig.json
@@ -478,6 +479,10 @@ export default async function buildProduction(options = {}) {
 
     await verifyBuildIntegrity(distDir);
     Print.success('Build integrity verified');
+
+    const envKeys = await writeSliceEnv(distDir, getProjectRoot(import.meta.url));
+    Print.success(`Public env generated (${envKeys} key(s))`);
+
     await generateBuildStats(srcDir, distDir);
 
     const fullyOptimized = reportDegradations();

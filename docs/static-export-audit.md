@@ -1,0 +1,539 @@
+# Static export and production hosting — audit
+
+Date: 2026-11-15
+Branch: `experiment/static-export` (`slicejs-cli`, `slice.js`, `slice.js_docs`, workspace)
+Scope: `slice export`, `slice start`, `slice build`, production exposure, and the
+documentation that ships with them.
+
+This is the single consolidated record of the audit findings, the decisions taken,
+what is fixed, and what is still open. The design notes live in
+[`static-export.md`](./static-export.md); the user-facing guide lives in
+`repos/slice.js_docs/markdown/getting-started/deployment.md`.
+
+---
+
+## 1. Verdict
+
+The static export is functionally complete for the supported product shape:
+**root-only, one app per domain or subdomain, no base path**. The audit found
+four blocking defects (P0), all fixed in this branch:
+
+1. `slice export --out` could delete the project.
+2. A top-level framework import could break **every** CLI command when the
+   published framework was older than the CLI.
+3. The exporter copied `dist/` with a denylist, so source-only files could ship.
+4. Percent-encoded paths could bypass the production guard (`/%2eenv`).
+
+It also found documentation gaps and one misleading `--check` contract. Those are
+fixed or explicitly documented below. The feature is ready for a final review, but
+**not merged or released** yet.
+
+---
+
+## 2. Severity
+
+| Level | Meaning |
+|---|---|
+| P0 | Data loss, secret exposure, broken install, or a real security bypass. Must be fixed before merge. |
+| P1 | User-facing wrong behavior, a contract that lies, or a missing guide that makes deployment unsafe. |
+| P2 | Hardening, clarity, or a known limitation that can ship with documentation. |
+
+---
+
+## 3. Findings
+
+| ID | Severity | Finding | Status |
+|---|---|---|---|
+| P0-1 | P0 | `slice export --out .` / `--out src` removed the target before copying. | Fixed |
+| P0-2 | P0 | `export.js` imported `prepareSeo` and `expandPatternPaths` at module load; an older published framework made every `slice` command fail at startup. | Fixed |
+| P0-3 | P0 | Export copied `dist/` minus a denylist, so `utils/`, `AppConfig.js`, `.env*`, `.map.br` and `.map.gz` could be published without a decision. | Fixed |
+| P0-4 | P0 | The production guard and `securityMiddleware` inspected the raw `req.path`; `express.static` decoded it, so `/%2eenv` could serve a `.env` from `public/`. | Fixed |
+| P1-1 | P1 | No user-facing deployment guide (Express vs static, hosts, GitHub Pages, preview, CI). | Fixed |
+| P1-2 | P1 | CLI/design flag tables were incomplete (`--keep-components`, `--sourcemap`, `--no-minify`, `--no-obfuscate`, `--hash-filenames`, `--compress`). | Fixed |
+| P1-3 | P1 | `--check` claimed route/host validation but only checked six files, `Components/`, `.map` and `.d.ts`. | Fixed |
+| P1-4 | P1 | `slice start` docs contradicted the code: no auto-build, `/dist` was public, port defaults, "real 404" without SEO, and "`sliceFallback` untouched". | Fixed |
+| P1-5 | P1 | The CLI suggested `npx serve -s`, which hides the real `404.html`. | Fixed |
+| P1-6 | P1 | `sliceConfig.json`, `routes.js` and `bundle.config.json` are public but were not documented as such. | Fixed |
+| P1-7 | P1 | Cloudflare `--spa` wrote `_redirects: /* /index.html 200`; Cloudflare rejects it as an infinite loop, and `/* / 200` hijacks every asset. | Fixed (omit `404.html`, auto-SPA) |
+| P1-8 | P1 | Vercel redirects used `permanent`, which maps to 308/307, not the SEO page's 301/302. | Fixed (`statusCode`) |
+| P1-9 | P1 | Vercel and nginx presets did not replicate the three security headers that Cloudflare/Netlify got. | Fixed (all presets) |
+| P1-10 | P1 | Export omitted runtime build artifacts: `slice-events.generated.js`, PWA files under `public/`, a custom `translator.path`, and the ComponentsPage docs modules. | Fixed |
+| P1-11 | P1 | Custom host rules in `dist/public` (`_headers`, `_redirects`, `vercel.json`, `nginx.conf`) were silently overwritten. | Fixed (fails with a clear error) |
+| P1-12 | P2 | Apps that call `/api/*` (Portfolio `/api/themes`) or reference missing public images cannot work as a pure static site. | Documented limitation |
+| P2-1 | P2 | `--sourcemap` is a no-op for the published export (maps are filtered). | Documented + warning |
+| P2-2 | P2 | `--no-minify` / `--no-obfuscate` can ship readable bundles. | Documented + warning |
+| P2-3 | P2 | `sliceConfig.json` exposes `server.port` / `server.host` (not secrets, but unnecessary). | Open; low priority |
+| P2-4 | P2 | Service workers can cache old bundle names across deploys. | Documented (PWA + deployment guide); hardening optional |
+| P2-5 | P2 | `/api/*` is not exported; a static host has no server routes. | Documented (use `slice start`/Express or a separate API) |
+| P2-6 | P2 | GitHub Pages project sites (`user.github.io/repo/`) need a base path and are not supported. | Product decision |
+| P2-7 | P2 | `dist-static` vs a single `dist` was not formally decided/documented. | Fixed |
+
+---
+
+## 4. P0 details
+
+### P0-1 — `--out` could delete the project
+
+**Evidence (before):**
+
+```js
+const outDir = path.resolve(projectRoot, options.out || 'dist-static');
+// ...
+await fs.remove(outDir);
+```
+
+`--out .` removed the project root; `--out src` removed the source tree;
+`--out ..` removed the parent. There was no check for files, symlinks, `dist/`,
+`api/`, `node_modules/` or paths outside the project.
+
+**Fix:** `resolveSafeOutDir()` in `commands/export/export.js`.
+
+It now rejects:
+
+- the project root (`.` or an equivalent absolute path),
+- any path outside the project,
+- any ancestor of the project,
+- the protected top-level folders `src`, `dist`, `api`, `node_modules`, `.git`,
+  `public`, `locales`, `Components`, `App`, `bundles`, `Slice` (case-insensitive
+  on Windows),
+- an existing path that is a file or a symlink,
+- an existing directory that does not look like a previous export. A folder is
+  only overwritten when it contains at least one export marker: `index.html`,
+  `bundles/bundle.config.json` or `slice-env.json`. This protects `docs/`,
+  `tests/`, `.github/` and any other real project folder from a mistyped
+  `--out`.
+
+It also resolves the nearest existing ancestor and rejects a path whose real
+target leaves the project through a symlinked parent.
+
+`--check` still reads an arbitrary folder (it writes nothing). Every write path
+(`export`, `--dry-run`) validates first. Regression tests cover `.`, `src`, `dist`,
+`api`, `node_modules`, a file, an existing non-export folder (`docs/`), a
+previous export (allowed), case variants on Windows, and an absolute path
+outside the project.
+
+**Why an allowlist and not a longer denylist:** the target is removed with
+`fs.remove()`. A denylist is one typo away from deleting `docs/`, `.github/`, or
+any other top-level folder. The protected list matches the folders that are
+actually part of a Slice project; everything else still requires an explicit
+`--out`.
+
+### P0-2 — a top-level import could break every CLI command
+
+**Evidence (before):**
+
+```js
+import { prepareSeo } from 'slicejs-web-framework/api/framework/server.js';
+import { expandPatternPaths } from 'slicejs-web-framework/api/framework/seo.js';
+```
+
+Those imports are evaluated when `client.js` loads, before commander parses the
+command. If a user installed a published framework without `prepareSeo`'s
+`pages`/`notFound`/`redirects` or without `expandPatternPaths`, **every** command
+(`dev`, `build`, `start`, `doctor`, component commands) crashed at startup, not
+just `export`.
+
+**Fix:** `loadExportFramework()` imports the two modules lazily inside
+`buildPrerender()`, after an SEO manifest is found, and checks:
+
+- `prepareSeo` is a function,
+- `expandPatternPaths` is a function,
+- the object returned by `prepareSeo()` has `pages` and `notFound` as `Map`s and
+  `redirects` as an array.
+
+The error names the requirement and the fix:
+`Update it with "npm install slicejs-web-framework@latest"`.
+
+`slice export --no-prerender` never loads the framework SEO API, so it keeps
+working with any framework version.
+
+### P0-3 — export copied `dist/` with a denylist
+
+**Evidence (before):**
+
+```js
+await fs.copy(distDir, outDir, {
+  filter: (src) => !shouldSkip(src) // only .map and .d.ts
+});
+```
+
+`dist/` is not a static bundle: it contains the processed source tree
+(`utils/`, `AppConfig.js`, generated event catalogs), and `--compress` adds
+`.map.br` / `.map.gz` siblings. A misplaced `.env` inside `public/` was also
+copied. `--check` did not look at any of those names.
+
+**Fix:** `copyDist()` is now an explicit allowlist:
+
+| Published | Source | Why |
+|---|---|---|
+| `App/` | `dist/App` | The shell loads `/App/index.js` and `/App/style.css`. |
+| `bundles/` | `dist/bundles` | Runtime bundles, `bundle.config.json` and the two ComponentsPage docs modules. |
+| `Slice/Slice.js` | `dist/Slice/Slice.js` | The self-contained runtime; Express 404s the rest of `/Slice`. |
+| `locales/` | `dist/locales` | Translator dictionaries; a custom `translator.path` is copied at that path. |
+| `public/*` flattened to `/` | `dist/public` | Themes, Styles, images, PWA, SEO, sitemap. |
+| Root files | `dist/<file>` | `routes.js`, `sliceConfig.json`, `slice-env.json`, `slice-env.generated.js`, `slice-events.generated.js` (only when `events.ui.enabled`), `robots.txt`, `sitemap.xml`, `manifest.json`, `service-worker.js`. |
+| `Components/` | `dist/Components` | **Only** with `--keep-components` (debug). |
+
+Everything else is skipped: `utils/`, `AppConfig.js`,
+`slice-build.generated.d.ts`, `slice-runtime.generated.d.ts`, `events/`,
+arbitrary source folders.
+
+Inside every copied tree the same filter rejects:
+
+- `.map`, `.map.br`, `.map.gz`,
+- `.d.ts`,
+- `.env`, `.env.*`,
+- `package.json`, `package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`,
+  `npm-shrinkwrap.json`,
+- `node_modules/`, `.git/`.
+
+`dist/public` is flattened, but it may not overwrite files the exporter owns:
+`index.html`, `404.html`, `routes.js`, `sliceConfig.json`, `slice-env.json` and
+`slice-env.generated.js`. `manifest.json` and `service-worker.js` are not
+reserved: Express prefers `dist/public/<file>`, so the export preserves that
+precedence.
+
+**Parity note:** `slice-events.generated.js` is the event debugger's static
+graph. It is exported and served by Express only when `events.ui.enabled` is
+true. With the debugger UI off there is no consumer, so neither side exposes it.
+
+### P0-4 — percent-encoded path bypass
+
+**Evidence (before):**
+
+```js
+const requestPath = req.path;   // still encoded
+// ...
+app.use(express.static(path.join(projectRoot, folderDeployed, 'public')));
+```
+
+`req.path` is not decoded by Express, but `express.static` decodes before
+resolving a file. With `.env` in `public/`, `GET /%2eenv` passed the extension
+check (no extension), the blocked-path check (the string does not contain `/.env`)
+and the production guard, then `express.static` decoded it and served the file.
+
+**Fix:** `decodeRequestPath()` in `securityMiddleware.js` decodes up to three
+times, tolerates malformed input and normalizes backslashes. It is used by:
+
+- `securityMiddleware` (blocked paths, public-asset bypass, extension allowlist,
+  traversal check),
+- `sliceFrameworkProtection`,
+- `suspiciousRequestLogger`,
+- the production static guard in `createSliceServer` (maps, declarations, env,
+  package manifests, `node_modules`, `/dist` tree).
+
+Regression tests request `/%2eenv`, `/%2Eenv`, `/%2e%65nv` and
+`/%73ecret.js.map` against a real production server and assert 403/404, while a
+normal public asset still returns 200.
+
+---
+
+## 5. P1 details
+
+### P1-1 — deployment guide
+
+Added `repos/slice.js_docs/markdown/getting-started/deployment.md`. It covers:
+
+- Express (`slice start`) vs static (`slice export`) and when to use each,
+- the `dist/` → `dist-static/` relationship,
+- local preview and the `npx serve -s` trap,
+- the host matrix (Cloudflare Pages, Netlify, Vercel, nginx, GitHub Pages, S3),
+- GitHub Pages root-only rules (user site or custom domain, never
+  `user.github.io/repo/`),
+- `--check` in CI,
+- what is public and what is pruned,
+- env behavior and troubleshooting.
+
+### P1-2 — flag tables
+
+`cli-commands.md` and `docs/static-export.md` now list every real flag:
+`--out`, `--from-dist`, `--host`, `--seo`, `--origin`, `--images`,
+`--no-prerender`, `--spa`, `--keep-components`, `--check`, `--dry-run`,
+`--sourcemap`, `--hash-filenames`, `--compress`, `--no-minify`,
+`--no-obfuscate`.
+
+### P1-3 — what `--check` actually guarantees
+
+`checkExport()` now validates:
+
+1. Required runtime files: `index.html`, `routes.js`, `sliceConfig.json`,
+   `slice-env.json`, `slice-env.generated.js`, `bundles/bundle.config.json`,
+   `Slice/Slice.js`; `404.html` unless Cloudflare auto-SPA, and the translator
+   folder when `translator.enabled`.
+2. `Components/` is absent unless `--keep-components` is passed.
+3. `public/` was flattened (no `/public` directory left in the export).
+4. No source/build leftovers: `utils/`, `src/`, `api/`, `node_modules/`, `.git/`,
+   `AppConfig.js`, `slice-build.generated.d.ts`, `slice-runtime.generated.d.ts`.
+5. No `.map`, `.map.br`, `.map.gz`, `.d.ts`, `.env*`, `package.json`,
+   lockfiles, `node_modules` or `.git` anywhere.
+6. No `sourceMappingURL=` reference inside any exported `.js`.
+7. Host rules are coherent:
+   - `_redirects` and `_headers` exist together (Cloudflare/Netlify),
+   - `vercel.json` is valid JSON,
+   - `nginx.conf` maps 404 to `/404.html`,
+   - `.nojekyll` exists when `--host github` is explicit.
+8. Every literal route in `routes.js` has a prerendered page **unless** the
+   export declares an SPA fallback (Cloudflare without `404.html`, Netlify
+   `_redirects` catch-all, Vercel rewrite, nginx `try_files ... /index.html`, or
+   the client SPA marker in `404.html`). Localized exports check every locale
+   candidate. Missing localized pages are warnings, not failures.
+
+**Documented limits:** `--check` does **not**:
+
+- enumerate `${param}` routes (list concrete values in
+  `seo.json → routes[pattern].sitemap.paths` first),
+- verify that every referenced image/font/CSS file exists,
+- prove that a remote host applies the rules (`_redirects`, `vercel.json`,
+  nginx config) or that `Cache-Control` is actually sent.
+
+### P1-4 — `slice start` documentation
+
+Corrected/added:
+
+- `slice start` serves `dist/`; if `dist/` or
+  `dist/bundles/bundle.config.json` is missing it runs `slice build` first.
+- It keeps `src/` and `api/` as a requirement (the server entrypoint lives in
+  `api/index.js`).
+- Port priority: `--port` → `sliceConfig.server.port` → `3000`; if busy it tries
+  `port + 1`. The framework `start()` helper, used without the CLI, defaults to
+  `3001`.
+- Production serves only `dist/public` at `/`, `/App/*`, `/routes.js`,
+  `/sliceConfig.json`, `/bundles/*` (and the legacy `/dist/bundles/*` mirror),
+  `/Slice/Slice.js`, the env pair, PWA files and translator dictionaries.
+- It does **not** serve `/Components`, the rest of the `/dist` tree, `.map`,
+  `.d.ts`, `.env`, `package.json` or `node_modules`.
+- A real 404 requires SEO; without it the fallback returns the shell with 200
+  (soft 404). This is now stated next to the fallback table.
+- The claim that `sliceFallback`/`createSliceServer` were "untouched" was
+  removed: production static mounts and the guard did change.
+
+### P1-5 — local preview
+
+`slice export` now prints `npx serve dist-static` and explicitly says that
+`npx serve -s` hides the real `404.html`. The deployment guide explains both
+modes and when each one is appropriate.
+
+### P1-6 — public files
+
+The deployment guide lists what a static host can serve and warns that
+`sliceConfig.json`, `routes.js`, `bundle.config.json`, `slice-env.json` and
+`manifest.json` are public by design. They must not contain secrets.
+
+### P1-7 — Cloudflare SPA rule was invalid
+
+**Verified against** Cloudflare Pages docs and `wrangler pages dev` 4.162.0:
+
+- `_redirects: /* /index.html 200` is rejected by Wrangler as an **infinite
+  loop**: Cloudflare normalizes `/index.html` to `/`, which matches `/*` again.
+- `_redirects: /* / 200` is accepted but serves `index.html` for existing assets
+  (`GET /bundles/app.js` returned the shell), so it is not a safe fallback.
+- Cloudflare Pages enables automatic SPA mode only when there is **no top-level
+  `404.html`**; without it, unknown paths return the root with `200` and assets
+  are still served normally (verified with `wrangler pages dev`).
+
+**Fix:** for `--host cloudflare --spa`, omit `404.html` and write no catch-all.
+`--check` accepts the missing `404.html` for Cloudflare and warns that unknown
+routes are served by auto-SPA. Netlify keeps the catch-all (its shadowing rules
+make assets win); Vercel keeps the `/(.*)` rewrite (filesystem wins first);
+nginx keeps `try_files`; GitHub/S3/none write the shell as `404.html`.
+
+### P1-8 — Vercel redirect status codes
+
+Vercel's `permanent` boolean maps to **308/307**, not 301/302. The exporter now
+writes `statusCode: 301|302` from the SEO redirect, preserving the intended
+status.
+
+### P1-9 — Vercel/nginx missing security headers
+
+Cloudflare/Netlify `_headers` included `X-Content-Type-Options`,
+`X-Frame-Options` and `Referrer-Policy`, but `vercel.json` and `nginx.conf` did
+not. Verified by the local PoC (Vercel dev and nginx):
+
+- Vercel now writes a `/*` header rule plus the same headers on the cache
+  rules for `/bundles/*` and the env files.
+- nginx adds the headers with `always` to `location /`, `/bundles/` and the two
+  env locations, so they also apply to 404 responses.
+
+The end-to-end PoC, commands and status matrix are in
+[`host-rules-poc.md`](./host-rules-poc.md).
+
+### P1-10 — build artifacts the export was dropping
+
+A Playwright smoke against a real static export of `slicejs-components` found a
+404 for `/slice-events.generated.js`. The framework's event debugger dynamically
+imports that catalog at runtime, and Express production did not serve it either.
+Verified and fixed:
+
+- `slice-events.generated.js` is now in the export allowlist when
+  `events.ui.enabled` is true, and Express production serves it under the same
+  condition (`api/framework/server.js`).
+- `manifest.json` and `service-worker.js` are no longer reserved against
+  `dist/public`: Express prefers `dist/public/<file>` for PWA files, so the
+  export now preserves that precedence.
+- `translator.path` is configurable; the export copies that exact folder, not
+  only `locales/`.
+- Express serves `/bundles/documentationRoutes.generated.js` and
+  `/bundles/docsIndex.js` from `ComponentsPage`. The export now copies those two
+  generated modules into `bundles/` without publishing `Components/`.
+- `events/` and the rest of `Slice/` are no longer copied: Express does not
+  serve them.
+
+### P1-11 — custom host rules were overwritten
+
+If `dist/public` contained `_headers`, `_redirects`, `vercel.json` or
+`nginx.conf`, flattening copied it to the root and the preset then overwrote it.
+That could silently drop an app's CSP or custom redirects. The exporter now
+fails with a clear message when the selected preset would replace a custom file.
+A custom `dist/public/404.html` is replaced by the generated one with a warning.
+
+### P1-12 — `/api` and missing assets are app-level limits
+
+Playwright against the Portfolio export found `/api/themes` 404 (a real Express
+route) and two images that are not in `src/public`. A static host cannot run
+Express routes, and the exporter cannot invent missing files. This is documented
+in the deployment guide; the fix is an app-level static fallback, a separate API
+origin, or adding the missing assets. `--check` now warns when a bundle calls
+`fetch("/api/...")` so this is caught before upload.
+
+---
+
+## 6. Decisions
+
+### 6.1 Output folder: keep `dist-static`, not a single `dist`
+
+**Decision:** `dist/` remains the Express/serverless build. `slice export` writes
+`dist-static/`.
+
+**Why:**
+
+- `dist/` is already the runtime layout Express serves (`App/` at `/App`,
+  `public/` at `/`, explicit root files). A static host needs a flattened root
+  (`public/*` at `/`), a root `index.html`, `404.html` and host rules. Making
+  `dist/` satisfy both would either break `slice start` or force every Express
+  deployment to learn the static layout.
+- The flattened layout is a different artifact with different rules. Keeping it
+  separate makes the boundary auditable: `dist-static/` is the only folder you
+  upload to a static host.
+- It preserves existing CI that assumes `dist/`.
+- `dist-static` is explicit and does not collide with common host defaults. A
+  single `dist` would be conventional for an SPA, but here it is already taken.
+
+**Trade-off:** two folders to ignore in git and two commands to learn. This is
+worth it for a framework that supports both an Express runtime and a static
+host. If a future release adds a `--static` mode to `slice start`, it should
+still read `dist-static/`, not repurpose `dist/`.
+
+### 6.2 Root-only hosting
+
+The public route equals the app route. No base path, no `--base`, no project
+subpath. GitHub Pages project sites are not supported; use a user site
+(`user.github.io`) or a custom domain on a project site.
+
+### 6.3 Default real 404, host-specific SPA
+
+With SEO, `slice export` emits a real `404.html` and no catch-all. `--spa`
+restores the client-router fallback with host-specific mechanics:
+
+- **Cloudflare:** omit `404.html`; Pages auto-SPA. Never write a `_redirects`
+  catch-all (rejected as a loop, and `/* / 200` hijacks assets).
+- **Netlify:** `_redirects: /* /index.html 200` (existing files win).
+- **Vercel:** `rewrites: /(.*) -> /index.html` (filesystem wins first).
+- **nginx:** `try_files $uri $uri/ /index.html`.
+- **GitHub / S3 / none:** shell as `404.html`, status `404`; use a host function
+  for a true `200`.
+
+Without SEO, the shell is the only page and the SPA fallback is on by default.
+
+### 6.4 `Components/` pruned
+
+Express production 404s `/Components`; the static export matches it. Every
+component used at runtime is in a bundle. `--keep-components` is a debugging
+escape and the CLI warns that component source becomes fetchable.
+
+### 6.5 Public env is build-time
+
+`slice build` writes `dist/slice-env.json` + `dist/slice-env.generated.js`; the
+runtime imports the shim. There is no production env endpoint. Rebuild per
+environment or use an edge function for per-request values.
+
+### 6.6 No secret scanner
+
+A `--check` secret scanner is **not planned**. The exporter already rejects
+`.env*` and package manifests, and the deployment guide states that
+`sliceConfig.json`, `routes.js`, `bundle.config.json` and `slice-env.json` are
+public. Generic key-name scans produce false positives without preventing the
+real mistake, which is putting a secret in a public file.
+
+---
+
+## 7. Verification
+
+Run from the workspace root:
+
+```bash
+pnpm test:framework          # 239 tests
+cd repos/slicejs-cli
+node --test tests/export-command.test.js \
+  tests/dependency-analyzer.test.js \
+  tests/docs-generate.test.js \
+  tests/commands-component-crud.test.js \
+  tests/commands-doctor.test.js \
+  tests/build-command-integration.test.js \
+  tests/build-config-validation.test.js \
+  tests/build-degradation-reporting.test.js \
+  tests/postinstall-command.test.js \
+  tests/getcomponent.test.js \
+  tests/init-command-contract.test.js
+```
+
+Manual checks used during the audit:
+
+```text
+slice start (Portfolio, production)
+  /                                             200
+  /Components/Visual/Button/Button.js            404
+  /dist/Components/Visual/Button/Button.js       404
+  /dist/sliceConfig.json                         404
+  /dist/slice-build.generated.d.ts               403
+  /dist/bundles/slice-bundle.critical.js         200
+  /bundles/__audit.map                           403
+  /%2eenv                                        403/404
+
+slice export (Portfolio)
+  343 files -> 113 files after pruning Components
+  /Components/...                                404
+  real 404.html                                  present
+  locale redirect pages                          present for github/s3/none
+```
+
+---
+
+## 8. Remaining work (not blockers)
+
+| Item | Recommendation |
+|---|---|
+| P2-3 `sliceConfig.json` exposure | Optional: emit a runtime-only subset in `dist/` (drop `server`, keep `paths`/`router`/`translator`/UI blocks). Verified: the runtime does not read `server`, and the Express server reads the port from `src/sliceConfig.json`. |
+| P2-4 service worker caching | Documented in `pwa.md` and the deployment guide. The worker is app-owned; the framework serves it but does not set the cache policy. Optional future: replace a build hash placeholder in `service-worker.js`. |
+| P2-5 API routes | Documented in the deployment guide and CLI reference: a static export has no `/api/*`; use `slice build` + `slice start` (Express) or a separate API origin. |
+| `--check` asset references | A future pass can parse `App/index.html` and bundles for local URLs and assert they exist. |
+| Release | Bump CLI + framework together, run `node scripts/release-check.mjs`, and publish only after the deployment guide is live. |
+
+### P2-4 verification (Portfolio)
+
+The current `portfolio/src/service-worker.js`:
+
+- hardcodes `CACHE_NAME = 'portfolio-pwa-v4'` (must be bumped manually),
+- precaches the shell and optional `bundle.config.json` / `routes.js` /
+  `sliceConfig.json`; bundles are not precached,
+- serves `/bundles/*` network-first with `cache: 'no-store'` and a cached
+  fallback,
+- serves assets cache-first and navigations network-first with
+  `/App/index.html` as the offline fallback,
+- does **not** call `skipWaiting()` or `clients.claim()`.
+
+So the stale risk is not "old bundle filenames" (network-first updates them);
+it is an open tab keeping the old worker until all tabs close, plus asset
+cache-first behavior. The PWA guide now documents `CACHE` bumps,
+`--hash-filenames`, `skipWaiting`/`clients.claim`, and the export rule "do not
+precache `/Components/...`". The framework does not generate or version the
+worker because caching policy is app-specific.

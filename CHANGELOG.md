@@ -7,8 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.6.0] - 2026-11-16
+
+### Added
+
+- `slice export` (experimental): package `dist/` for a static host. Flattens `dist/public` to the
+  root, copies the build-time `slice-env.json` + `slice-env.generated.js`, prerenders literal SEO
+  routes (and `sitemap.paths`), writes a real `404.html` and locale redirects, and generates
+  Cloudflare/Netlify, Vercel, nginx or GitHub rules. GitHub/S3/`none` get portable HTML redirect
+  pages. Supports `--from-dist`, `--spa`, `--no-prerender`, `--check` and `--dry-run`. `Components/`
+  is pruned by default so component source is not fetchable; `--keep-components` is debug-only. The
+  export is root-only: the public route equals the app route, so subpath hosting is not supported.
+
+### Security
+
+- `slice export` now copies an explicit allowlist instead of `dist/` minus a denylist. `utils/`,
+  `AppConfig.js`, `.map`, `.map.br`, `.map.gz`, `.d.ts`, `.env*`, `package.json`, lockfiles and
+  `node_modules` never reach the export.
+- `slice export --out` is validated before the target is removed. The project root, ancestors, paths
+  outside the project, `src`, `dist`, `api`, `node_modules`, `.git`, `public`, `locales`,
+  `Components`, `App`, `bundles`, `Slice` and non-directory targets are rejected.
+- `slice export` imports the framework SEO API lazily and checks it. An older `slicejs-web-framework`
+  now fails only `export` with a clear message, instead of breaking every CLI command at startup.
+
+### Fixed
+
+- `slice export --host cloudflare --spa` no longer writes `_redirects: /* /index.html 200`.
+  Cloudflare rejects that rule as an infinite loop and `/* / 200` would intercept assets. The
+  exporter now omits `404.html` so Cloudflare Pages uses its automatic SPA mode.
+- Vercel locale redirects use `statusCode` (301/302). The previous `permanent` boolean produced
+  308/307 instead of the status decided by the SEO context.
+- GitHub/S3/`none` with `--spa` write the shell as `404.html` (soft 404) instead of the noindex
+  not-found page, and the report no longer claims a 200 SPA fallback for those hosts.
+- Vercel and nginx exports now include the same security headers as Cloudflare/Netlify
+  (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`). nginx uses `always` so 404
+  responses keep them.
+- Export build parity: `slice-events.generated.js` is published only when `events.ui.enabled` (the
+  event debugger is its only consumer), PWA files in `public/` keep Express's public-first
+  precedence, a custom `translator.path` is copied, and the two ComponentsPage docs modules Express
+  special-cases go into `bundles/`. `events/` and the rest of `Slice/` are no longer published.
+- `slice export` now fails instead of silently replacing custom `_headers`, `_redirects`,
+  `vercel.json` or `nginx.conf` found in `dist/public`.
+
 ### Changed
 
+- `slice build` writes `dist/slice-env.json` and `dist/slice-env.generated.js`. The runtime imports
+  the ESM shim, so production no longer needs an env endpoint; `slice dev` keeps the live endpoint
+  and `slice start` serves the built files as static assets.
 - Output pass: `Print` uses one symbol per severity (`✔ ! ✖ • →`), help descriptions are shorter,
   stack traces require `SLICE_DEBUG=1`, and emoji prefixes are gone from build, bundle, update and
   `get` output.
@@ -21,6 +66,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Update your Slice.js" next step is gone and the run ends with one `Build completed` block.
 - Bundler warnings use the `!` line and are deduplicated. Dynamic `slice.build()` calls that cannot
   be linked are grouped into one warning with the file list instead of one long warning per call.
+- `slice export --check` now validates `routes.js`, host-rule coherence, `.map.br`/`.map.gz`,
+  `sourceMappingURL=`, `.env*`, package manifests, source-only folders and literal route coverage
+  when there is no SPA fallback. Dynamic `${param}` routes and asset references remain explicitly out
+  of scope.
+- `slice init` adds `dist-static/` to the generated `.gitignore`.
+- `slice export` is now explicitly **experimental** in `--help` and prints a
+  warning on each run. Its flags/layout may change between releases.
+- `slice export` host rules moved to `commands/export/hosts/*` strategy presets
+  (`cloudflare`, `netlify`, `vercel`, `nginx`, `github`, `s3`, `none`).
+  `export.js` is orchestration only; copy, prerender, check, file helpers and
+  client redirects are separate modules. `--check` without `--host` detects the
+  preset from the export files.
 
 ## [4.5.0] - 2026-10-29
 
@@ -334,7 +391,8 @@ scripts keep working.
 - **`slice update` / `slice upgrade` commands**: Removed from CLI and documentation.
 - **`postinstall` lifecycle hook**: `post.js` deleted, `"postinstall"` script removed from `package.json`.
 
-[Unreleased]: https://github.com/VKneider/slicejs-cli/compare/v4.5.0...HEAD
+[Unreleased]: https://github.com/VKneider/slicejs-cli/compare/v4.6.0...HEAD
+[4.6.0]: https://github.com/VKneider/slicejs-cli/releases/tag/v4.6.0
 [4.5.0]: https://github.com/VKneider/slicejs-cli/releases/tag/v4.5.0
 [4.4.0]: https://github.com/VKneider/slicejs-cli/releases/tag/v4.4.0
 [4.3.0]: https://github.com/VKneider/slicejs-cli/releases/tag/v4.3.0
