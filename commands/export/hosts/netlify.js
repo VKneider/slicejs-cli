@@ -9,6 +9,7 @@ export default {
   // safe for assets and gives unknown routes the shell with a 200.
   spaMode: 'redirects',
   clientRedirectPages: false,
+  ruleFiles: ['_redirects', '_headers'],
 
   async write({ outDir, redirects, spa }) {
     const redirectBlock = redirects.length ? `${redirectLines(redirects)}\n` : '';

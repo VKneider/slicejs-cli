@@ -76,10 +76,21 @@ export async function checkExport(outDir, { keepComponents = false, preset, expl
     issues.push('public/ was not flattened; /Themes, /images and other public assets will 404.');
   }
 
+  const config = await readJsonIfExists(path.join(outDir, 'sliceConfig.json'));
+  const translator = config?.translator;
+  if (translator?.enabled) {
+    const value = typeof translator.path === 'string' && translator.path.trim()
+      ? translator.path
+      : '/locales';
+    const folder = value.replace(/^\/+|\/+$/g, '');
+    if (folder && !folder.includes('..') && !await fs.pathExists(path.join(outDir, folder))) {
+      issues.push(`Missing translator folder ${folder}/`);
+    }
+  }
+
   const suspectDirs = new Set(['utils', 'src', 'api', 'node_modules', '.git']);
   const suspectFiles = new Set([
     'appconfig.js',
-    'slice-events.generated.js',
     'slice-build.generated.d.ts',
     'slice-runtime.generated.d.ts'
   ]);
@@ -109,6 +120,9 @@ export async function checkExport(outDir, { keepComponents = false, preset, expl
       if (/sourceMappingURL\s*=/.test(content)) {
         issues.push(`sourceMappingURL reference in export: ${relative}`);
       }
+      if (/fetch\s*\(\s*["'`]\/api\//.test(content)) {
+        warnings.push(`Bundle ${relative} calls /api/*; a static host cannot serve Express routes. Use slice start or a separate API origin.`);
+      }
     }
   }
 
@@ -128,7 +142,6 @@ export async function checkExport(outDir, { keepComponents = false, preset, expl
     if (literalPaths.length === 0) {
       warnings.push('Could not find literal routes in routes.js; route coverage was not checked.');
     } else if (!preset || !await preset.spaFallback({ outDir })) {
-      const config = await readJsonIfExists(path.join(outDir, 'sliceConfig.json'));
       for (const pathname of literalPaths) {
         const candidates = routeCandidatesForCheck(pathname, config?.translator);
         const present = [];

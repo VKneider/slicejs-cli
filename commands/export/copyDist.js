@@ -12,27 +12,53 @@ const EXPORT_ROOT_FILES = new Set([
   'sliceConfig.json',
   'slice-env.json',
   'slice-env.generated.js',
+  // The event debugger dynamically imports this catalog at runtime.
+  'slice-events.generated.js',
   'robots.txt',
   'sitemap.xml',
   'manifest.json',
   'service-worker.js'
 ]);
 
-const EXPORT_DIRS = new Set(['App', 'bundles', 'Slice', 'locales', 'events']);
+const EXPORT_DIRS = new Set(['App', 'bundles', 'locales']);
 
 // Files the exporter writes itself. `dist/public` is flattened to the root, but
 // Express answers these paths with explicit routes before its static middleware,
 // so a file with the same name in public/ must not replace them.
+// `manifest.json` and `service-worker.js` are intentionally not reserved:
+// Express prefers `dist/public/<file>` over `dist/<file>` for those two.
 const RESERVED_ROOT_FILES = new Set([
   'index.html',
   '404.html',
   'routes.js',
   'sliceConfig.json',
   'slice-env.json',
-  'slice-env.generated.js',
-  'manifest.json',
-  'service-worker.js'
+  'slice-env.generated.js'
 ]);
+
+// Express has a narrow carve-out for two generated docs data modules:
+// `/bundles/documentationRoutes.generated.js` and `/bundles/docsIndex.js` are
+// read from ComponentsPage. The static export prunes Components/, so copy just
+// those two files into the public bundles folder.
+const COMPONENTS_PAGE_BUNDLE_FILES = [
+  'documentationRoutes.generated.js',
+  'docsIndex.js'
+];
+
+function readTranslatorFolder(distDir) {
+  try {
+    const config = JSON.parse(fs.readFileSync(path.join(distDir, 'sliceConfig.json'), 'utf8'));
+    const translator = config.translator;
+    if (!translator?.enabled) return null;
+    const value = typeof translator.path === 'string' && translator.path.trim()
+      ? translator.path
+      : '/locales';
+    const folder = value.replace(/^\/+|\/+$/g, '');
+    return folder && !folder.includes('..') ? folder : null;
+  } catch {
+    return null;
+  }
+}
 
 const BLOCKED_SEGMENTS = new Set(['node_modules', '.git']);
 const BLOCKED_FILES = /(?:^|\/)(?:\.env(?:\.[^/]+)?|package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|npm-shrinkwrap\.json)$/i;
@@ -67,6 +93,16 @@ export async function copyDist(outDir, distDir, { keepComponents, skipped }) {
         skipped.push('Components/');
         continue;
       }
+      // Express production only serves `/Slice/Slice.js`; copying the whole
+      // folder would publish framework internals that Express 404s.
+      if (name === 'Slice') {
+        const sliceEntry = path.join(from, 'Slice.js');
+        if (await fs.pathExists(sliceEntry)) {
+          await fs.ensureDir(path.join(outDir, 'Slice'));
+          await fs.copy(sliceEntry, path.join(outDir, 'Slice', 'Slice.js'), { overwrite: true });
+        }
+        continue;
+      }
       if (!EXPORT_DIRS.has(name) && name !== 'Components') {
         skipped.push(`${name}/`);
         continue;
@@ -82,6 +118,26 @@ export async function copyDist(outDir, distDir, { keepComponents, skipped }) {
     }
     if (!isExportableFile(name)) continue;
     await fs.copy(from, path.join(outDir, name), { overwrite: true });
+  }
+
+  // `translator.path` is configurable (`/locales` by default). Express mounts
+  // that exact folder, so copy it even when it is not a top-level allowlist dir.
+  const translatorFolder = readTranslatorFolder(distDir);
+  if (translatorFolder && !EXPORT_DIRS.has(translatorFolder)) {
+    const translatorDir = path.join(distDir, translatorFolder);
+    if (await fs.pathExists(translatorDir)) {
+      await fs.copy(translatorDir, path.join(outDir, translatorFolder), { filter });
+    }
+  }
+
+  // Narrow parity for the docs app: the Express bundle handler serves these two
+  // generated modules from ComponentsPage. Copy only these, never Components/.
+  const componentsPage = path.join(distDir, 'Components', 'AppComponents', 'ComponentsPage');
+  for (const fileName of COMPONENTS_PAGE_BUNDLE_FILES) {
+    const source = path.join(componentsPage, fileName);
+    if (!await fs.pathExists(source)) continue;
+    await fs.ensureDir(path.join(outDir, 'bundles'));
+    await fs.copy(source, path.join(outDir, 'bundles', fileName), { overwrite: true });
   }
 }
 

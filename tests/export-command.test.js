@@ -25,8 +25,10 @@ async function createFakeDist(root) {
   await write(path.join(dist, 'public', 'Themes', 'Light.css'), ':root{}');
   await write(path.join(dist, 'public', 'images', 'logo.svg'), '<svg/>');
   await write(path.join(dist, 'public', 'manifest.json'), '{"name":"Test"}');
+  await write(path.join(dist, 'public', 'service-worker.js'), 'self.addEventListener("install", () => {});');
   await write(path.join(dist, 'sliceConfig.json'), '{"server":{"port":3000}}');
   await write(path.join(dist, 'routes.js'), "export default [{ path: '/' }];\n");
+  await write(path.join(dist, 'slice-events.generated.js'), 'export default {};');
   await write(path.join(dist, 'robots.txt'), 'User-agent: *');
   await write(path.join(dist, 'slice-build.generated.d.ts'), 'export {};');
   await write(path.join(dist, 'bundle.js.map'), '{}');
@@ -51,6 +53,11 @@ test('export flattens dist/public and writes root index, env and host rules', as
     assert.equal(await fs.pathExists(path.join(out, '404.html')), true);
     assert.equal(await fs.pathExists(path.join(out, '_redirects')), true);
     assert.equal(await fs.pathExists(path.join(out, '_headers')), true);
+    // The event debugger imports this catalog at runtime.
+    assert.equal(await fs.pathExists(path.join(out, 'slice-events.generated.js')), true);
+    // Express prefers public/ for PWA files; the export must preserve that.
+    assert.equal(await fs.pathExists(path.join(out, 'manifest.json')), true);
+    assert.equal(await fs.pathExists(path.join(out, 'service-worker.js')), true);
     assert.equal(await fs.pathExists(path.join(out, 'slice-build.generated.d.ts')), false);
     assert.equal(await fs.pathExists(path.join(out, 'bundle.js.map')), false);
 
@@ -368,7 +375,6 @@ test('export publishes only the runtime allowlist, not source or build artifacts
     await createFakeDist(root);
     await write(path.join(root, 'dist', 'utils', 'helper.js'), 'export const secret = true;');
     await write(path.join(root, 'dist', 'AppConfig.js'), 'export default {};');
-    await write(path.join(root, 'dist', 'slice-events.generated.js'), 'export default {};');
     await write(path.join(root, 'dist', 'bundles', 'bundle.js.map.br'), 'compressed map');
     await write(path.join(root, 'dist', 'public', '.env'), 'SLICE_PUBLIC_SECRET=1');
     await write(path.join(root, 'dist', 'public', 'app.js.map.gz'), 'compressed map');
@@ -380,7 +386,6 @@ test('export publishes only the runtime allowlist, not source or build artifacts
     for (const file of [
       'utils/helper.js',
       'AppConfig.js',
-      'slice-events.generated.js',
       'bundles/bundle.js.map.br',
       '.env',
       'app.js.map.gz'
@@ -390,6 +395,52 @@ test('export publishes only the runtime allowlist, not source or build artifacts
 
     assert.equal(await fs.pathExists(path.join(out, 'App', 'index.html')), true);
     assert.equal(await fs.pathExists(path.join(out, 'bundles', 'slice-bundle.home.js')), true);
+  }, { visualComponents: [] });
+});
+
+test('export follows a custom translator.path', async () => {
+  await withTestProject(async (root) => {
+    await createFakeDist(root);
+    await write(path.join(root, 'dist', 'sliceConfig.json'), JSON.stringify({
+      translator: { enabled: true, path: '/i18n', locales: ['en'], defaultLocale: 'en' }
+    }, null, 2));
+    await write(path.join(root, 'dist', 'i18n', 'en.json'), '{"hello":"Hello"}');
+
+    const ok = await exportStatic({ fromDist: true, out: 'dist-static', host: 'netlify' });
+    assert.equal(ok, true);
+
+    const out = path.join(root, 'dist-static');
+    assert.equal(await fs.pathExists(path.join(out, 'i18n', 'en.json')), true);
+    assert.equal(await exportStatic({ out: 'dist-static', check: true }), true);
+  }, { visualComponents: [] });
+});
+
+test('export copies the ComponentsPage docs modules without shipping Components', async () => {
+  await withTestProject(async (root) => {
+    await createFakeDist(root);
+    const page = path.join(root, 'dist', 'Components', 'AppComponents', 'ComponentsPage');
+    await write(path.join(page, 'documentationRoutes.generated.js'), 'export default {};');
+    await write(path.join(page, 'docsIndex.js'), 'export default [];');
+    await write(path.join(page, 'ComponentsPage.js'), 'export default class ComponentsPage {}');
+
+    const ok = await exportStatic({ fromDist: true, out: 'dist-static', host: 'cloudflare' });
+    assert.equal(ok, true);
+
+    const out = path.join(root, 'dist-static');
+    assert.equal(await fs.pathExists(path.join(out, 'bundles', 'documentationRoutes.generated.js')), true);
+    assert.equal(await fs.pathExists(path.join(out, 'bundles', 'docsIndex.js')), true);
+    assert.equal(await fs.pathExists(path.join(out, 'Components')), false);
+  }, { visualComponents: [] });
+});
+
+test('export refuses to overwrite custom host rules from public/', async () => {
+  await withTestProject(async (root) => {
+    await createFakeDist(root);
+    await write(path.join(root, 'dist', 'public', '_headers'), '/*\n  Content-Security-Policy: default-src \'self\';\n');
+
+    const ok = await exportStatic({ fromDist: true, out: 'dist-static', host: 'cloudflare' });
+    assert.equal(ok, false);
+    assert.equal(await fs.pathExists(path.join(root, 'dist-static')), false);
   }, { visualComponents: [] });
 });
 

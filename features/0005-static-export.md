@@ -231,3 +231,10 @@ user repeats, and the framework's own `--compress` flag already advertises
   `commands/export/hosts/*` (`id`, `spaMode`, `write`, `check`, `spaFallback`).
   The registry also detects the preset for `--check` when `--host` is omitted.
   This removes the shared Cloudflare/Netlify branch that caused the SPA bug.
+- 2026-11-16 - **Build parity audit.** A Playwright smoke on the Components app
+  found `/slice-events.generated.js` 404. The export now includes the event
+  catalog and Express serves it; PWA files in `public/` keep Express's
+  public-first precedence; a custom `translator.path` is copied; the two
+  ComponentsPage docs modules Express special-cases are copied to `bundles/`;
+  `events/` and the rest of `Slice/` are no longer published. Custom host rules
+  in `dist/public` now fail instead of being silently overwritten.

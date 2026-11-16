@@ -57,6 +57,9 @@ fixed or explicitly documented below. The feature is ready for a final review, b
 | P1-7 | P1 | Cloudflare `--spa` wrote `_redirects: /* /index.html 200`; Cloudflare rejects it as an infinite loop, and `/* / 200` hijacks every asset. | Fixed (omit `404.html`, auto-SPA) |
 | P1-8 | P1 | Vercel redirects used `permanent`, which maps to 308/307, not the SEO page's 301/302. | Fixed (`statusCode`) |
 | P1-9 | P1 | Vercel and nginx presets did not replicate the three security headers that Cloudflare/Netlify got. | Fixed (all presets) |
+| P1-10 | P1 | Export omitted runtime build artifacts: `slice-events.generated.js`, PWA files under `public/`, a custom `translator.path`, and the ComponentsPage docs modules. | Fixed |
+| P1-11 | P1 | Custom host rules in `dist/public` (`_headers`, `_redirects`, `vercel.json`, `nginx.conf`) were silently overwritten. | Fixed (fails with a clear error) |
+| P1-12 | P2 | Apps that call `/api/*` (Portfolio `/api/themes`) or reference missing public images cannot work as a pure static site. | Documented limitation |
 | P2-1 | P2 | `--sourcemap` is a no-op for the published export (maps are filtered). | Documented + warning |
 | P2-2 | P2 | `--no-minify` / `--no-obfuscate` can ship readable bundles. | Documented + warning |
 | P2-3 | P2 | `sliceConfig.json` exposes `server.port` / `server.host` (not secrets, but unnecessary). | Open; low priority |
@@ -354,6 +357,43 @@ not. Verified by the local PoC (Vercel dev and nginx):
 
 The end-to-end PoC, commands and status matrix are in
 [`host-rules-poc.md`](./host-rules-poc.md).
+
+### P1-10 — build artifacts the export was dropping
+
+A Playwright smoke against a real static export of `slicejs-components` found a
+404 for `/slice-events.generated.js`. The framework's event debugger dynamically
+imports that catalog at runtime, and Express production did not serve it either.
+Verified and fixed:
+
+- `slice-events.generated.js` is now in the export allowlist, and Express
+  production serves it (`api/framework/server.js`).
+- `manifest.json` and `service-worker.js` are no longer reserved against
+  `dist/public`: Express prefers `dist/public/<file>` for PWA files, so the
+  export now preserves that precedence.
+- `translator.path` is configurable; the export copies that exact folder, not
+  only `locales/`.
+- Express serves `/bundles/documentationRoutes.generated.js` and
+  `/bundles/docsIndex.js` from `ComponentsPage`. The export now copies those two
+  generated modules into `bundles/` without publishing `Components/`.
+- `events/` and the rest of `Slice/` are no longer copied: Express does not
+  serve them.
+
+### P1-11 — custom host rules were overwritten
+
+If `dist/public` contained `_headers`, `_redirects`, `vercel.json` or
+`nginx.conf`, flattening copied it to the root and the preset then overwrote it.
+That could silently drop an app's CSP or custom redirects. The exporter now
+fails with a clear message when the selected preset would replace a custom file.
+A custom `dist/public/404.html` is replaced by the generated one with a warning.
+
+### P1-12 — `/api` and missing assets are app-level limits
+
+Playwright against the Portfolio export found `/api/themes` 404 (a real Express
+route) and two images that are not in `src/public`. A static host cannot run
+Express routes, and the exporter cannot invent missing files. This is documented
+in the deployment guide; the fix is an app-level static fallback, a separate API
+origin, or adding the missing assets. `--check` now warns when a bundle calls
+`fetch("/api/...")` so this is caught before upload.
 
 ---
 

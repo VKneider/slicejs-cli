@@ -9,6 +9,7 @@ export default {
   // shadow assets.
   spaMode: 'rewrite',
   clientRedirectPages: false,
+  ruleFiles: ['vercel.json'],
 
   async write({ outDir, redirects, spa }) {
     const securityHeaders = securityHeaderObjects();

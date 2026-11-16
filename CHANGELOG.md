@@ -40,6 +40,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Vercel and nginx exports now include the same security headers as Cloudflare/Netlify
   (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`). nginx uses `always` so 404
   responses keep them.
+- Export build parity: `slice-events.generated.js` is published (the event debugger imports it),
+  PWA files in `public/` keep Express's public-first precedence, a custom `translator.path` is
+  copied, and the two ComponentsPage docs modules Express special-cases go into `bundles/`.
+  `events/` and the rest of `Slice/` are no longer published.
+- `slice export` now fails instead of silently replacing custom `_headers`, `_redirects`,
+  `vercel.json` or `nginx.conf` found in `dist/public`.
 
 ### Changed
 

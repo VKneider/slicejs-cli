@@ -246,28 +246,35 @@ Published:
 | Path | Why |
 |---|---|
 | `App/` | Shell (`index.html`, `index.js`, `style.css`). |
-| `bundles/` | Runtime bundles + `bundle.config.json`. |
-| `Slice/` | Self-contained runtime. |
-| `locales/` | Translator dictionaries. |
-| `events/` | Event catalog, when the build emits it. |
+| `bundles/` | Runtime bundles + `bundle.config.json` + the two ComponentsPage docs modules Express special-cases. |
+| `Slice/Slice.js` | Self-contained runtime. Express 404s the rest of `/Slice`, so nothing else is published. |
+| `locales/` | Translator dictionaries. A custom `translator.path` is copied at that exact path. |
 | `public/*` → `/` | Themes, Styles, images, PWA, SEO, sitemap. |
-| Root files | `routes.js`, `sliceConfig.json`, `slice-env.json`, `slice-env.generated.js`, `robots.txt`, `sitemap.xml`, `manifest.json`, `service-worker.js`. |
-| `Components/` | **Only** with `--keep-components` (debug). |
+| Root files | `routes.js`, `sliceConfig.json`, `slice-env.json`, `slice-env.generated.js`, `slice-events.generated.js`, `robots.txt`, `sitemap.xml`, `manifest.json`, `service-worker.js`. |
+| `Components/` | **Only** with `--keep-components` (debug). The exporter always copies just `documentationRoutes.generated.js` and `docsIndex.js` into `bundles/` because Express has a narrow carve-out for them. |
 
 Everything else is skipped: `utils/`, `AppConfig.js`,
-`slice-events.generated.js`, `slice-build.generated.d.ts`,
-`slice-runtime.generated.d.ts`, arbitrary source folders.
+`slice-build.generated.d.ts`, `slice-runtime.generated.d.ts`, `events/`,
+arbitrary source folders.
+
+`slice-events.generated.js` is **needed**: the event debugger dynamically
+imports it at runtime. Express production serves it too.
+
+`dist/public` is flattened to the root but cannot overwrite the files the
+exporter owns (`index.html`, `404.html`, `routes.js`, `sliceConfig.json`,
+`slice-env.*`). `manifest.json` and `service-worker.js` are not reserved:
+Express prefers `dist/public/<file>` over `dist/<file>`, so the export preserves
+that precedence.
+
+If `dist/public` contains a host rule file that the selected preset writes
+(`_redirects`, `_headers`, `vercel.json`, `nginx.conf`), the export stops with
+an error instead of silently replacing the app's CSP/redirects. A custom
+`dist/public/404.html` is replaced by the generated one with a warning.
 
 Inside copied trees the filter also rejects `.map`, `.map.br`, `.map.gz`,
 `.d.ts`, `.env*`, `package.json`, lockfiles, `node_modules` and `.git`.
 Precompressed `.br`/`.gz` siblings (from `slice build --compress`) are copied;
 the host must be configured to use them, otherwise they are dead weight.
-
-`dist/public` is flattened to the root but cannot overwrite the files the
-exporter owns (`index.html`, `404.html`, `routes.js`, `sliceConfig.json`,
-`slice-env.*`, `manifest.json`, `service-worker.js`). Express answers those with
-explicit routes before its static middleware, so the static export matches that
-precedence.
 
 `Components/` is **pruned by default**. Express production 404s `/Components`,
 so the static export matches it; every component used at runtime is in a bundle.
@@ -405,7 +412,9 @@ Expected output:
   SPA fallback.
 
 `--check` does not enumerate `${param}` routes or verify every referenced asset.
-Those limits are documented in the deployment guide and the audit.
+It warns (does not fail) when a bundle calls `fetch("/api/...")`, because a
+static host cannot serve Express routes. Those limits are documented in the
+deployment guide and the audit.
 
 ---
 

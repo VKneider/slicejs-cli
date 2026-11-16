@@ -8,6 +8,7 @@ export default {
   // a true 200 navigation fallback.
   spaMode: 'client-404',
   clientRedirectPages: true,
+  ruleFiles: [],
 
   async write() {
     return [];

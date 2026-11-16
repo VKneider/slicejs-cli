@@ -9,6 +9,7 @@ export default {
   // 404.html; unknown routes render the app with a 404 status.
   spaMode: 'client-404',
   clientRedirectPages: true,
+  ruleFiles: [],
 
   async write({ outDir }) {
     await fs.writeFile(path.join(outDir, '.nojekyll'), '', 'utf8');

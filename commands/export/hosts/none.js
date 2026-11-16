@@ -7,6 +7,7 @@ export default {
   // server in front decides the status.
   spaMode: 'client-404',
   clientRedirectPages: true,
+  ruleFiles: [],
 
   async write() {
     return [];

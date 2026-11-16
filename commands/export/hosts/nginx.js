@@ -9,6 +9,7 @@ export default {
   id: 'nginx',
   spaMode: 'try-files',
   clientRedirectPages: false,
+  ruleFiles: ['nginx.conf'],
 
   async write({ outDir, redirects, spa }) {
     const redirectBlock = redirects

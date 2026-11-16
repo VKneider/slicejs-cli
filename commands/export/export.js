@@ -84,6 +84,19 @@ export default async function exportStatic(options = {}) {
       throw new Error('dist/App/index.html is missing. Run "slice build" again.');
     }
 
+    // A custom host rule inside src/public would be flattened and then silently
+    // replaced by the generated preset. Fail instead of losing CSP/redirects.
+    const customRuleFiles = (preset.ruleFiles || [])
+      .filter((name) => fs.existsSync(path.join(distDir, 'public', name)));
+    if (customRuleFiles.length > 0) {
+      throw new Error(
+        `dist/public/${customRuleFiles.join(', ')} would be replaced by --host ${preset.id}. Move custom host rules out of public/ or merge them into the generated files.`
+      );
+    }
+    if (fs.existsSync(path.join(distDir, 'public', '404.html'))) {
+      Print.warning('dist/public/404.html will be replaced by the generated 404.html.');
+    }
+
     const prerender = await buildPrerender(projectRoot, distDir, options);
 
     if (dryRun) {

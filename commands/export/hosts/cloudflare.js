@@ -10,6 +10,7 @@ export default {
   // loop, and `/* / 200` would intercept every asset.
   spaMode: 'omit-404',
   clientRedirectPages: false,
+  ruleFiles: ['_redirects', '_headers'],
 
   async write({ outDir, redirects }) {
     const redirectBlock = redirects.length ? `${redirectLines(redirects)}\n` : '';

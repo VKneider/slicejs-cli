@@ -208,6 +208,20 @@ host files. The documented setup remains:
 - a CloudFront function is required for a true `200` navigation fallback;
   `CustomErrorResponses` alone keeps the 404 status.
 
+### Build parity smoke (Playwright)
+
+Exported `slicejs-components` and loaded `/docs` from a static server:
+
+- before the fix: `404 /slice-events.generated.js`;
+- after adding the event catalog, the ComponentsPage docs modules and the PWA
+  rules: **no failed requests**, `/docs` and `/docs/input/button` render.
+
+Exported Portfolio and loaded `/`, `/experience` and `/projects`:
+
+- no missing bundles or theme assets;
+- `/api/themes` is a real Express route, so a pure static host cannot serve it;
+- two project images are not present in `src/public` (app data, not exporter).
+
 ---
 
 ## Findings and fixes
@@ -221,6 +235,12 @@ host files. The documented setup remains:
 | Netlify/Vercel dev override `Cache-Control` on static files | Local-server behavior; verify in a deploy preview |
 | Cloudflare canonicalizes `/route` → `/route/` | Host behavior; router normalizes the slash |
 | GitHub Pages / S3 not emulated locally | Docs + layout validated; no Docker available |
+| `/slice-events.generated.js` 404 in the Components export | Fixed: the runtime event catalog is now exported and served by Express |
+| PWA files in `public/` were skipped | Fixed: `manifest.json`/`service-worker.js` keep Express's public-first precedence |
+| Custom `translator.path` was skipped | Fixed: the export copies the configured folder |
+| ComponentsPage docs modules were pruned with Components | Fixed: the two files Express special-cases are copied to `bundles/` |
+| Custom host rules in `public/` were overwritten | Fixed: the export fails instead of losing them |
+| Portfolio `/api/themes` 404 | App-level: a static host has no Express routes; use `slice start` or a static fallback |
 
 ## Conclusion
 
