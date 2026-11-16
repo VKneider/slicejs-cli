@@ -28,6 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `slice export` imports the framework SEO API lazily and checks it. An older `slicejs-web-framework`
   now fails only `export` with a clear message, instead of breaking every CLI command at startup.
 
+### Fixed
+
+- `slice export --host cloudflare --spa` no longer writes `_redirects: /* /index.html 200`.
+  Cloudflare rejects that rule as an infinite loop and `/* / 200` would intercept assets. The
+  exporter now omits `404.html` so Cloudflare Pages uses its automatic SPA mode.
+- Vercel locale redirects use `statusCode` (301/302). The previous `permanent` boolean produced
+  308/307 instead of the status decided by the SEO context.
+- GitHub/S3/`none` with `--spa` write the shell as `404.html` (soft 404) instead of the noindex
+  not-found page, and the report no longer claims a 200 SPA fallback for those hosts.
+
 ### Changed
 
 - `slice build` writes `dist/slice-env.json` and `dist/slice-env.generated.js`. The runtime imports

@@ -40,7 +40,7 @@ test('export flattens dist/public and writes root index, env and host rules', as
       JSON.stringify({ mode: 'production', env: { SLICE_PUBLIC_FROM: 'dist' } })
     );
 
-    const ok = await exportStatic({ fromDist: true, out: 'dist-static', host: 'cloudflare' });
+    const ok = await exportStatic({ fromDist: true, out: 'dist-static', host: 'netlify' });
     assert.equal(ok, true);
 
     const out = path.join(root, 'dist-static');
@@ -122,11 +122,11 @@ test('export prerenders SEO routes and a real 404', async () => {
   }, { visualComponents: [] });
 });
 
-test('export --spa keeps the catch-all fallback with SEO', async () => {
+test('export --spa on Netlify keeps the catch-all fallback with SEO', async () => {
   await withTestProject(async (root) => {
     await createSeoDist(root);
 
-    const ok = await exportStatic({ fromDist: true, out: 'dist-static', host: 'cloudflare', spa: true });
+    const ok = await exportStatic({ fromDist: true, out: 'dist-static', host: 'netlify', spa: true });
     assert.equal(ok, true);
 
     const redirects = await fs.readFile(path.join(root, 'dist-static', '_redirects'), 'utf8');
@@ -134,11 +134,26 @@ test('export --spa keeps the catch-all fallback with SEO', async () => {
   }, { visualComponents: [] });
 });
 
+test('export --spa on Cloudflare omits 404.html and writes no catch-all', async () => {
+  await withTestProject(async (root) => {
+    await createSeoDist(root);
+
+    const ok = await exportStatic({ fromDist: true, out: 'dist-static', host: 'cloudflare', spa: true });
+    assert.equal(ok, true);
+
+    const out = path.join(root, 'dist-static');
+    assert.equal(await fs.pathExists(path.join(out, '404.html')), false);
+    const redirects = await fs.readFile(path.join(out, '_redirects'), 'utf8');
+    assert.doesNotMatch(redirects, /\/\*\s+\/index\.html\s+200/);
+    assert.equal(await exportStatic({ out: 'dist-static', check: true }), true);
+  }, { visualComponents: [] });
+});
+
 test('export --no-prerender uses the shell and the SPA fallback', async () => {
   await withTestProject(async (root) => {
     await createSeoDist(root);
 
-    const ok = await exportStatic({ fromDist: true, out: 'dist-static', host: 'cloudflare', prerender: false });
+    const ok = await exportStatic({ fromDist: true, out: 'dist-static', host: 'netlify', prerender: false });
     assert.equal(ok, true);
 
     const out = path.join(root, 'dist-static');
@@ -179,6 +194,22 @@ test('export prerenders every locale and writes locale redirects', async () => {
     const redirects = await fs.readFile(path.join(out, '_redirects'), 'utf8');
     assert.match(redirects, /^\/\s+\/en\s+302$/m);
     assert.match(redirects, /^\/about\s+\/en\/about\s+302$/m);
+  }, { visualComponents: [] });
+});
+
+test('Vercel redirects keep the SEO status code instead of 307/308', async () => {
+  await withTestProject(async (root) => {
+    await createLocalizedSeoDist(root);
+
+    const ok = await exportStatic({ fromDist: true, out: 'dist-static', host: 'vercel' });
+    assert.equal(ok, true);
+
+    const vercel = JSON.parse(await fs.readFile(path.join(root, 'dist-static', 'vercel.json'), 'utf8'));
+    assert.equal(vercel.redirects.length > 0, true);
+    for (const redirect of vercel.redirects) {
+      assert.equal(redirect.statusCode, 302);
+      assert.equal('permanent' in redirect, false);
+    }
   }, { visualComponents: [] });
 });
 

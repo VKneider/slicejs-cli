@@ -378,7 +378,17 @@ async function writeHostRules(outDir, host, redirects = [], { spa = false } = {}
   const written = [];
   const warnings = [];
 
-  if (host === 'cloudflare' || host === 'netlify') {
+  if (host === 'cloudflare') {
+    // Cloudflare Pages treats `/* /index.html 200` as an infinite loop (it
+    // normalizes `/index.html` to `/`, which matches `/*` again) and ignores it.
+    // `/* / 200` is accepted but hijacks every asset. Cloudflare's own SPA mode
+    // is enabled by *not* shipping a top-level 404.html, so `--spa` is handled
+    // by omitting that file instead of writing a catch-all.
+    const redirectBlock = redirects.length ? `${redirectLines(redirects)}\n` : '';
+    await fs.writeFile(path.join(outDir, '_redirects'), redirectBlock, 'utf8');
+    await fs.writeFile(path.join(outDir, '_headers'), HEADER_RULES, 'utf8');
+    written.push('_redirects', '_headers');
+  } else if (host === 'netlify') {
     const redirectBlock = redirects.length ? `${redirectLines(redirects)}\n` : '';
     const spaBlock = spa ? '/*  /index.html  200\n' : '';
     await fs.writeFile(path.join(outDir, '_redirects'), `${redirectBlock}${spaBlock}`, 'utf8');
@@ -405,10 +415,12 @@ async function writeHostRules(outDir, host, redirects = [], { spa = false } = {}
       vercel.rewrites = [{ source: '/(.*)', destination: '/index.html' }];
     }
     if (redirects.length) {
+      // Vercel's `permanent` boolean maps to 308/307, not 301/302. Use
+      // `statusCode` to preserve the status the SEO context decided.
       vercel.redirects = redirects.map(({ from, to, status }) => ({
         source: from,
         destination: to,
-        permanent: status === 301
+        statusCode: status
       }));
     }
     await fs.writeFile(path.join(outDir, 'vercel.json'), `${JSON.stringify(vercel, null, 2)}\n`, 'utf8');
@@ -460,8 +472,12 @@ async function readJsonIfExists(file) {
 
 async function hasSpaFallback(outDir) {
   const redirectsFile = path.join(outDir, '_redirects');
+  const has404 = await fs.pathExists(path.join(outDir, '404.html'));
   if (await fs.pathExists(redirectsFile)) {
     const text = await fs.readFile(redirectsFile, 'utf8');
+    // Cloudflare Pages enables its own SPA mode when there is no top-level
+    // 404.html; no catch-all rule is written in that case.
+    if (!has404) return true;
     if (/^\s*\/\*\s+\/index\.html\s+200\s*$/m.test(text)) return true;
   }
 
@@ -556,7 +572,6 @@ async function checkExport(outDir, { keepComponents = false, host } = {}) {
 
   const required = [
     'index.html',
-    '404.html',
     'routes.js',
     'sliceConfig.json',
     'slice-env.json',
@@ -569,6 +584,24 @@ async function checkExport(outDir, { keepComponents = false, host } = {}) {
     if (!await fs.pathExists(path.join(outDir, file))) {
       issues.push(`Missing ${file}`);
     }
+  }
+
+  const has404 = await fs.pathExists(path.join(outDir, '404.html'));
+  const hasRedirects = await fs.pathExists(path.join(outDir, '_redirects'));
+  let redirectsCatchAll = false;
+  if (hasRedirects) {
+    const redirectsText = await fs.readFile(path.join(outDir, '_redirects'), 'utf8');
+    redirectsCatchAll = /^\s*\/\*\s+\/index\.html\s+200\s*$/m.test(redirectsText);
+  }
+  // Cloudflare's SPA mode requires *no* top-level 404.html. Accept that shape
+  // when the host is explicit, or when the export has _redirects without an SPA
+  // catch-all (the Cloudflare preset).
+  const cloudflareAutoSpa = !has404
+    && (host === 'cloudflare' || (host == null && hasRedirects && !redirectsCatchAll));
+  if (!has404 && !cloudflareAutoSpa) {
+    issues.push('Missing 404.html');
+  } else if (cloudflareAutoSpa) {
+    warnings.push('No 404.html: Cloudflare Pages will serve index.html for unknown routes (SPA).');
   }
 
   if (!keepComponents && await fs.pathExists(path.join(outDir, 'Components'))) {
@@ -810,22 +843,34 @@ export default async function exportStatic(options = {}) {
       await fs.copy(path.join(outDir, 'App', 'index.html'), rootIndex);
     }
 
+    const redirects = prerender?.seo.redirects || [];
+    const spa = options.spa === true || !prerender;
+    const clientHosts = new Set(['github', 's3', 'none']);
+    const clientSpa = clientHosts.has(host) && spa;
+    // Cloudflare Pages only enables its own SPA mode when there is no top-level
+    // 404.html. A `_redirects` catch-all is rejected as an infinite loop, and
+    // `/* / 200` would hijack every asset, so remove the 404 page instead.
+    const cloudflareSpa = host === 'cloudflare' && spa;
+
     const notFoundPage = prerender
       ? (prerender.seo.notFound.get(null) || [...prerender.seo.notFound.values()][0])
       : null;
-    if (notFoundPage) {
+    if (cloudflareSpa) {
+      await fs.remove(path.join(outDir, '404.html'));
+    } else if (clientSpa) {
+      // GitHub/S3/none cannot return 200 for unknown routes. The portable
+      // fallback is a 404.html that renders the shell (soft 404).
+      await fs.copy(rootIndex, path.join(outDir, '404.html'));
+    } else if (notFoundPage) {
       await fs.writeFile(path.join(outDir, '404.html'), notFoundPage.html);
     } else {
       await fs.copy(rootIndex, path.join(outDir, '404.html'));
     }
 
     const envKeys = await ensureEnv(outDir, projectRoot);
-    const redirects = prerender?.seo.redirects || [];
-    const spa = options.spa === true || !prerender;
     const hostRules = await writeHostRules(outDir, host, redirects, { spa });
 
     // Hosts without server-side redirect syntax get portable HTML redirect files.
-    const clientHosts = new Set(['github', 's3', 'none']);
     let clientRedirects = { written: 0, skipped: [] };
     if (clientHosts.has(host) && redirects.length) {
       clientRedirects = await writeClientRedirects(
@@ -845,7 +890,11 @@ export default async function exportStatic(options = {}) {
     if (prerender) {
       const localeLabel = prerender.localeCount ? ` (${prerender.localeCount} locales)` : '';
       Print.info(`${pagesWritten} route(s) prerendered${localeLabel}`);
-      Print.info(`404.html${notFoundPage ? ' (noindex)' : ''}`);
+      if (cloudflareSpa) {
+        Print.info('404.html: omitted (Cloudflare auto-SPA)');
+      } else {
+        Print.info(`404.html${notFoundPage && !clientSpa ? ' (noindex)' : ''}`);
+      }
       if (redirects.length) Print.info(`${redirects.length} locale redirect(s)`);
       if (prerender.patternsSkipped) {
         Print.warning(`${prerender.patternsSkipped} dynamic route(s) not prerendered; add sitemap.paths or pass --spa.`);
@@ -858,7 +907,15 @@ export default async function exportStatic(options = {}) {
 
     Print.info(`Public env: ${envKeys} key(s) (JSON + ESM)`);
     Print.info(`Host rules: ${hostRules.written.length ? hostRules.written.join(', ') : 'none'}`);
-    Print.info(`SPA fallback: ${spa ? 'yes (unknown routes -> index.html)' : 'no (unknown routes -> 404.html)'}`);
+    let spaLabel = 'no (unknown routes -> 404.html)';
+    if (cloudflareSpa) {
+      spaLabel = 'yes (Cloudflare auto-SPA; no 404.html)';
+    } else if (clientSpa) {
+      spaLabel = 'via 404.html (soft 404; host-dependent)';
+    } else if (spa) {
+      spaLabel = 'yes (unknown routes -> index.html)';
+    }
+    Print.info(`SPA fallback: ${spaLabel}`);
     if (componentsState === 'pruned') {
       Print.info('Components: pruned (source not shipped)');
     } else if (componentsState === 'kept') {

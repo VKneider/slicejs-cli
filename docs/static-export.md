@@ -170,9 +170,18 @@ return {
 
 - With SEO: `404.html` from `notFound` (includes `noindex`).
 - Without SEO: `404.html` = the shell.
-- Hosts: Cloudflare Pages / Netlify use `404.html` automatically; Vercel serves
-  it for static deployments; nginx needs `error_page 404 /404.html;`; GitHub
-  Pages serves it with a real 404 status.
+- Hosts: Netlify uses `404.html` automatically; Vercel serves it for static
+  deployments; nginx needs `error_page 404 /404.html;`; GitHub Pages serves it
+  with a real 404 status.
+- **Cloudflare Pages SPA:** Cloudflare only enables its automatic SPA mode when
+  there is **no top-level `404.html`**. `slice export --host cloudflare --spa`
+  therefore omits `404.html` and writes no catch-all. A `_redirects` rule
+  `/* /index.html 200` is rejected by Cloudflare as an infinite loop (it
+  normalizes `/index.html` to `/`), and `/* / 200` would hijack every asset.
+- **GitHub / S3 / `none` SPA:** these hosts cannot return `200` for unknown
+  paths. `--spa` writes the shell as `404.html` (soft 404); the host still
+  returns `404`. Configure CloudFront/your server to rewrite to `/index.html`
+  with `200` if you need a true 200 fallback.
 
 ### 3.5 Redirects
 
@@ -387,12 +396,24 @@ Integration points: `client.js` (register the command) and a new
 
 ## 7. Host rules
 
-### Cloudflare Pages / Netlify
+### Cloudflare Pages
 
 ```
 # _redirects
-/font/*  /font.html  200
-/*       /index.html 200
+/es/about  /about  301
+```
+
+No SPA catch-all. Cloudflare rejects `/* /index.html 200` as an infinite loop
+and `/* / 200` intercepts assets. For `--spa`, the exporter omits `404.html` so
+Cloudflare's automatic SPA mode serves the root for unknown paths. For a real
+404, keep `404.html` and do not use `--spa`.
+
+### Netlify
+
+```
+# _redirects
+/es/about  /about  301
+/*         /index.html 200
 ```
 
 ```
@@ -410,13 +431,17 @@ Integration points: `client.js` (register the command) and a new
 ```json
 {
   "outputDirectory": "dist-static",
-  "rewrites": [{ "source": "/font/:id", "destination": "/font.html" }],
-  "redirects": [{ "source": "/es/:path*", "destination": "/:path*", "permanent": true }],
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
+  "redirects": [{ "source": "/es/about", "destination": "/about", "statusCode": 302 }],
   "headers": [
     { "source": "/bundles/(.*)", "headers": [{ "key": "Cache-Control", "value": "no-store" }] }
   ]
 }
 ```
+
+Use `statusCode` (301/302) rather than `permanent`: Vercel maps `permanent: true`
+to **308** and `permanent: false` to **307**. Vercel checks the filesystem before
+applying rewrites, so the `/(.*)` SPA rewrite does not shadow assets.
 
 ### nginx
 
@@ -464,7 +489,7 @@ location ~* \.(?:css|js|svg|png|woff2)$ {
 |---|---|
 | `dist/public` at the root | Flatten, or `/Themes`, `/images`, `/workers` 404. |
 | `dist/App/index.html` is not `index.html` | Copy it to the root; the shell references `/App/*`. |
-| Soft 404 | `/* → /index.html 200` answers 200 for unknown routes. Choose real 404 (no catch-all) or deep links (with catch-all). |
+| Soft 404 | Netlify/Vercel/nginx: a catch-all serves `index.html` with `200`. Cloudflare: omit `404.html` (auto-SPA). GitHub/S3/none: `404.html` shell with `404`. |
 | `.br`/`.gz` | Many hosts do not send `Content-Encoding` by extension. Do not emit them unless the host supports it. |
 | `--hash-filenames` | The HTML does not reference bundles (the loader does), but verify the loader reads the hashed names. |
 | Frozen `slice-env.json` | One build per environment, or an edge function. |
@@ -472,6 +497,8 @@ location ~* \.(?:css|js|svg|png|woff2)$ {
 | `--sourcemap` | Never in a public export. `--check` fails on `.map`, `.map.br`, `.map.gz` and `sourceMappingURL=`. |
 | `--no-minify` | Debug only. The CLI warns; readable bundles are still application source. |
 | `--out` | Validated. `.`, `src`, `dist`, `api`, ancestors and paths outside the project are rejected before `fs.remove()`. |
+| Cloudflare SPA | Never write `/* /index.html 200` (infinite loop) or `/* / 200` (hijacks assets). Omit `404.html` and let Cloudflare auto-SPA. |
+| Vercel status | Use `statusCode`, not `permanent`; `permanent` maps to 308/307, not 301/302. |
 | `file://` | Does not work: ES modules + `fetch` need HTTP. For a local tool, a mini server or Electron/Tauri. |
 
 ---
@@ -544,6 +571,8 @@ route.
    build. Per-request values need an edge function.
 7. **Output folder:** `dist-static` (see §3.2). A single `dist` was rejected
    because it is already the Express layout.
-8. **404 policy:** real `404.html` with SEO; `--spa` opts into a soft 404;
-   without SEO the SPA fallback is the default.
+8. **404 policy:** real `404.html` with SEO; `--spa` opts into a host-specific
+   fallback (Netlify/Vercel/nginx: 200 catch-all; Cloudflare: no `404.html` and
+   auto-SPA; GitHub/S3/none: shell `404.html` with 404). Without SEO the SPA
+   fallback is the default.
 9. **`Components/`:** pruned by default; `--keep-components` is debug-only.

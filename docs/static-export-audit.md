@@ -54,6 +54,8 @@ fixed or explicitly documented below. The feature is ready for a final review, b
 | P1-4 | P1 | `slice start` docs contradicted the code: no auto-build, `/dist` was public, port defaults, "real 404" without SEO, and "`sliceFallback` untouched". | Fixed |
 | P1-5 | P1 | The CLI suggested `npx serve -s`, which hides the real `404.html`. | Fixed |
 | P1-6 | P1 | `sliceConfig.json`, `routes.js` and `bundle.config.json` are public but were not documented as such. | Fixed |
+| P1-7 | P1 | Cloudflare `--spa` wrote `_redirects: /* /index.html 200`; Cloudflare rejects it as an infinite loop, and `/* / 200` hijacks every asset. | Fixed (omit `404.html`, auto-SPA) |
+| P1-8 | P1 | Vercel redirects used `permanent`, which maps to 308/307, not the SEO page's 301/302. | Fixed (`statusCode`) |
 | P2-1 | P2 | `--sourcemap` is a no-op for the published export (maps are filtered). | Documented + warning |
 | P2-2 | P2 | `--no-minify` / `--no-obfuscate` can ship readable bundles. | Documented + warning |
 | P2-3 | P2 | `sliceConfig.json` exposes `server.port` / `server.host` (not secrets, but unnecessary). | Open; low priority |
@@ -314,6 +316,30 @@ The deployment guide lists what a static host can serve and warns that
 `sliceConfig.json`, `routes.js`, `bundle.config.json`, `slice-env.json` and
 `manifest.json` are public by design. They must not contain secrets.
 
+### P1-7 — Cloudflare SPA rule was invalid
+
+**Verified against** Cloudflare Pages docs and `wrangler pages dev` 4.162.0:
+
+- `_redirects: /* /index.html 200` is rejected by Wrangler as an **infinite
+  loop**: Cloudflare normalizes `/index.html` to `/`, which matches `/*` again.
+- `_redirects: /* / 200` is accepted but serves `index.html` for existing assets
+  (`GET /bundles/app.js` returned the shell), so it is not a safe fallback.
+- Cloudflare Pages enables automatic SPA mode only when there is **no top-level
+  `404.html`**; without it, unknown paths return the root with `200` and assets
+  are still served normally (verified with `wrangler pages dev`).
+
+**Fix:** for `--host cloudflare --spa`, omit `404.html` and write no catch-all.
+`--check` accepts the missing `404.html` for Cloudflare and warns that unknown
+routes are served by auto-SPA. Netlify keeps the catch-all (its shadowing rules
+make assets win); Vercel keeps the `/(.*)` rewrite (filesystem wins first);
+nginx keeps `try_files`; GitHub/S3/none write the shell as `404.html`.
+
+### P1-8 — Vercel redirect status codes
+
+Vercel's `permanent` boolean maps to **308/307**, not 301/302. The exporter now
+writes `statusCode: 301|302` from the SEO redirect, preserving the intended
+status.
+
 ---
 
 ## 6. Decisions
@@ -348,11 +374,20 @@ The public route equals the app route. No base path, no `--base`, no project
 subpath. GitHub Pages project sites are not supported; use a user site
 (`user.github.io`) or a custom domain on a project site.
 
-### 6.3 Default real 404
+### 6.3 Default real 404, host-specific SPA
 
 With SEO, `slice export` emits a real `404.html` and no catch-all. `--spa`
-restores the client-router fallback (soft 404). Without SEO, the shell is the
-only page and the SPA fallback is on by default.
+restores the client-router fallback with host-specific mechanics:
+
+- **Cloudflare:** omit `404.html`; Pages auto-SPA. Never write a `_redirects`
+  catch-all (rejected as a loop, and `/* / 200` hijacks assets).
+- **Netlify:** `_redirects: /* /index.html 200` (existing files win).
+- **Vercel:** `rewrites: /(.*) -> /index.html` (filesystem wins first).
+- **nginx:** `try_files $uri $uri/ /index.html`.
+- **GitHub / S3 / none:** shell as `404.html`, status `404`; use a host function
+  for a true `200`.
+
+Without SEO, the shell is the only page and the SPA fallback is on by default.
 
 ### 6.4 `Components/` pruned
 

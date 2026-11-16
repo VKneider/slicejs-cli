@@ -213,3 +213,9 @@ user repeats, and the framework's own `--compress` flag already advertises
   package manifests, source-only folders and literal route coverage when there is
   no SPA fallback. Dynamic routes and asset references remain explicitly out of
   scope. A secret scanner is not planned.
+- 2026-11-15 - **Host-rule verification against current docs.** Cloudflare Pages
+  rejects `/* /index.html 200` as an infinite loop and `/* / 200` hijacks assets;
+  `--host cloudflare --spa` now omits `404.html` and uses Pages' automatic SPA
+  mode. Vercel redirects use `statusCode` (301/302) instead of `permanent`
+  (308/307). Netlify, nginx and GitHub rules were verified unchanged. See the
+  audit P1-7/P1-8.
