@@ -164,6 +164,14 @@ test('event docs group by namespace and ignore specs/tests', async () => {
       assert.ok(mermaid.startsWith('%% '), 'diagram.mmd must start with a Mermaid comment');
       assert.doesNotMatch(mermaid, /<!--/);
       assert.match(mermaid, /%%[^\n]*\n\nflowchart LR\n/);
+      // The graph is the edges: writing the id on the namespaced copy left none.
+      assert.match(mermaid, /c\d+ --\> e\d+/);
+      assert.match(mermaid, /e\d+ -\.-\> c\d+/);
+      assert.match(mermaid, /:::event/);
+      assert.match(mermaid, /:::emitter/);
+      assert.match(mermaid, /:::listener/);
+      assert.match(mermaid, /classDef event/);
+      assert.match(mermaid, /subgraph legend/);
       const html = await fs.readFile(path.join(root, 'docs', 'events', 'diagram.html'), 'utf8');
       assert.match(html, /cart:add/);
       assert.match(html, /<svg/);

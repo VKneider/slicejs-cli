@@ -150,65 +150,91 @@ ${sections.length ? sections.join('\n') : 'No events in this namespace.'}
 
 function renderMermaid(manifest, namespaces) {
    const componentIds = new Map();
+   const eventIds = new Map();
    const lines = ['flowchart LR'];
    let counter = 0;
+   const componentNameOf = (site) => site.component || path.basename(site.file, '.js');
    const idForComponent = (name) => {
       if (!componentIds.has(name)) {
          componentIds.set(name, `c${counter++}`);
       }
       return componentIds.get(name);
    };
+   const unique = (values) => [...new Set(values)];
 
    for (const [namespace, events] of Object.entries(namespaces)) {
       const safeNs = `ns${counter++}`;
       lines.push(`  subgraph ${safeNs}["${escapeMermaid(namespace)}"]`);
-      for (const [index, event] of events.entries()) {
+      for (const event of events) {
          const eventId = `e${counter++}`;
-         event._diagramId = eventId;
-         lines.push(`    ${eventId}(("${escapeMermaid(event.name)}"))`);
+         // The id lives in a map, not on the event object: `namespaces` holds
+         // copies, so writing `event._diagramId` left every edge without a
+         // target and the diagram rendered as a list of boxes.
+         eventIds.set(event.name, eventId);
+         lines.push(`    ${eventId}(["${escapeMermaid(event.name)}"]):::event`);
       }
       lines.push('  end');
    }
 
    const dynamic = manifest.dynamic;
-   const componentNames = new Set();
+   const emitters = new Set();
+   const listeners = new Set();
    for (const event of Object.values(manifest.events)) {
-      for (const site of [...event.emitters, ...event.listeners]) {
-         if (site.component) componentNames.add(site.component);
-      }
+      for (const site of event.emitters) emitters.add(componentNameOf(site));
+      for (const site of event.listeners) listeners.add(componentNameOf(site));
    }
-   for (const name of [...componentNames].sort()) {
-      lines.push(`  ${idForComponent(name)}["${escapeMermaid(name)}"]`);
+   for (const site of [...dynamic.emitters, ...dynamic.listeners]) {
+      const name = componentNameOf(site);
+      if (dynamic.emitters.includes(site)) emitters.add(name);
+      if (dynamic.listeners.includes(site)) listeners.add(name);
    }
 
-   for (const event of Object.values(manifest.events)) {
-      const eventId = event._diagramId;
+   // Components carry their role in the shape itself: blue only emits, green
+   // only listens, grey does both. That is what someone reads first on GitHub.
+   const roleOf = (name) => (emitters.has(name) && listeners.has(name) ? 'both' : emitters.has(name) ? 'emitter' : 'listener');
+   const componentNames = [...new Set([...emitters, ...listeners])].sort();
+
+   for (const name of componentNames) {
+      lines.push(`  ${idForComponent(name)}["${escapeMermaid(name)}"]:::${roleOf(name)}`);
+   }
+
+   for (const [name, event] of Object.entries(manifest.events)) {
+      const eventId = eventIds.get(name);
       if (!eventId) continue;
-      const emitters = [...new Set(event.emitters.map((site) => site.component || path.basename(site.file, '.js')))];
-      const listeners = [...new Set(event.listeners.map((site) => site.component || path.basename(site.file, '.js')))];
-      for (const emitter of emitters) {
-         const emitterId = componentIds.has(emitter) ? componentIds.get(emitter) : idForComponent(emitter);
-         if (!componentIds.has(emitter)) lines.push(`  ${emitterId}["${escapeMermaid(emitter)}"]`);
-         lines.push(`  ${emitterId} -->|emit| ${eventId}`);
+      for (const emitter of unique(event.emitters.map(componentNameOf))) {
+         lines.push(`  ${idForComponent(emitter)} --> ${eventId}`);
       }
-      for (const listener of listeners) {
-         const listenerId = componentIds.has(listener) ? componentIds.get(listener) : idForComponent(listener);
-         if (!componentIds.has(listener)) lines.push(`  ${listenerId}["${escapeMermaid(listener)}"]`);
-         lines.push(`  ${eventId} -->|listen| ${listenerId}`);
+      for (const listener of unique(event.listeners.map(componentNameOf))) {
+         lines.push(`  ${eventId} -.-> ${idForComponent(listener)}`);
       }
    }
 
    if (dynamic.emitters.length || dynamic.listeners.length) {
-      lines.push(`  dynamic(["dynamic sites"])`);
+      lines.push(`  dynamic(["dynamic sites"]):::dynamic`);
       for (const site of dynamic.emitters) {
-         const id = idForComponent(site.component || path.basename(site.file, '.js'));
-         lines.push(`  ${id} -.->|dynamic emit| dynamic`);
+         lines.push(`  ${idForComponent(componentNameOf(site))} -.-> dynamic`);
       }
       for (const site of dynamic.listeners) {
-         const id = idForComponent(site.component || path.basename(site.file, '.js'));
-         lines.push(`  dynamic -.->|dynamic listen| ${id}`);
+         lines.push(`  dynamic -.-> ${idForComponent(componentNameOf(site))}`);
       }
    }
+
+   lines.push('  subgraph legend["Legend"]');
+   lines.push('    direction LR');
+   lines.push('    legEmit["component that emits"]:::emitter --> legEvent(["event"]):::event');
+   lines.push('    legEvent -.-> legListen["component that listens"]:::listener');
+   lines.push('    legBoth["emits and listens"]:::both');
+   lines.push('  end');
+
+   // GitHub ships a faster, older Mermaid than mermaid.live, so the colours are
+   // explicit classDef values (legible on light and dark) instead of
+   // directives, which some renderers ignore.
+   lines.push('  classDef event fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#3b0764');
+   lines.push('  classDef emitter fill:#dbeafe,stroke:#2563eb,color:#1e3a8a');
+   lines.push('  classDef listener fill:#d1fae5,stroke:#059669,color:#064e3b');
+   lines.push('  classDef both fill:#f1f5f9,stroke:#475569,color:#0f172a');
+   lines.push('  classDef dynamic fill:#fef3c7,stroke:#d97706,color:#78350f,stroke-dasharray:4 3');
+   lines.push('  style legend fill:none,stroke:#cbd5e1');
 
    return `${lines.join('\n')}\n`;
 }
