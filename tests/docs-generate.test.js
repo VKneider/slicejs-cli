@@ -113,6 +113,37 @@ test('docs generate all produces agents, types and events; check all passes', as
    }
 });
 
+test('diagram.html keeps every node inside the viewBox when one event has many emitters', async () => {
+   const root = await createTestProject();
+   try {
+      const dir = path.join(root, 'src', 'Components', 'Visual', 'Fan');
+      await fs.ensureDir(dir);
+      for (let i = 0; i < 8; i++) {
+         await fs.writeFile(
+            path.join(dir, `Fan${i}.js`),
+            `export default class Fan${i} extends HTMLElement {
+   init() { slice.events.emit('fan:burst', ${i}); }
+}
+`,
+         );
+      }
+      await generateEventDocs({ projectRoot: root });
+      const html = await fs.readFile(path.join(root, 'docs', 'events', 'diagram.html'), 'utf8');
+      const viewBox = html.match(/viewBox="0 0 1100 (\d+)"/);
+      assert.ok(viewBox);
+      const viewHeight = Number(viewBox[1]);
+      const boxes = [...html.matchAll(/<rect x="[\d.]+" y="(-?[\d.]+)" width="[\d.]+" height="(\d+)"/g)]
+         .map((match) => ({ y: Number(match[1]), height: Number(match[2]) }));
+      assert.ok(boxes.length >= 9);
+      for (const box of boxes) {
+         assert.ok(box.y >= 0, `a node sits above the viewBox (y=${box.y})`);
+         assert.ok(box.y + box.height <= viewHeight, `a node overflows the ${viewHeight}px viewBox (y=${box.y})`);
+      }
+   } finally {
+      await cleanupTestProject(root);
+   }
+});
+
 test('event docs group by namespace and ignore specs/tests', async () => {
    const root = await project();
    try {
@@ -128,9 +159,19 @@ test('event docs group by namespace and ignore specs/tests', async () => {
 
       const mermaid = await fs.readFile(path.join(root, 'docs', 'events', 'diagram.mmd'), 'utf8');
       assert.match(mermaid, /cart:add/);
+      // Mermaid only understands `%%` comments: an HTML comment on the first
+      // line made GitHub and the live editor reject the diagram.
+      assert.ok(mermaid.startsWith('%% '), 'diagram.mmd must start with a Mermaid comment');
+      assert.doesNotMatch(mermaid, /<!--/);
+      assert.match(mermaid, /%%[^\n]*\n\nflowchart LR\n/);
       const html = await fs.readFile(path.join(root, 'docs', 'events', 'diagram.html'), 'utf8');
       assert.match(html, /cart:add/);
       assert.match(html, /<svg/);
+      // The two sides name their role: a box on the left emits, one on the right listens.
+      assert.match(html, /class="col"[^>]*>Emitters</);
+      assert.match(html, /class="col"[^>]*>Listeners</);
+      assert.match(html, /class="emitter"><rect/);
+      assert.match(html, /class="listener"><rect/);
 
       assert.deepEqual(await checkEventDocs({ projectRoot: root }), { ok: true, issues: [] });
       await fs.writeFile(

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `slice docs generate events` writes `docs/events/diagram.mmd` with a `%%` comment instead of an
+  HTML one. GitHub and the Mermaid live editor rejected the diagram with "No diagram type detected"
+  because the first line was `<!-- ... -->`.
+- `docs/events/diagram.html` no longer clips its graph: a row grows with its emitters and listeners
+  (a `toast:show` with sixteen emitters used to overflow the fixed-height SVG), and every node stays
+  inside the viewBox.
+
 ## [4.6.0] - 2026-11-16
 
 ### Added
