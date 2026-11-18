@@ -12,14 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The Mermaid graph lost every edge (the node id was written on the namespaced copy of each event, so
-  the edge loop found nothing and the diagram rendered as loose boxes). It is a real graph again:
-  emitters on the left, events in the middle and listeners on the right, with a colour per role
-  (blue emits, green listens, grey both) and dashed arrows for subscriptions.
+  the edge loop found nothing and the diagram rendered as loose boxes). It is a real graph again,
+  with a colour per role (blue emits, green listens, grey both) and dashed arrows for subscriptions.
 - `docs/events/` also writes one smaller Mermaid diagram per namespace (`diagram-toast.mmd`, …): the
   full map answers "what talks to what", and the per-family one is the one a reader follows.
-- Both diagrams are top-to-bottom sheets now (emitters in a row, then the events, then the
-  listeners), so they read horizontally and the sheet is wider than it is tall; the emitters are
-  ordered by the event they feed, which keeps each fan together.
+- Both read horizontally: a real fan is drawn top to bottom (emitters in a row, the events under
+  them, the listeners at the bottom) and a one-to-one event is a horizontal chain, so the sheet is
+  wider than tall in every case. The emitters are ordered by the event they feed, so each fan stays
+  in one block.
 
 ## [4.6.1] - 2026-11-18
 
