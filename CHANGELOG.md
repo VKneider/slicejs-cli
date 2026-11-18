@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (blue emits, green listens, grey both) and dashed arrows for subscriptions.
 - `docs/events/` also writes one smaller Mermaid diagram per namespace (`diagram-toast.mmd`, …): the
   full map answers "what talks to what", and the per-family one is the one a reader follows.
+- Both diagrams are top-to-bottom sheets now (emitters in a row, then the events, then the
+  listeners), so they read horizontally and the sheet is wider than it is tall; the emitters are
+  ordered by the event they feed, which keeps each fan together.
 
 ## [4.6.1] - 2026-11-18
 

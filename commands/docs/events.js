@@ -161,7 +161,7 @@ const MERMAID_CLASS_DEFS = [
 // Emitters on the left, events in the middle, listeners on the right. Mermaid
 // lays a graph out from the edges, so these groups are what keeps the columns:
 // a component that only emits can never be ranked after an event.
-function renderFlow(manifest, events, groups) {
+function renderFlow(manifest, events, groups, direction = 'TD') {
    const nameOf = (site) => site.component || path.basename(site.file, '.js');
    const emitters = new Set();
    const listeners = new Set();
@@ -170,7 +170,7 @@ function renderFlow(manifest, events, groups) {
       for (const site of event.listeners) listeners.add(nameOf(site));
    }
 
-   const lines = ['flowchart LR'];
+   const lines = [`flowchart ${direction}`];
    const eventIds = new Map();
    const componentIds = new Map();
    let counter = 0;
@@ -203,10 +203,23 @@ function renderFlow(manifest, events, groups) {
       lines.push('  end');
    }
 
+   const eventOrder = new Map(Object.keys(manifest.events).map((name, index) => [name, index]));
+   const firstEventOf = (name) => {
+      let first = Number.MAX_SAFE_INTEGER;
+      for (const [eventName, event] of Object.entries(manifest.events)) {
+         if (event.emitters.some((site) => nameOf(site) === name)) {
+            first = Math.min(first, eventOrder.get(eventName));
+         }
+      }
+      return first;
+   };
    const roleGroups = { emitter: [], listener: [], both: [] };
-   for (const name of [...new Set([...emitters, ...listeners])].sort()) {
+   for (const name of [...new Set([...emitters, ...listeners])]) {
       const role = emitters.has(name) && listeners.has(name) ? 'both' : emitters.has(name) ? 'emitter' : 'listener';
       roleGroups[role].push(name);
+   }
+   for (const group of Object.values(roleGroups)) {
+      group.sort((a, b) => firstEventOf(a) - firstEventOf(b) || a.localeCompare(b));
    }
    for (const [role, label] of [['emitter', 'Emitters'], ['listener', 'Listeners']]) {
       if (!roleGroups[role].length) continue;
@@ -251,11 +264,14 @@ function renderFlow(manifest, events, groups) {
 }
 
 function renderMermaid(manifest, namespaces) {
-   return renderFlow(manifest, Object.values(namespaces).flat(), namespaces);
+   // Top to bottom keeps the sheet horizontal: emitters in a row, then the
+   // events, then the listeners.
+   return renderFlow(manifest, Object.values(namespaces).flat(), namespaces, 'TD');
 }
 
 function renderNamespaceMermaid(manifest, events) {
-   return renderFlow(manifest, events, null);
+   // A family is one event and its fan: top to bottom is a wide, short sheet.
+   return renderFlow(manifest, events, null, 'TD');
 }
 
 function renderHtml(manifest, namespaces, registry) {

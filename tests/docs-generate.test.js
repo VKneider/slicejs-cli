@@ -163,7 +163,7 @@ test('event docs group by namespace and ignore specs/tests', async () => {
       // line made GitHub and the live editor reject the diagram.
       assert.ok(mermaid.startsWith('%% '), 'diagram.mmd must start with a Mermaid comment');
       assert.doesNotMatch(mermaid, /<!--/);
-      assert.match(mermaid, /%%[^\n]*\n\nflowchart LR\n/);
+      assert.match(mermaid, /%%[^\n]*\n\nflowchart TD\n/);
       // The graph is the edges: writing the id on the namespaced copy left none.
       assert.match(mermaid, /c\d+ --\> e\d+/);
       assert.match(mermaid, /e\d+ -\.-\> c\d+/);
@@ -176,6 +176,7 @@ test('event docs group by namespace and ignore specs/tests', async () => {
 
       // One smaller diagram per namespace, which is the readable one.
       const cartDiagram = await fs.readFile(path.join(root, 'docs', 'events', 'diagram-cart.mmd'), 'utf8');
+      assert.match(cartDiagram, /flowchart TD/);
       assert.match(cartDiagram, /subgraph events\["Events"\]/);
       assert.match(cartDiagram, /c\d+ --\> e\d+/);
       assert.match(cartDiagram, /e\d+ -\.-\> c\d+/);
