@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.6.1] - 2026-11-18
+
 ### Fixed
 
 - `slice docs generate events` writes `docs/events/diagram.mmd` with a `%%` comment instead of an
@@ -400,7 +402,8 @@ scripts keep working.
 - **`slice update` / `slice upgrade` commands**: Removed from CLI and documentation.
 - **`postinstall` lifecycle hook**: `post.js` deleted, `"postinstall"` script removed from `package.json`.
 
-[Unreleased]: https://github.com/VKneider/slicejs-cli/compare/v4.6.0...HEAD
+[Unreleased]: https://github.com/VKneider/slicejs-cli/compare/v4.6.1...HEAD
+[4.6.1]: https://github.com/VKneider/slicejs-cli/releases/tag/v4.6.1
 [4.6.0]: https://github.com/VKneider/slicejs-cli/releases/tag/v4.6.0
 [4.5.0]: https://github.com/VKneider/slicejs-cli/releases/tag/v4.5.0
 [4.4.0]: https://github.com/VKneider/slicejs-cli/releases/tag/v4.4.0
