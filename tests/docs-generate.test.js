@@ -176,7 +176,8 @@ test('event docs group by namespace and ignore specs/tests', async () => {
 
       // One smaller diagram per namespace, which is the readable one.
       const cartDiagram = await fs.readFile(path.join(root, 'docs', 'events', 'diagram-cart.mmd'), 'utf8');
-      assert.match(cartDiagram, /flowchart TD/);
+      // One emitter and one listener: a horizontal chain, not a column.
+      assert.match(cartDiagram, /flowchart LR/);
       assert.match(cartDiagram, /subgraph events\["Events"\]/);
       assert.match(cartDiagram, /c\d+ --\> e\d+/);
       assert.match(cartDiagram, /e\d+ -\.-\> c\d+/);

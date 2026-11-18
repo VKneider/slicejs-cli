@@ -270,8 +270,18 @@ function renderMermaid(manifest, namespaces) {
 }
 
 function renderNamespaceMermaid(manifest, events) {
-   // A family is one event and its fan: top to bottom is a wide, short sheet.
-   return renderFlow(manifest, events, null, 'TD');
+   // A family is one event and its fan. With a single emitter and a single
+   // listener the three nodes read best as a horizontal chain; with a real fan,
+   // top to bottom puts each role in a row and keeps the sheet landscape.
+   const nameOf = (site) => site.component || path.basename(site.file, '.js');
+   const emitters = new Set();
+   const listeners = new Set();
+   for (const event of events) {
+      for (const site of event.emitters) emitters.add(nameOf(site));
+      for (const site of event.listeners) listeners.add(nameOf(site));
+   }
+   const direction = emitters.size <= 1 && listeners.size <= 1 ? 'LR' : 'TD';
+   return renderFlow(manifest, events, null, direction);
 }
 
 function renderHtml(manifest, namespaces, registry) {
