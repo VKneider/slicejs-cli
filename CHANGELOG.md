@@ -12,9 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The Mermaid graph lost every edge (the node id was written on the namespaced copy of each event, so
-  the edge loop found nothing and the diagram rendered as loose boxes). It is a real graph again, and
-  it says who is who: components are blue when they only emit, green when they only listen and grey
-  when they do both; emit edges are solid, listen edges dashed, and a small legend explains the two.
+  the edge loop found nothing and the diagram rendered as loose boxes). It is a real graph again:
+  emitters on the left, events in the middle and listeners on the right, with a colour per role
+  (blue emits, green listens, grey both) and dashed arrows for subscriptions.
+- `docs/events/` also writes one smaller Mermaid diagram per namespace (`diagram-toast.mmd`, …): the
+  full map answers "what talks to what", and the per-family one is the one a reader follows.
 
 ## [4.6.1] - 2026-11-18
 

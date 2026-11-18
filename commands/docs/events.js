@@ -67,7 +67,7 @@ function renderIndex(manifest, registry, namespaces, namespaceFiles) {
          for (const site of event.emitters) if (site.component) emitters.add(site.component);
          for (const site of event.listeners) if (site.component) listeners.add(site.component);
       }
-      return `| ${namespace} | ${events.length} | ${emitters.size} | ${listeners.size} | [${namespace}](./${namespaceFiles.get(namespace)}) |`;
+      return `| ${namespace} | ${events.length} | ${emitters.size} | ${listeners.size} | [${namespace}](./${namespaceFiles.get(namespace)}) | [diagram](./diagram-${namespaceFiles.get(namespace).replace(/\.md$/, '')}.mmd) |`;
    });
 
    const declaredNoEmitter = Object.entries(registry)
@@ -94,14 +94,16 @@ This catalog is generated from \`slice.events.register(...)\` and the static
 
 ## Summary
 
-| Namespace | Events | Emitters | Listeners | Page |
-| --- | --- | --- | --- | --- |
-${namespaceRows.length ? namespaceRows.join('\n') : '| — | 0 | 0 | 0 | — |'}
+| Namespace | Events | Emitters | Listeners | Page | Diagram |
+| --- | --- | --- | --- | --- | --- |
+${namespaceRows.length ? namespaceRows.join('\n') : '| - | 0 | 0 | 0 | - | - |'}
 
 ## Diagram
 
-- [Mermaid source](./diagram.mmd)
+- [Mermaid source, every event](./diagram.mmd)
 - [Standalone HTML](./diagram.html)
+- Each namespace has its own smaller diagram, linked in the table above. Blue nodes emit, green
+  nodes listen, grey nodes do both; solid arrows are emits and dashed arrows are subscriptions.
 
 ## Drift
 
@@ -148,95 +150,112 @@ ${sections.length ? sections.join('\n') : 'No events in this namespace.'}
 `;
 }
 
-function renderMermaid(manifest, namespaces) {
-   const componentIds = new Map();
-   const eventIds = new Map();
+const MERMAID_CLASS_DEFS = [
+   '  classDef event fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#3b0764',
+   '  classDef emitter fill:#dbeafe,stroke:#2563eb,color:#1e3a8a',
+   '  classDef listener fill:#d1fae5,stroke:#059669,color:#064e3b',
+   '  classDef both fill:#f1f5f9,stroke:#475569,color:#0f172a',
+   '  classDef dynamic fill:#fef3c7,stroke:#d97706,color:#78350f,stroke-dasharray:4 3',
+];
+
+// Emitters on the left, events in the middle, listeners on the right. Mermaid
+// lays a graph out from the edges, so these groups are what keeps the columns:
+// a component that only emits can never be ranked after an event.
+function renderFlow(manifest, events, groups) {
+   const nameOf = (site) => site.component || path.basename(site.file, '.js');
+   const emitters = new Set();
+   const listeners = new Set();
+   for (const event of events) {
+      for (const site of event.emitters) emitters.add(nameOf(site));
+      for (const site of event.listeners) listeners.add(nameOf(site));
+   }
+
    const lines = ['flowchart LR'];
+   const eventIds = new Map();
+   const componentIds = new Map();
    let counter = 0;
-   const componentNameOf = (site) => site.component || path.basename(site.file, '.js');
    const idForComponent = (name) => {
-      if (!componentIds.has(name)) {
-         componentIds.set(name, `c${counter++}`);
-      }
+      if (!componentIds.has(name)) componentIds.set(name, `c${counter++}`);
       return componentIds.get(name);
    };
    const unique = (values) => [...new Set(values)];
 
-   for (const [namespace, events] of Object.entries(namespaces)) {
-      const safeNs = `ns${counter++}`;
-      lines.push(`  subgraph ${safeNs}["${escapeMermaid(namespace)}"]`);
+   if (groups) {
+      for (const [namespace, namespaceEvents] of Object.entries(groups)) {
+         lines.push(`  subgraph ns${counter++}["${escapeMermaid(namespace)}"]`);
+         for (const event of namespaceEvents) {
+            const eventId = `e${counter++}`;
+            // The id lives in a map, not on the event object: `namespaces`
+            // holds copies, so writing `event._diagramId` left every edge
+            // without a target and the diagram rendered as a list of boxes.
+            eventIds.set(event.name, eventId);
+            lines.push(`    ${eventId}(["${escapeMermaid(event.name)}"]):::event`);
+         }
+         lines.push('  end');
+      }
+   } else {
+      lines.push('  subgraph events["Events"]');
       for (const event of events) {
          const eventId = `e${counter++}`;
-         // The id lives in a map, not on the event object: `namespaces` holds
-         // copies, so writing `event._diagramId` left every edge without a
-         // target and the diagram rendered as a list of boxes.
          eventIds.set(event.name, eventId);
          lines.push(`    ${eventId}(["${escapeMermaid(event.name)}"]):::event`);
       }
       lines.push('  end');
    }
 
-   const dynamic = manifest.dynamic;
-   const emitters = new Set();
-   const listeners = new Set();
-   for (const event of Object.values(manifest.events)) {
-      for (const site of event.emitters) emitters.add(componentNameOf(site));
-      for (const site of event.listeners) listeners.add(componentNameOf(site));
+   const roleGroups = { emitter: [], listener: [], both: [] };
+   for (const name of [...new Set([...emitters, ...listeners])].sort()) {
+      const role = emitters.has(name) && listeners.has(name) ? 'both' : emitters.has(name) ? 'emitter' : 'listener';
+      roleGroups[role].push(name);
    }
-   for (const site of [...dynamic.emitters, ...dynamic.listeners]) {
-      const name = componentNameOf(site);
-      if (dynamic.emitters.includes(site)) emitters.add(name);
-      if (dynamic.listeners.includes(site)) listeners.add(name);
+   for (const [role, label] of [['emitter', 'Emitters'], ['listener', 'Listeners']]) {
+      if (!roleGroups[role].length) continue;
+      lines.push(`  subgraph ${role}Group["${label}"]`);
+      for (const name of roleGroups[role]) {
+         lines.push(`    ${idForComponent(name)}["${escapeMermaid(name)}"]:::${role}`);
+      }
+      lines.push('  end');
    }
-
-   // Components carry their role in the shape itself: blue only emits, green
-   // only listens, grey does both. That is what someone reads first on GitHub.
-   const roleOf = (name) => (emitters.has(name) && listeners.has(name) ? 'both' : emitters.has(name) ? 'emitter' : 'listener');
-   const componentNames = [...new Set([...emitters, ...listeners])].sort();
-
-   for (const name of componentNames) {
-      lines.push(`  ${idForComponent(name)}["${escapeMermaid(name)}"]:::${roleOf(name)}`);
+   for (const name of roleGroups.both) {
+      lines.push(`  ${idForComponent(name)}["${escapeMermaid(name)}"]:::both`);
    }
 
-   for (const [name, event] of Object.entries(manifest.events)) {
-      const eventId = eventIds.get(name);
+   for (const event of events) {
+      const eventId = eventIds.get(event.name);
       if (!eventId) continue;
-      for (const emitter of unique(event.emitters.map(componentNameOf))) {
+      for (const emitter of unique(event.emitters.map(nameOf))) {
          lines.push(`  ${idForComponent(emitter)} --> ${eventId}`);
       }
-      for (const listener of unique(event.listeners.map(componentNameOf))) {
+      for (const listener of unique(event.listeners.map(nameOf))) {
          lines.push(`  ${eventId} -.-> ${idForComponent(listener)}`);
       }
    }
 
-   if (dynamic.emitters.length || dynamic.listeners.length) {
-      lines.push(`  dynamic(["dynamic sites"]):::dynamic`);
-      for (const site of dynamic.emitters) {
-         lines.push(`  ${idForComponent(componentNameOf(site))} -.-> dynamic`);
+   if (!groups) {
+      lines.push(...MERMAID_CLASS_DEFS);
+      return `${lines.join('\n')}\n`;
+   }
+
+   if (manifest.dynamic.emitters.length || manifest.dynamic.listeners.length) {
+      lines.push('  dynamic(["dynamic sites"]):::dynamic');
+      for (const site of manifest.dynamic.emitters) {
+         lines.push(`  ${idForComponent(nameOf(site))} -.-> dynamic`);
       }
-      for (const site of dynamic.listeners) {
-         lines.push(`  dynamic -.-> ${idForComponent(componentNameOf(site))}`);
+      for (const site of manifest.dynamic.listeners) {
+         lines.push(`  dynamic -.-> ${idForComponent(nameOf(site))}`);
       }
    }
 
-   lines.push('  subgraph legend["Legend"]');
-   lines.push('    direction LR');
-   lines.push('    legEmit["component that emits"]:::emitter --> legEvent(["event"]):::event');
-   lines.push('    legEvent -.-> legListen["component that listens"]:::listener');
-   lines.push('    legBoth["emits and listens"]:::both');
-   lines.push('  end');
-
-   // GitHub ships a faster, older Mermaid than mermaid.live, so the colours are
-   // explicit classDef values (legible on light and dark) instead of
-   // directives, which some renderers ignore.
-   lines.push('  classDef event fill:#ede9fe,stroke:#7c3aed,stroke-width:2px,color:#3b0764');
-   lines.push('  classDef emitter fill:#dbeafe,stroke:#2563eb,color:#1e3a8a');
-   lines.push('  classDef listener fill:#d1fae5,stroke:#059669,color:#064e3b');
-   lines.push('  classDef both fill:#f1f5f9,stroke:#475569,color:#0f172a');
-   lines.push('  classDef dynamic fill:#fef3c7,stroke:#d97706,color:#78350f,stroke-dasharray:4 3');
-   lines.push('  style legend fill:none,stroke:#cbd5e1');
-
+   lines.push(...MERMAID_CLASS_DEFS);
    return `${lines.join('\n')}\n`;
+}
+
+function renderMermaid(manifest, namespaces) {
+   return renderFlow(manifest, Object.values(namespaces).flat(), namespaces);
+}
+
+function renderNamespaceMermaid(manifest, events) {
+   return renderFlow(manifest, events, null);
 }
 
 function renderHtml(manifest, namespaces, registry) {
@@ -363,6 +382,10 @@ export async function buildEventDocs({ projectRoot }) {
       const file = fileForNamespace(namespace, usedNames);
       namespaceFiles.set(namespace, file);
       files.set(path.join(outDir, file), renderNamespace(namespace, events));
+      // One small diagram per event family: the whole graph is a map, this is
+      // the one a reader can actually follow.
+      const diagramFile = `diagram-${file.replace(/\.md$/, '')}.mmd`;
+      files.set(path.join(outDir, diagramFile), `${GENERATED_MERMAID_MARKER}\n\n${renderNamespaceMermaid(manifest, events)}`);
    }
    files.set(path.join(outDir, 'index.md'), renderIndex(manifest, registry, namespaces, namespaceFiles));
    files.set(path.join(outDir, 'diagram.mmd'), `${GENERATED_MERMAID_MARKER}\n\n${renderMermaid(manifest, namespaces)}`);

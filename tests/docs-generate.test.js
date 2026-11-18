@@ -168,10 +168,18 @@ test('event docs group by namespace and ignore specs/tests', async () => {
       assert.match(mermaid, /c\d+ --\> e\d+/);
       assert.match(mermaid, /e\d+ -\.-\> c\d+/);
       assert.match(mermaid, /:::event/);
-      assert.match(mermaid, /:::emitter/);
-      assert.match(mermaid, /:::listener/);
+      // CartBadge both emits and listens to cart:add, so it is "both".
+      assert.match(mermaid, /:::both/);
       assert.match(mermaid, /classDef event/);
-      assert.match(mermaid, /subgraph legend/);
+      assert.match(mermaid, /classDef emitter/);
+      assert.match(mermaid, /classDef listener/);
+
+      // One smaller diagram per namespace, which is the readable one.
+      const cartDiagram = await fs.readFile(path.join(root, 'docs', 'events', 'diagram-cart.mmd'), 'utf8');
+      assert.match(cartDiagram, /subgraph events\["Events"\]/);
+      assert.match(cartDiagram, /c\d+ --\> e\d+/);
+      assert.match(cartDiagram, /e\d+ -\.-\> c\d+/);
+      assert.match(index, /diagram-cart\.mmd/);
       const html = await fs.readFile(path.join(root, 'docs', 'events', 'diagram.html'), 'utf8');
       assert.match(html, /cart:add/);
       assert.match(html, /<svg/);
