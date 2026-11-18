@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.6.2] - 2026-11-18
+
+### Fixed
+
+- The Mermaid graph lost every edge (the node id was written on the namespaced copy of each event, so
+  the edge loop found nothing and the diagram rendered as loose boxes). It is a real graph again, and
+  it says who is who: components are blue when they only emit, green when they only listen and grey
+  when they do both; emit edges are solid, listen edges dashed, and a small legend explains the two.
+
 ## [4.6.1] - 2026-11-18
 
 ### Fixed
@@ -402,7 +411,8 @@ scripts keep working.
 - **`slice update` / `slice upgrade` commands**: Removed from CLI and documentation.
 - **`postinstall` lifecycle hook**: `post.js` deleted, `"postinstall"` script removed from `package.json`.
 
-[Unreleased]: https://github.com/VKneider/slicejs-cli/compare/v4.6.1...HEAD
+[Unreleased]: https://github.com/VKneider/slicejs-cli/compare/v4.6.2...HEAD
+[4.6.2]: https://github.com/VKneider/slicejs-cli/releases/tag/v4.6.2
 [4.6.1]: https://github.com/VKneider/slicejs-cli/releases/tag/v4.6.1
 [4.6.0]: https://github.com/VKneider/slicejs-cli/releases/tag/v4.6.0
 [4.5.0]: https://github.com/VKneider/slicejs-cli/releases/tag/v4.5.0
